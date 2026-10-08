@@ -1,0 +1,63 @@
+# Coolify: New Resource -> your GitHub repo -> Build Pack "Docker Compose".
+# Set API_KEY in Coolify's Environment Variables, and the domain on the "whisper" service.
+services:
+  whisper:
+    build:
+      context: .
+      args:
+        INSTALL_DIARIZE: ${INSTALL_DIARIZE:-0}   # 1 = speaker labels (also set DIARIZE=1 + HF_TOKEN)
+        GPU: ${GPU:-0}                           # 1 = NVIDIA GPU (see the deploy: block below)
+    environment:
+      - SERVICE_FQDN_WHISPER_8000                # Coolify routes your domain to port 8000
+      - API_KEY=${API_KEY}
+      - WHISPER_MODEL=${WHISPER_MODEL:-large-v3-turbo}
+      - WHISPER_DEVICE=${WHISPER_DEVICE:-auto}
+      - WHISPER_THREADS=${WHISPER_THREADS:-0}
+      - DEFAULT_LANGUAGE=${DEFAULT_LANGUAGE:-}
+      - INITIAL_PROMPT=${INITIAL_PROMPT:-}
+      - DIARIZE=${DIARIZE:-0}
+      - HF_TOKEN=${HF_TOKEN:-}
+      - SUMMARY_BACKEND=${SUMMARY_BACKEND:-ollama}
+      - SUMMARY_LANGUAGE=${SUMMARY_LANGUAGE:-}
+      - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:7b-instruct}
+      - OLLAMA_NUM_CTX=${OLLAMA_NUM_CTX:-16384}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      - KEEP_AUDIO_DAYS=${KEEP_AUDIO_DAYS:-30}
+      - MAX_UPLOAD_MB=${MAX_UPLOAD_MB:-2048}
+      - TZ=${TZ:-Asia/Singapore}
+    volumes:
+      - whisper-data:/data                       # recordings, results, job database, model cache
+    depends_on:
+      - ollama
+    restart: unless-stopped
+    # GPU (after adding the RTX 3090 + NVIDIA Container Toolkit): build with GPU=1 and uncomment
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  # Local LLM for the summaries. Already running Ollama elsewhere? Delete this service and set OLLAMA_URL.
+  ollama:
+    image: ollama/ollama:latest
+    environment:
+      - OLLAMA_KEEP_ALIVE=10m
+    volumes:
+      - ollama-data:/root/.ollama
+    restart: unless-stopped
+    # deploy:            # same GPU block as above to run the LLM on the GPU too
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+volumes:
+  whisper-data:
+  ollama-data:

@@ -1,0 +1,2 @@
+# speaker labels - installed only when the image is built with INSTALL_DIARIZE=1 (adds ~1.5 GB)
+pyannote.audio>=3.3,<4
