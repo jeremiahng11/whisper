@@ -38,6 +38,14 @@ tr.job:hover td{background:var(--chip)}
 #view code{background:var(--chip);padding:0 4px;border-radius:4px;font-size:12px}
 #view ul{padding-left:20px;margin:4px 0}
 #view blockquote{margin:6px 0;padding:4px 10px;border-left:3px solid var(--warn);color:var(--mute)}
+.files{display:grid;grid-template-columns:240px 1fr;gap:14px}
+.flist{max-height:420px;overflow:auto;border-right:1px solid var(--line);padding-right:8px}
+.flist div{padding:5px 6px;border-radius:6px;cursor:pointer;font-size:13px;word-break:break-all}
+.flist div:hover{background:var(--chip)}.flist div.on{background:var(--accent);color:var(--accent-ink)}
+.flist .dir{color:var(--mute);font-size:11px;cursor:default;padding-top:10px}.flist .dir:hover{background:none}
+#fedit{width:100%;min-height:360px;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:10px;font:13px/1.5 ui-monospace,Menlo,monospace}
+#fview h1,#fview h2,#fview h3{margin:14px 0 6px}#fview ul{padding-left:20px;margin:4px 0}
+@media (max-width:640px){.files{grid-template-columns:1fr}.flist{border-right:0;max-height:200px}}
 .hidden{display:none}
 @media (max-width:640px){.hide-sm{display:none}}
 </style>
@@ -84,6 +92,25 @@ tr.job:hover td{background:var(--chip)}
     </div>
     <div id="view"></div>
   </div>
+  <div class="card" id="notesCard">
+    <div class="row" style="justify-content:space-between">
+      <strong>Notes from your Idea Saver</strong>
+      <div class="row"><select id="dev"></select><button class="ghost" id="fnew">New note</button><button class="ghost" id="frefresh">Refresh</button></div>
+    </div>
+    <p class="mute">Turn on Settings &gt; Sync &amp; backup on the device. Edits made here go back to the device on its next sync.</p>
+    <div class="files">
+      <div class="flist" id="flist"><span class="mute">No synced files yet.</span></div>
+      <div>
+        <div class="row" style="justify-content:space-between;margin-bottom:8px">
+          <strong id="fname" class="mute">Pick a file</strong>
+          <div class="row"><button class="ghost hidden" id="fedbtn">Edit</button><button class="hidden" id="fsave">Save</button><button class="ghost hidden" id="fcancel">Cancel</button><button class="danger hidden" id="fdel">Delete</button></div>
+        </div>
+        <div id="fmsg" class="mute"></div>
+        <div id="fview"></div>
+        <textarea id="fedit" class="hidden"></textarea>
+      </div>
+    </div>
+  </div>
 </main>
 <script>
 const $ = s => document.querySelector(s);
@@ -97,7 +124,7 @@ async function api(path, opt = {}) {
   if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.status);
   return r;
 }
-$("#saveKey").onclick = () => { KEY = $("#key").value.trim(); try { localStorage.setItem("whisperKey", KEY); } catch (e) {} load(); };
+$("#saveKey").onclick = () => { KEY = $("#key").value.trim(); try { localStorage.setItem("whisperKey", KEY); } catch (e) {} load(); loadDevices(); };
 
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const dur = s => !s ? "" : s >= 3600 ? `${Math.floor(s / 3600)}h ${Math.round(s % 3600 / 60)}m` : s >= 60 ? `${Math.round(s / 60)} min` : `${Math.round(s)} s`;
@@ -203,6 +230,64 @@ $("#file").onchange = e => { for (const f of e.target.files) upload(f); e.target
 ["dragenter", "dragover"].forEach(ev => $("#drop").addEventListener(ev, e => { e.preventDefault(); $("#drop").classList.add("over"); }));
 ["dragleave", "drop"].forEach(ev => $("#drop").addEventListener(ev, e => { e.preventDefault(); $("#drop").classList.remove("over"); }));
 $("#drop").addEventListener("drop", e => { for (const f of e.dataTransfer.files) upload(f); });
+
+// ---------------------------------------------------------------- synced notes
+let DEV = "", FILE = null;
+async function loadDevices() {
+  try {
+    const d = (await (await api("/api/files")).json()).devices;
+    const sel = $("#dev");
+    if (!DEV && d.length) DEV = d[0];
+    sel.innerHTML = d.length ? d.map(x => `<option ${x === DEV ? "selected" : ""}>${esc(x)}</option>`).join("") : "<option>no device yet</option>";
+    if (DEV) loadFiles();
+  } catch (e) {}
+}
+async function loadFiles() {
+  const f = (await (await api(`/api/files?device=${encodeURIComponent(DEV)}`)).json()).files.filter(x => !x.deleted);
+  let last = "", h = "";
+  for (const x of f) {
+    const i = x.path.lastIndexOf("/"), dir = i > 0 ? x.path.slice(0, i) : "", name = x.path.slice(i + 1);
+    if (dir !== last) { h += `<div class="dir">${esc(dir || "/")}</div>`; last = dir; }
+    h += `<div data-p="${esc(x.path)}" class="${FILE && FILE.path === x.path ? "on" : ""}">${esc(name.replace(/\.md$/, ""))}</div>`;
+  }
+  $("#flist").innerHTML = h || '<span class="mute">No synced files yet.</span>';
+  $("#flist").querySelectorAll("div[data-p]").forEach(el => el.onclick = () => openFile(el.dataset.p));
+}
+function fmode(edit) {
+  $("#fview").classList.toggle("hidden", edit); $("#fedit").classList.toggle("hidden", !edit);
+  $("#fedbtn").classList.toggle("hidden", edit || !FILE); $("#fdel").classList.toggle("hidden", edit || !FILE || !FILE.rev);
+  $("#fsave").classList.toggle("hidden", !edit); $("#fcancel").classList.toggle("hidden", !edit);
+}
+async function openFile(path) {
+  const r = await api(`/api/files/${path.split("/").map(encodeURIComponent).join("/")}?device=${encodeURIComponent(DEV)}`);
+  FILE = { path, rev: +r.headers.get("X-Rev"), text: await r.text() };
+  $("#fname").textContent = path; $("#fname").classList.remove("mute"); $("#fmsg").textContent = "";
+  $("#fview").innerHTML = path.endsWith(".md") ? md(FILE.text) : `<pre>${esc(FILE.text)}</pre>`;
+  fmode(false); loadFiles();
+}
+$("#dev").onchange = e => { DEV = e.target.value; FILE = null; loadFiles(); };
+$("#frefresh").onclick = loadDevices;
+$("#fedbtn").onclick = () => { $("#fedit").value = FILE.text; fmode(true); $("#fedit").focus(); };
+$("#fcancel").onclick = () => FILE.rev ? openFile(FILE.path) : (FILE = null, fmode(false), $("#fedbtn").classList.add("hidden"));
+$("#fnew").onclick = () => {
+  if (!DEV) return;
+  const n = prompt("Note name"); if (!n) return;
+  FILE = { path: "notes/" + n.replace(/[\/]/g, "-").trim() + ".md", rev: 0, text: "# " + n.trim() + "\n\n" };
+  $("#fname").textContent = FILE.path; $("#fedit").value = FILE.text; fmode(true);
+};
+$("#fsave").onclick = async () => {
+  const url = `/api/files/${FILE.path.split("/").map(encodeURIComponent).join("/")}?device=${encodeURIComponent(DEV)}&base_rev=${FILE.rev}&by=web`;
+  const r = await fetch(url, { method: "PUT", headers: hdr(), body: $("#fedit").value });
+  if (r.status === 409) { $("#fmsg").textContent = "The device changed this file meanwhile. Copy your text, press Cancel to see the new version, then edit again."; return; }
+  if (!r.ok) { $("#fmsg").textContent = "Save failed: " + r.status; return; }
+  await openFile(FILE.path); $("#fmsg").textContent = "Saved - goes to the device on its next sync.";
+};
+$("#fdel").onclick = async () => {
+  if (!confirm("Delete " + FILE.path + " (also from the device)?")) return;
+  await fetch(`/api/files/${FILE.path.split("/").map(encodeURIComponent).join("/")}?device=${encodeURIComponent(DEV)}&base_rev=${FILE.rev}&by=web`, { method: "DELETE", headers: hdr() });
+  FILE = null; $("#fview").innerHTML = ""; $("#fname").textContent = "Pick a file"; fmode(false); $("#fedbtn").classList.add("hidden"); loadFiles();
+};
+loadDevices();
 
 health(); load();
 setInterval(() => { load(); health(); }, 4000);

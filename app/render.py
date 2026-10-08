@@ -56,6 +56,9 @@ def markdown(job: dict, tr: dict, summary_md: Optional[str], title: str = "") ->
         lines += [summary_md.strip(), ""]
     elif job.get("summary_error"):
         lines += [f"> Summary not available: {job['summary_error']}", ""]
+    notes = (job.get("options") or {}).get("notes", "").strip()
+    if notes:
+        lines += ["## My notes", "", notes, ""]
     lines += ["## Transcript", ""]
     for p in paragraphs(tr.get("segments", [])):
         who = f"**{p['speaker']}:** " if p["speaker"] else ""

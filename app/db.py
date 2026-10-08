@@ -35,6 +35,21 @@ CREATE TABLE IF NOT EXISTS jobs (
   finished_at   REAL
 );
 CREATE INDEX IF NOT EXISTS jobs_status ON jobs(status, created_at);
+CREATE TABLE IF NOT EXISTS files (
+  device      TEXT NOT NULL,
+  path        TEXT NOT NULL,
+  rev         INTEGER NOT NULL,
+  hash        TEXT NOT NULL,
+  size        INTEGER NOT NULL,
+  deleted     INTEGER DEFAULT 0,
+  content     BLOB,
+  updated_at  REAL NOT NULL,
+  updated_by  TEXT DEFAULT '',
+  PRIMARY KEY (device, path)
+);
+CREATE TABLE IF NOT EXISTS file_history (
+  device TEXT, path TEXT, rev INTEGER, content BLOB, updated_at REAL
+);
 """
 
 
@@ -150,3 +165,53 @@ def older_than(ts: float, statuses=("done", "error")) -> list[dict]:
             f"SELECT * FROM jobs WHERE status IN ({q}) AND COALESCE(finished_at, updated_at) < ?", (*statuses, ts)
         ).fetchall()
     return [_row(r) for r in rows]
+
+
+# ---------------------------------------------------------------- synced text files (notes backup)
+def _frow(r) -> Optional[dict]:
+    if r is None:
+        return None
+    d = dict(r)
+    d.pop("content", None)
+    d["deleted"] = bool(d["deleted"])
+    return d
+
+
+def file_list(device: str) -> list[dict]:
+    with _lock:
+        rows = _conn.execute("SELECT * FROM files WHERE device=? ORDER BY path", (device,)).fetchall()
+    return [_frow(r) for r in rows]
+
+
+def file_devices() -> list[str]:
+    with _lock:
+        return [r[0] for r in _conn.execute("SELECT DISTINCT device FROM files ORDER BY device").fetchall()]
+
+
+def file_get(device: str, path: str) -> tuple[Optional[dict], Optional[bytes]]:
+    with _lock:
+        r = _conn.execute("SELECT * FROM files WHERE device=? AND path=?", (device, path)).fetchone()
+    if r is None:
+        return None, None
+    return _frow(r), (None if r["deleted"] else bytes(r["content"] or b""))
+
+
+def file_put(device: str, path: str, content: Optional[bytes], hsh: str, by: str, keep_history: int = 20) -> dict:
+    """Write (content) or delete (None) a file; returns the new row. Caller checks base_rev first."""
+    now = time.time()
+    with _lock:
+        old = _conn.execute("SELECT rev, content, deleted FROM files WHERE device=? AND path=?", (device, path)).fetchone()
+        rev = (old["rev"] if old else 0) + 1
+        if old and not old["deleted"]:
+            _conn.execute("INSERT INTO file_history VALUES (?,?,?,?,?)", (device, path, old["rev"], old["content"], now))
+            _conn.execute(
+                "DELETE FROM file_history WHERE device=? AND path=? AND rev NOT IN "
+                "(SELECT rev FROM file_history WHERE device=? AND path=? ORDER BY rev DESC LIMIT ?)",
+                (device, path, device, path, keep_history))
+        _conn.execute(
+            "INSERT OR REPLACE INTO files (device, path, rev, hash, size, deleted, content, updated_at, updated_by) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (device, path, rev, hsh if content is not None else "", len(content or b""), 0 if content is not None else 1,
+             content, now, by))
+        _conn.commit()
+    return file_get(device, path)[0]

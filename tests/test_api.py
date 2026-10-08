@@ -221,3 +221,99 @@ def test_priority_jumps_queue(client):
     finally:
         w.start()
     wait(client, a["id"]); wait(client, b["id"])
+
+
+def test_meeting_notes_feed_summary_and_minutes(client):
+    rid = "dev1-2026-10-08_1535"
+    data = wav_bytes(6)
+    client.put(f"/api/uploads/{rid}", content=data, headers={**H, "X-Offset": "0"})
+    notes = "[0:02] Agreed to move go-live to Nov 3\n[0:13] San owns the rollback plan"
+    r = client.post(f"/api/uploads/{rid}/complete?filename=2026-10-08_1535.wav", json={"notes": notes},
+                    headers={**H, "X-Total-Size": str(len(data))})
+    assert r.status_code == 201
+    j = wait(client, r.json()["id"])
+    assert j["status"] == "done"
+    assert any("San owns the rollback plan" in c for c in CALLS)
+    md = client.get(f"/api/recordings/{rid}/result.md", headers=H).text
+    assert "## My notes" in md and "go-live to Nov 3" in md
+
+
+ICS = b"""BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//test//EN
+BEGIN:VEVENT
+UID:a1
+DTSTART:%(s1)s
+DTEND:%(e1)s
+SUMMARY:Coolify migration review
+LOCATION:Zoom
+END:VEVENT
+BEGIN:VEVENT
+UID:a2
+DTSTART;VALUE=DATE:%(d2)s
+SUMMARY:Public holiday
+END:VEVENT
+BEGIN:VEVENT
+UID:a3
+DTSTART:%(s3)s
+DTEND:%(e3)s
+RRULE:FREQ=DAILY;COUNT=3
+SUMMARY:Standup
+END:VEVENT
+BEGIN:VEVENT
+UID:a4
+DTSTART:%(s1)s
+DTEND:%(e1)s
+STATUS:CANCELLED
+SUMMARY:Cancelled thing
+END:VEVENT
+END:VCALENDAR
+"""
+
+
+def test_agenda(client, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from app import agenda
+    assert client.get("/api/agenda", headers=H).status_code == 503       # nothing configured
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    f = lambda d: d.strftime("%Y%m%dT%H%M%SZ")
+    body = ICS % {b"s1": f(now + timedelta(hours=1)).encode(), b"e1": f(now + timedelta(hours=2)).encode(),
+                  b"d2": (now + timedelta(days=2)).strftime("%Y%m%d").encode(),
+                  b"s3": f(now + timedelta(minutes=30)).encode(), b"e3": f(now + timedelta(minutes=45)).encode()}
+    monkeypatch.setattr(settings, "calendar_ics_urls", "https://cal.example/a.ics, webcal://cal.example/b.ics")
+    monkeypatch.setattr(agenda, "_fetch", lambda u: body)
+    ev = client.get("/api/agenda?days=7", headers=H).json()["events"]
+    titles = [e["title"] for e in ev]
+    assert "Cancelled thing" not in titles
+    assert titles.count("Standup") == 3 and titles.count("Coolify migration review") == 1   # deduped across 2 calendars
+    m = next(e for e in ev if e["title"] == "Coolify migration review")
+    assert m["location"] == "Zoom" and m["end"] - m["start"] == 3600 and not m["all_day"]
+    assert next(e for e in ev if e["title"] == "Public holiday")["all_day"]
+
+
+def test_file_sync(client):
+    from app.main import fnv1a
+    assert fnv1a(b"") == "811c9dc5" and fnv1a(b"a") == "e40c292c"         # same as the device
+    q = "device=dev1"
+    r = client.put(f"/api/files/notes/Inbox.md?{q}&base_rev=0", content=b"- idea one\n", headers=H).json()
+    assert r["rev"] == 1 and r["hash"] == fnv1a(b"- idea one\n")
+    # same content again: unchanged, no new rev
+    assert client.put(f"/api/files/notes/Inbox.md?{q}&base_rev=0", content=b"- idea one\n", headers=H).json()["rev"] == 1
+    # edit from the web with the right base
+    assert client.put(f"/api/files/notes/Inbox.md?{q}&base_rev=1&by=web", content=b"- idea one!\n", headers=H).json()["rev"] == 2
+    # device still thinks rev 1 -> conflict
+    c = client.put(f"/api/files/notes/Inbox.md?{q}&base_rev=1", content=b"- idea two\n", headers=H)
+    assert c.status_code == 409 and c.json()["rev"] == 2
+    g = client.get(f"/api/files/notes/Inbox.md?{q}", headers=H)
+    assert g.text == "- idea one!\n" and g.headers["X-Rev"] == "2"
+    lst = client.get(f"/api/files?{q}", headers=H).json()["files"]
+    assert lst[0]["path"] == "notes/Inbox.md" and lst[0]["updated_by"] == "web"
+    assert "dev1" in client.get("/api/files", headers=H).json()["devices"]
+    # delete needs the current rev
+    assert client.delete(f"/api/files/notes/Inbox.md?{q}&base_rev=1", headers=H).status_code == 409
+    assert client.delete(f"/api/files/notes/Inbox.md?{q}&base_rev=2", headers=H).json()["deleted"]
+    assert client.get(f"/api/files/notes/Inbox.md?{q}", headers=H).status_code == 404
+    # re-create after delete with base 0
+    assert client.put(f"/api/files/notes/Inbox.md?{q}&base_rev=0", content=b"new\n", headers=H).json()["rev"] == 4
+    for bad in ["../x.md", "notes/x.exe", "notes//x.md"]:
+        assert client.put(f"/api/files/{bad}?{q}", content=b"x", headers=H).status_code in (400, 404)

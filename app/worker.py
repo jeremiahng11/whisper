@@ -66,6 +66,7 @@ def run_summary(jid: str) -> None:
         title, body = summarize.summarize(
             render.transcript_for_llm(tr), tr.get("language", ""),
             lambda p, s: db.update(jid, progress=round(p, 3), stage=s),
+            job.get("options", {}).get("notes", ""),
         )
         _write(jid, "summary.md", body)
         user_title = job.get("options", {}).get("title")

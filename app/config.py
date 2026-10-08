@@ -54,6 +54,14 @@ class Settings:
     summary_chunk_chars: int = _int("SUMMARY_CHUNK_CHARS", 24000)   # longer transcripts are summarised in parts
     llm_timeout_s: int = _int("LLM_TIMEOUT_S", 1800)
 
+    # --- calendar (device Agenda app) ---
+    calendar_ics_urls: str = os.getenv("CALENDAR_ICS_URLS", "")   # private ICS links, comma separated
+    calendar_tz: str = os.getenv("CALENDAR_TZ", os.getenv("TZ", "Asia/Singapore"))
+    calendar_cache_s: int = _int("CALENDAR_CACHE_S", 300)
+
+    # --- file sync (device notes backup) ---
+    sync_max_kb: int = _int("SYNC_MAX_KB", 1024)                    # largest text file accepted
+
     @property
     def audio_dir(self) -> Path:
         return self.data_dir / "audio"

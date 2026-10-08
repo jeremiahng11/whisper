@@ -136,7 +136,17 @@ def _chunks(text: str, size: int) -> list[str]:
     return parts
 
 
-def summarize(transcript_text: str, language: str, progress: Optional[Callable[[float, str], None]] = None) -> tuple[str, str]:
+NOTES_EXTRA = """
+
+The person who recorded this also typed these notes during the meeting ([m:ss] = time into the recording).
+Use them to get names, decisions and action items right, and give them priority where they are clear:
+\"\"\"
+{notes}
+\"\"\""""
+
+
+def summarize(transcript_text: str, language: str, progress: Optional[Callable[[float, str], None]] = None,
+              user_notes: str = "") -> tuple[str, str]:
     """Returns (title, markdown body without the title line)."""
     progress = progress or (lambda p, s: None)
     lang = settings.summary_language or language
@@ -153,7 +163,10 @@ def summarize(transcript_text: str, language: str, progress: Optional[Callable[[
             notes.append(chat([sys, {"role": "user", "content": NOTES_PROMPT.format(i=i, n=len(parts), text=part)}]))
         source, kind = "\n\n".join(notes), "Notes from the whole transcript, in order"
     progress(len(parts) / (len(parts) + 1) if len(parts) > 1 else 0.5, "writing summary")
-    out = chat([sys, {"role": "user", "content": FINAL_PROMPT.format(lang=lang_line, fmt=FORMAT, kind=kind, text=source)}])
+    prompt = FINAL_PROMPT.format(lang=lang_line, fmt=FORMAT, kind=kind, text=source)
+    if user_notes.strip():
+        prompt += NOTES_EXTRA.format(notes=user_notes.strip()[:8000])
+    out = chat([sys, {"role": "user", "content": prompt}])
     return split_title(out)
 
 

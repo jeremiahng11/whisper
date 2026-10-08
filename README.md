@@ -54,6 +54,9 @@ an hour then takes about 1-2 min.
 | `KEEP_AUDIO_DAYS` | `30` | Delete audio after N days (results stay). 0 = keep |
 | `KEEP_JOBS_DAYS` | `0` | Delete whole jobs after N days. 0 = keep |
 | `MAX_UPLOAD_MB` | `2048` | Largest accepted file |
+| `CALENDAR_ICS_URLS` | | Private calendar links for the device's Agenda app, comma separated (see below) |
+| `CALENDAR_TZ` | `Asia/Singapore` | Time zone for all-day events |
+| `SYNC_MAX_KB` | `1024` | Largest text file accepted by notes sync |
 
 ## API
 
@@ -116,6 +119,38 @@ Example `result.md`:
 
 `[00:00]` **Speaker 1:** Okay, let's start with...
 ```
+
+## Calendar (Agenda app on the Idea Saver)
+
+Add your calendars' **private ICS links** to `CALENDAR_ICS_URLS` and redeploy:
+
+- **Google Calendar:** calendar.google.com → Settings → pick the calendar → *Integrate calendar* → **Secret address in iCal format**.
+- **Outlook / Microsoft 365:** outlook.office.com → Settings → Calendar → *Shared calendars* → **Publish a calendar** → pick "Can view all details" → copy the **ICS** link.
+- **iCloud:** Calendar app → share the calendar → *Public Calendar* → copy the link (`webcal://` is fine).
+
+`GET /api/agenda?days=7` returns `{"events":[{"title","start","end","all_day","location"}]}` (epoch seconds),
+recurring meetings expanded, cancelled ones dropped, duplicates across calendars merged. Links are fetched at most every 5 min.
+
+## Meeting notes
+
+The device sends notes typed during a recording as a JSON body on `POST /api/uploads/{rid}/complete`:
+`{"notes": "[0:02] Agreed to move go-live to Nov 3"}`. They are given to the summariser and appear as **My notes** in the minutes.
+
+## Notes sync (two-way backup)
+
+The Idea Saver copies its notes, journal, tasks, reminders and minutes here; the **Notes** panel on the web page
+shows and edits them, and edits go back to the device on its next sync. Each file has a revision number:
+
+```
+GET    /api/files                         -> {"devices": [...]}
+GET    /api/files?device=ID               -> {"files": [{"path","rev","hash","size","deleted","updated_at","updated_by"}]}
+GET    /api/files/notes/Inbox.md?device=ID           -> content (headers X-Rev, X-Hash)
+PUT    /api/files/notes/Inbox.md?device=ID&base_rev=N   body = content -> {"rev","hash"}; 409 if it changed since rev N
+DELETE /api/files/notes/Inbox.md?device=ID&base_rev=N   -> {"rev","deleted":true}
+```
+
+`hash` is 32-bit FNV-1a (hex). The last 20 versions of each file are kept in the `file_history` table.
+If both sides changed a file, the device keeps its version and saves the server's next to it as "(server copy)".
 
 ## Development
 

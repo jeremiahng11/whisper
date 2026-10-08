@@ -1,4 +1,5 @@
 """HTTP API + small web page. Run: uvicorn app.main:app --host 0.0.0.0 --port 8000"""
+import importlib.util
 import logging
 import os
 import re
@@ -10,14 +11,14 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
 
-from . import chat, db, summarize, transcribe, worker
+from . import agenda, chat, db, summarize, transcribe, worker
 from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -202,9 +203,24 @@ async def upload_chunk(rid: str, request: Request, x_offset: int = Header(0)):
     return {"recording_id": rid, "received": n, "job": None}
 
 
+async def body_notes(request: Request) -> str:
+    """Optional JSON body {"notes": "..."}: notes typed on the device during a meeting."""
+    try:
+        raw = await request.body()
+        if raw.strip():
+            import json as _json
+            v = _json.loads(raw)
+            if isinstance(v, dict) and isinstance(v.get("notes"), str):
+                return v["notes"][:20000]
+    except Exception:
+        pass
+    return ""
+
+
 @app.post("/api/uploads/{rid}/complete", dependencies=[Depends(auth)], status_code=201)
-def upload_complete(
+async def upload_complete(
     rid: str,
+    request: Request,
     language: Optional[str] = Query(None),
     summarize_: bool = Query(True, alias="summarize"),
     diarize: Optional[bool] = Query(None),
@@ -214,6 +230,7 @@ def upload_complete(
     x_total_size: Optional[int] = Header(None, description="optional: full file size, checked before queueing"),
 ):
     check_id(rid)
+    notes = await body_notes(request)
     if (j := existing_for(rid)):
         return JSONResponse(job_out(j), status_code=200)
     p = part_path(rid)
@@ -221,7 +238,10 @@ def upload_complete(
         raise HTTPException(404, "nothing uploaded for this recording id")
     if x_total_size is not None and p.stat().st_size != x_total_size:
         return JSONResponse({"recording_id": rid, "received": p.stat().st_size, "error": "size mismatch"}, status_code=409)
-    return job_out(new_job(p, safe_name(filename or rid), options(language, summarize_, diarize, title), rid, priority))
+    opts = options(language, summarize_, diarize, title)
+    if notes.strip():
+        opts["notes"] = notes
+    return job_out(new_job(p, safe_name(filename or rid), opts, rid, priority))
 
 
 # ---------------------------------------------------------------- jobs
@@ -351,6 +371,96 @@ def ask_result(aid: str):
         raise HTTPException(404, "unknown or expired")
     return r
 
+# ---------------------------------------------------------------- calendar (device Agenda app)
+@app.get("/api/agenda", dependencies=[Depends(auth)])
+def get_agenda(days: int = Query(7, ge=1, le=60)):
+    if not agenda.urls():
+        raise HTTPException(503, "no calendars configured - set CALENDAR_ICS_URLS")
+    return agenda.agenda(days)
+
+
+# ---------------------------------------------------------------- file sync (notes backup, two-way)
+SAFE_PATH = re.compile(r"^[A-Za-z0-9 ._()&,'+@#!-]+(/[A-Za-z0-9 ._()&,'+@#!-]+)*$")
+SYNC_EXT = (".md", ".txt", ".csv", ".json")
+
+
+def fnv1a(data: bytes) -> str:
+    """Same 32-bit FNV-1a hash the device uses to spot changed files."""
+    h = 0x811C9DC5
+    for b in data:
+        h = ((h ^ b) * 0x01000193) & 0xFFFFFFFF
+    return f"{h:08x}"
+
+
+def check_path(path: str) -> str:
+    path = (path or "").strip().lstrip("/")
+    if (not SAFE_PATH.match(path) or len(path) > 200 or any(p in ("", ".", "..") for p in path.split("/"))
+            or not path.lower().endswith(SYNC_EXT)):
+        raise HTTPException(400, "bad file path (text files .md .txt .csv .json, no ..)")
+    return path
+
+
+def check_device(device: str) -> str:
+    if not SAFE_ID.match(device or ""):
+        raise HTTPException(400, "device id may only use letters, digits, . _ -")
+    return device
+
+
+@app.get("/api/files", dependencies=[Depends(auth)])
+def files_list(device: str = Query("")):
+    if not device:
+        return {"devices": db.file_devices()}
+    return {"device": check_device(device), "files": db.file_list(device)}
+
+
+@app.get("/api/files/{path:path}", dependencies=[Depends(auth)])
+def file_read(path: str, device: str = Query(...)):
+    meta, data = db.file_get(check_device(device), check_path(path))
+    if not meta or meta["deleted"]:
+        raise HTTPException(404, "no such file")
+    return Response(data, media_type="text/plain; charset=utf-8",
+                    headers={"X-Rev": str(meta["rev"]), "X-Hash": meta["hash"]})
+
+
+def _conflict(meta: Optional[dict]) -> JSONResponse:
+    return JSONResponse({"error": "conflict - file changed elsewhere",
+                         "rev": meta["rev"] if meta else 0, "hash": meta["hash"] if meta else "",
+                         "deleted": meta["deleted"] if meta else True}, status_code=409)
+
+
+def _base_ok(meta: Optional[dict], base_rev: int) -> bool:
+    cur = meta["rev"] if meta else 0
+    return base_rev == cur or (base_rev == 0 and (meta is None or meta["deleted"]))
+
+
+@app.put("/api/files/{path:path}", dependencies=[Depends(auth)])
+async def file_write(path: str, request: Request, device: str = Query(...), base_rev: int = Query(0),
+                     by: str = Query("device")):
+    device, path = check_device(device), check_path(path)
+    data = await request.body()
+    if len(data) > settings.sync_max_kb * 1024:
+        raise HTTPException(413, f"file bigger than SYNC_MAX_KB={settings.sync_max_kb}")
+    h = fnv1a(data)
+    meta, _ = db.file_get(device, path)
+    if meta and not meta["deleted"] and meta["hash"] == h:          # same content: nothing to do
+        return {"path": path, "rev": meta["rev"], "hash": h, "unchanged": True}
+    if not _base_ok(meta, base_rev):
+        return _conflict(meta)
+    m = db.file_put(device, path, data, h, by[:20])
+    return {"path": path, "rev": m["rev"], "hash": h}
+
+
+@app.delete("/api/files/{path:path}", dependencies=[Depends(auth)])
+def file_delete(path: str, device: str = Query(...), base_rev: int = Query(0), by: str = Query("device")):
+    device, path = check_device(device), check_path(path)
+    meta, _ = db.file_get(device, path)
+    if not meta or meta["deleted"]:
+        return {"path": path, "rev": meta["rev"] if meta else 0, "deleted": True}
+    if base_rev != meta["rev"]:
+        return _conflict(meta)
+    m = db.file_put(device, path, None, "", by[:20])
+    return {"path": path, "rev": m["rev"], "deleted": True}
+
 
 # ---------------------------------------------------------------- misc
 @app.get("/api/health")
@@ -363,6 +473,9 @@ def health():
         "summary_backend": settings.summary_backend,
         "summary_model": settings.ollama_model if settings.summary_backend == "ollama" else settings.openai_model,
         "diarize_default": settings.diarize,
+        "diarize_installed": importlib.util.find_spec("pyannote") is not None,
+        "hf_token_set": bool(settings.hf_token),
+        "calendars": len(agenda.urls()),
         "jobs": db.counts(),
         "running": worker.current_job,
     }
