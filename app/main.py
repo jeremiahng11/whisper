@@ -12,7 +12,7 @@ from typing import Optional
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 
-from . import db, summarize, transcribe, worker
+from . import chat, db, summarize, transcribe, worker
 from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -111,14 +111,14 @@ def existing_for(rid: Optional[str]) -> Optional[dict]:
     return j
 
 
-def new_job(src: Path, filename: str, opts: dict, rid: Optional[str]) -> dict:
+def new_job(src: Path, filename: str, opts: dict, rid: Optional[str], priority: str = "") -> dict:
     if src.stat().st_size == 0:
         src.unlink(missing_ok=True)
         raise HTTPException(400, "empty upload")
     ext = Path(filename).suffix.lower() or ".wav"
     dest = settings.audio_dir / f"{int(time.time())}_{secrets.token_hex(4)}{ext}"
     shutil.move(str(src), dest)
-    j = db.create(filename, str(dest), opts, rid)
+    j = db.create(filename, str(dest), opts, rid, 1 if priority == "high" else 0)
     worker.wake()
     return j
 
@@ -142,6 +142,7 @@ async def create_job(
     summarize_: bool = Query(True, alias="summarize"),
     diarize: Optional[bool] = Query(None, description="speaker labels (needs DIARIZE build)"),
     title: Optional[str] = Query(None),
+    priority: str = Query("", description="'high' = jump the queue (short dictation clips)"),
     x_recording_id: Optional[str] = Header(None, description="your own id; re-uploads return the same job"),
     x_filename: Optional[str] = Header(None),
 ):
@@ -164,7 +165,7 @@ async def create_job(
                 raise HTTPException(413, f"upload bigger than MAX_UPLOAD_MB={settings.max_upload_mb}")
         else:
             await save_body(request, tmp)
-        return job_out(new_job(tmp, filename, options(language, summarize_, diarize, title), rid))
+        return job_out(new_job(tmp, filename, options(language, summarize_, diarize, title), rid, priority))
     finally:
         tmp.unlink(missing_ok=True)
 
@@ -209,6 +210,7 @@ def upload_complete(
     diarize: Optional[bool] = Query(None),
     title: Optional[str] = Query(None),
     filename: Optional[str] = Query(None),
+    priority: str = Query(""),
     x_total_size: Optional[int] = Header(None, description="optional: full file size, checked before queueing"),
 ):
     check_id(rid)
@@ -219,7 +221,7 @@ def upload_complete(
         raise HTTPException(404, "nothing uploaded for this recording id")
     if x_total_size is not None and p.stat().st_size != x_total_size:
         return JSONResponse({"recording_id": rid, "received": p.stat().st_size, "error": "size mismatch"}, status_code=409)
-    return job_out(new_job(p, safe_name(filename or rid), options(language, summarize_, diarize, title), rid))
+    return job_out(new_job(p, safe_name(filename or rid), options(language, summarize_, diarize, title), rid, priority))
 
 
 # ---------------------------------------------------------------- jobs
@@ -319,6 +321,35 @@ def delete_job(jid: str):
     worker.delete_job_files(j)
     db.delete(jid)
     return {"deleted": jid}
+
+
+# ---------------------------------------------------------------- chat (Ask AI on the device)
+@app.post("/api/ask", dependencies=[Depends(auth)], status_code=202)
+async def ask(request: Request):
+    """{"messages": [{"role": "user"|"assistant", "content": "..."}]} -> {"id", "status": "pending"}.
+    The answer can take a while on a CPU, so poll GET /api/ask/{id}."""
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(400, "body must be JSON")
+    msgs = data.get("messages") if isinstance(data, dict) else None
+    if not msgs and isinstance(data, dict) and data.get("prompt"):
+        msgs = [{"role": "user", "content": str(data["prompt"])}]
+    if not msgs or not isinstance(msgs, list):
+        raise HTTPException(400, "send {'messages': [...]} or {'prompt': '...'}")
+    clean = [{"role": m.get("role") if m.get("role") in ("user", "assistant") else "user", "content": str(m.get("content", ""))[:8000]}
+             for m in msgs[-20:] if isinstance(m, dict)]
+    if not summarize.enabled():
+        raise HTTPException(400, "SUMMARY_BACKEND is none - no LLM configured")
+    return chat.start(clean)
+
+
+@app.get("/api/ask/{aid}", dependencies=[Depends(auth)])
+def ask_result(aid: str):
+    r = chat.get(aid)
+    if not r:
+        raise HTTPException(404, "unknown or expired")
+    return r
 
 
 # ---------------------------------------------------------------- misc

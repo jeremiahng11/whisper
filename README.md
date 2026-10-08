@@ -68,7 +68,7 @@ curl -H "Authorization: Bearer $KEY" -H "X-Filename: 2026-10-08_1535.wav" \
 ```
 
 Query options: `language` (`en`, `zh`, `ms`, ... or empty for auto), `summarize` (`true`/`false`),
-`diarize` (`true`/`false`), `title`. Header `X-Recording-Id: <your id>` makes re-uploads return the same job
+`diarize` (`true`/`false`), `title`, `priority=high` (jump the queue - used for short dictation clips). Header `X-Recording-Id: <your id>` makes re-uploads return the same job
 instead of a duplicate.
 
 ### Resumable upload (what the Idea Saver uses)
@@ -92,6 +92,8 @@ GET /api/jobs/{id}                 status: queued | transcribing | summarizing |
 GET /api/recordings/{rid}          same, looked up by recording id
 GET /api/jobs/{id}/result.md       minutes + transcript (also /api/recordings/{rid}/result.md)
 GET /api/jobs/{id}/transcript.txt | transcript.srt | transcript.json | summary.md
+POST /api/ask   {"messages":[{"role":"user","content":"..."}]}  -> {"id","status":"pending"}
+GET  /api/ask/{id}                 -> {"status":"done","answer":"..."}  (Ask AI app on the device)
 POST /api/jobs/{id}/summarize      redo the summary (e.g. after changing the LLM)
 POST /api/jobs/{id}/retry          retry a failed job
 DELETE /api/jobs/{id}

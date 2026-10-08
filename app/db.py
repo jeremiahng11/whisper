@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   language      TEXT DEFAULT '',
   duration      REAL DEFAULT 0,
   options       TEXT DEFAULT '{}',
+  priority      INTEGER DEFAULT 0,
   created_at    REAL NOT NULL,
   updated_at    REAL NOT NULL,
   started_at    REAL,
@@ -45,6 +46,9 @@ def init() -> None:
         _conn.row_factory = sqlite3.Row
         _conn.execute("PRAGMA journal_mode=WAL")
         _conn.executescript(SCHEMA)
+        cols = [r[1] for r in _conn.execute("PRAGMA table_info(jobs)").fetchall()]
+        if "priority" not in cols:                       # upgrade older databases
+            _conn.execute("ALTER TABLE jobs ADD COLUMN priority INTEGER DEFAULT 0")
         # jobs interrupted by a restart go back to the queue
         _conn.execute(
             "UPDATE jobs SET status='queued', stage='requeued after restart', progress=0 "
@@ -61,14 +65,15 @@ def _row(r: Optional[sqlite3.Row]) -> Optional[dict]:
     return d
 
 
-def create(filename: str, audio_path: str, options: dict, recording_id: Optional[str] = None) -> dict:
+def create(filename: str, audio_path: str, options: dict, recording_id: Optional[str] = None,
+           priority: int = 0) -> dict:
     now = time.time()
     jid = uuid.uuid4().hex[:12]
     with _lock:
         _conn.execute(
-            "INSERT INTO jobs (id, recording_id, filename, audio_path, status, options, created_at, updated_at) "
-            "VALUES (?,?,?,?, 'queued', ?, ?, ?)",
-            (jid, recording_id, filename, audio_path, json.dumps(options), now, now),
+            "INSERT INTO jobs (id, recording_id, filename, audio_path, status, options, priority, created_at, updated_at) "
+            "VALUES (?,?,?,?, 'queued', ?, ?, ?, ?)",
+            (jid, recording_id, filename, audio_path, json.dumps(options), priority, now, now),
         )
         _conn.commit()
     return get(jid)
@@ -110,18 +115,19 @@ def update(jid: str, **fields: Any) -> None:
 def next_queued() -> Optional[dict]:
     with _lock:
         return _row(
-            _conn.execute("SELECT * FROM jobs WHERE status='queued' ORDER BY created_at LIMIT 1").fetchone()
+            _conn.execute("SELECT * FROM jobs WHERE status='queued' ORDER BY priority DESC, created_at LIMIT 1").fetchone()
         )
 
 
 def queue_position(jid: str) -> int:
     """0 = running or not queued, 1 = next, ..."""
     with _lock:
-        j = _conn.execute("SELECT status, created_at FROM jobs WHERE id=?", (jid,)).fetchone()
+        j = _conn.execute("SELECT status, created_at, priority FROM jobs WHERE id=?", (jid,)).fetchone()
         if not j or j["status"] != "queued":
             return 0
         return _conn.execute(
-            "SELECT COUNT(*) FROM jobs WHERE status='queued' AND created_at<=?", (j["created_at"],)
+            "SELECT COUNT(*) FROM jobs WHERE status='queued' AND (priority > ? OR (priority = ? AND created_at <= ?))",
+            (j["priority"], j["priority"], j["created_at"]),
         ).fetchone()[0]
 
 

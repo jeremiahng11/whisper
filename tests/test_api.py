@@ -192,3 +192,32 @@ def test_validation_and_delete(client):
     assert client.delete(f"/api/jobs/{j['id']}", headers=H).status_code == 200
     assert client.get(f"/api/jobs/{j['id']}", headers=H).status_code == 404
     assert not (settings.result_dir / j["id"]).exists()
+
+
+def test_ask_ai(client):
+    r = client.post("/api/ask", json={"messages": [{"role": "user", "content": "Name ideas?"}]}, headers=H)
+    assert r.status_code == 202 and r.json()["status"] == "pending"
+    aid = r.json()["id"]
+    for _ in range(100):
+        a = client.get(f"/api/ask/{aid}", headers=H).json()
+        if a["status"] != "pending":
+            break
+        time.sleep(0.05)
+    assert a["status"] == "done" and a["answer"]
+    assert client.get("/api/ask/nope", headers=H).status_code == 404
+    assert client.post("/api/ask", json={"x": 1}, headers=H).status_code == 400
+
+
+def test_priority_jumps_queue(client):
+    from app import db
+    import app.worker as w
+    w.stop(); time.sleep(0.3)                    # pause the worker so jobs stay queued
+    try:
+        a = client.post("/api/jobs", content=wav_bytes(1), headers=H).json()
+        b = client.post("/api/jobs?priority=high", content=wav_bytes(1), headers=H).json()
+        assert db.next_queued()["id"] == b["id"]
+        assert client.get(f"/api/jobs/{b['id']}", headers=H).json()["queue_position"] == 1
+        assert client.get(f"/api/jobs/{a['id']}", headers=H).json()["queue_position"] == 2
+    finally:
+        w.start()
+    wait(client, a["id"]); wait(client, b["id"])
