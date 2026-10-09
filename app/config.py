@@ -40,6 +40,8 @@ class Settings:
     diarize: bool = _bool("DIARIZE", False)
     hf_token: str = os.getenv("HF_TOKEN", "")
     diarize_model: str = os.getenv("DIARIZE_MODEL", "pyannote/speaker-diarization-3.1")
+    diarizer: str = os.getenv("DIARIZER", "pyannote")             # "fake" is only for tests
+    voice_match: float = float(os.getenv("VOICE_MATCH", "0.70") or 0.70)   # cosine similarity to recognise a known voice
 
     # --- summary ---
     summary_backend: str = os.getenv("SUMMARY_BACKEND", "ollama")   # ollama | openai | none
@@ -51,8 +53,17 @@ class Settings:
     openai_base_url: str = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
     openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    # "Best quality" minutes use a bigger model (slower). Empty = same model as normal.
+    ollama_model_best: str = os.getenv("OLLAMA_MODEL_BEST", "")       # e.g. qwen2.5:14b-instruct
+    openai_model_best: str = os.getenv("OPENAI_MODEL_BEST", "")
     summary_chunk_chars: int = _int("SUMMARY_CHUNK_CHARS", 24000)   # longer transcripts are summarised in parts
     llm_timeout_s: int = _int("LLM_TIMEOUT_S", 1800)
+
+    # --- privacy ---
+    redact: bool = _bool("REDACT", True)          # hide NRIC/FIN, card and bank account numbers in transcripts
+
+    # --- live upload (device uploads while it records; transcribed in parts) ---
+    live_min_new_s: int = _int("LIVE_MIN_NEW_S", 240)     # transcribe a part once this much new audio arrived
 
     # --- calendar (device Agenda app) ---
     calendar_ics_urls: str = os.getenv("CALENDAR_ICS_URLS", "")   # private ICS links, comma separated
@@ -81,6 +92,10 @@ class Settings:
     @property
     def db_path(self) -> Path:
         return self.data_dir / "jobs.db"
+
+    @property
+    def glossary_path(self) -> Path:
+        return self.data_dir / "glossary.txt"
 
     def ensure_dirs(self) -> None:
         for d in (self.audio_dir, self.upload_dir, self.result_dir, self.model_dir):

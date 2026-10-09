@@ -13,6 +13,7 @@ os.environ["API_KEY"] = "test-key"
 os.environ["TRANSCRIBER"] = "fake"
 os.environ["SUMMARY_BACKEND"] = "openai"
 os.environ["PRELOAD_MODEL"] = "0"
+os.environ["DIARIZER"] = "fake"
 
 import pytest
 from fastapi.testclient import TestClient
@@ -26,10 +27,20 @@ CALLS = []
 FAIL = {"on": False}
 
 
-def fake_chat(messages):
+BEST = []
+SYSTEMS = []
+
+
+def fake_chat(messages, best=False):
     CALLS.append(messages[-1]["content"])
+    BEST.append(best)
+    SYSTEMS.append(messages[0]["content"] if messages[0]["role"] == "system" else "")
     if FAIL["on"]:
         raise RuntimeError("LLM is down")
+    if "as JSON" in messages[-1]["content"]:
+        return '```json\n[{"task": "ship V1", "owner": "Speaker 1", "due": "2026-10-09"}]\n```'
+    if "pinyin" in messages[-1]["content"].lower() or messages[0]["content"].startswith("You answer questions"):
+        return "From the meetings: the rollback plan is owned by San [00:13]."
     if "part" in messages[-1]["content"][:60]:
         return "- notes for a part"
     return "Title: Weekly sync on the Idea Saver\n\n### Summary\nThe team talked.\n\n### Action items\n- [ ] Speaker 1 - ship V1 (Friday)"
@@ -151,7 +162,7 @@ def test_long_transcript_is_summarised_in_parts(client):
     assert j["status"] == "done"
     parts = [c for c in CALLS if c.startswith("This is part")]
     assert len(parts) >= 2
-    assert "Notes from the whole transcript" in CALLS[-1]
+    assert "Notes from the whole transcript" in CALLS[-2] and "as JSON" in CALLS[-1]
 
 
 def test_summary_failure_keeps_transcript_then_redo(client):
@@ -247,6 +258,10 @@ DTSTART:%(s1)s
 DTEND:%(e1)s
 SUMMARY:Coolify migration review
 LOCATION:Zoom
+ORGANIZER;CN=Jeremiah Ng:mailto:jeremiah@example.com
+ATTENDEE;CN="San Tan";ROLE=REQ-PARTICIPANT:mailto:san@example.com
+ATTENDEE;CUTYPE=ROOM;CN=Room 3:mailto:room3@example.com
+ATTENDEE:mailto:komei.foong@example.com
 END:VEVENT
 BEGIN:VEVENT
 UID:a2
@@ -288,6 +303,7 @@ def test_agenda(client, monkeypatch):
     assert titles.count("Standup") == 3 and titles.count("Coolify migration review") == 1   # deduped across 2 calendars
     m = next(e for e in ev if e["title"] == "Coolify migration review")
     assert m["location"] == "Zoom" and m["end"] - m["start"] == 3600 and not m["all_day"]
+    assert m["attendees"] == ["Jeremiah Ng", "San Tan", "Komei Foong"]
     assert next(e for e in ev if e["title"] == "Public holiday")["all_day"]
 
 
@@ -317,3 +333,114 @@ def test_file_sync(client):
     assert client.put(f"/api/files/notes/Inbox.md?{q}&base_rev=0", content=b"new\n", headers=H).json()["rev"] == 4
     for bad in ["../x.md", "notes/x.exe", "notes//x.md"]:
         assert client.put(f"/api/files/{bad}?{q}", content=b"x", headers=H).status_code in (400, 404)
+
+
+def upload(client, rid, seconds=30, query="", body=None):
+    data = wav_bytes(seconds)
+    client.put(f"/api/uploads/{rid}", content=data, headers={**H, "X-Offset": "0"})
+    r = client.post(f"/api/uploads/{rid}/complete?filename=2026-10-09_1000.wav&{query}", json=body or {},
+                    headers={**H, "X-Total-Size": str(len(data))})
+    assert r.status_code == 201, r.text
+    return wait(client, r.json()["id"])
+
+
+def test_speaker_names_and_voice_memory(client):
+    j = upload(client, "dev1-spk-a", 40, "diarize=true&speakers=2")
+    assert j["status"] == "done" and j["speakers"] == 2
+    sp = client.get(f"/api/jobs/{j['id']}/speakers", headers=H).json()["speakers"]
+    assert [s["label"] for s in sp] == ["Speaker 1", "Speaker 2"] and all(s["has_voice"] for s in sp)
+    r = client.post(f"/api/jobs/{j['id']}/speakers", json={"names": {"Speaker 1": "San"}, "remember": True}, headers=H)
+    assert r.json()["speaker_names"] == {"Speaker 1": "San"}
+    md = client.get(f"/api/jobs/{j['id']}/result.md", headers=H).text
+    assert "**San:**" in md and "**Speaker 2:**" in md and "San - ship V1" in md       # summary renamed too
+    acts = client.get(f"/api/jobs/{j['id']}/actions.json", headers=H).json()
+    assert acts == [{"task": "ship V1", "owner": "San", "due": "2026-10-09"}]
+    assert any(v["name"] == "San" for v in client.get("/api/voices", headers=H).json()["voices"])
+    # next recording: San's voice is recognised automatically
+    j2 = upload(client, "dev1-spk-b", 40, "diarize=true&speakers=2")
+    assert j2["speaker_names"] == {"Speaker 1": "San"} and j2["speaker_auto"] == ["Speaker 1"]
+    assert any("San:" in c for c in CALLS[-3:])                                         # the LLM saw the name
+    assert client.delete("/api/voices/San", headers=H).status_code == 200
+    assert client.post(f"/api/jobs/{j['id']}/speakers", json={"names": {"bogus": "x"}}, headers=H).status_code == 400
+
+
+def test_templates_best_glossary_attendees_marks(client):
+    assert client.put("/api/glossary", content="Aleta Planet\nSkenPay\n# comment", headers=H).json()["terms"] == ["Aleta Planet", "SkenPay"]
+    t = client.get("/api/templates").json()
+    assert {x["id"] for x in t["templates"]} >= {"general", "standup", "client", "one_on_one", "interview", "board"}
+    assert client.post("/api/uploads/x/complete?template=nope", headers=H).status_code in (400, 404)
+    BEST.clear()
+    notes = "[0:12] !! budget for Q4\n[0:20] normal note"
+    j = upload(client, "dev1-board", 30, "template=board&best=true", {"notes": notes, "attendees": ["San Tan", "Komei"]})
+    assert j["template"] == "board" and j["best"] is True and True in BEST
+    final = [c for c in CALLS if "RESOLVED THAT" in c][-1]
+    assert "budget for Q4" in final and "test sentence number 3" in final          # flagged moment with context
+    assert any("SkenPay" in s and "Komei" in s for s in SYSTEMS[-3:])
+    md = client.get(f"/api/jobs/{j['id']}/result.md", headers=H).text
+    assert "## Flagged moments" in md and "**budget for Q4**" in md
+    # redo the minutes as a client meeting
+    r = client.post(f"/api/jobs/{j['id']}/summarize", json={"template": "client", "best": False}, headers=H)
+    assert r.json()["template"] == "client"
+    wait(client, j["id"])
+    assert "What the client needs" in [c for c in CALLS if "What the client needs" in c][-1]
+    client.put("/api/glossary", content="", headers=H)
+
+
+def test_redaction():
+    from app.redact import redact
+    assert redact("my NRIC is S1234567D ok") == "my NRIC is [NRIC] ok"
+    assert redact("FIN g 123 4567 x") == "FIN [NRIC]"
+    assert redact("card 4111 1111 1111 1111 expires") == "card [card number] expires"
+    assert redact("order 1234 5678 9012 3456") == "order 1234 5678 9012 3456"           # fails Luhn: kept
+    assert redact("account number is 123-456789-001 thanks") == "account number is [account number] thanks"
+    assert redact("meet at 3pm on 2026-10-09, call 9123 4567") == "meet at 3pm on 2026-10-09, call 9123 4567"
+
+
+def test_ask_meeting_search_email_docx(client):
+    j = upload(client, "dev1-ask", 20)
+
+    def ask(body):
+        r = client.post("/api/ask", json=body, headers=H)
+        assert r.status_code == 202, r.text
+        for _ in range(100):
+            a = client.get(f"/api/ask/{r.json()['id']}", headers=H).json()
+            if a["status"] != "pending":
+                return a
+            time.sleep(0.05)
+
+    a = ask({"recording": "dev1-ask", "messages": [{"role": "user", "content": "who owns rollback?"}]})
+    assert a["status"] == "done" and "Meeting minutes and transcript" in SYSTEMS[-1]
+    a = ask({"scope": "meetings", "messages": [{"role": "user", "content": "what was test sentence number 2?"}]})
+    assert a["status"] == "done" and "test sentence number 2" in SYSTEMS[-1]
+    ask({"recording": j["id"], "task": "email"})
+    assert CALLS[-1].startswith("Draft a short follow-up email")
+    hits = client.get("/api/search?q=sentence number", headers=H).json()["hits"]
+    assert hits and hits[0]["title"]
+    d = client.get(f"/api/jobs/{j['id']}/result.docx", headers=H)
+    assert d.status_code == 200 and d.content[:2] == b"PK"
+
+
+def test_live_upload_transcribes_while_recording(client, monkeypatch):
+    from app import worker
+    monkeypatch.setattr(settings, "live_min_new_s", 5)
+    rid = "dev1-live"
+    data = bytearray(wav_bytes(60))
+    data[4:8] = b"\0\0\0\0"; data[40:44] = b"\0\0\0\0"             # header of a WAV still being recorded
+    first = 44 + 40 * 16000 * 2
+    r = client.put(f"/api/uploads/{rid}", content=bytes(data[:first]), headers={**H, "X-Offset": "0", "X-Live": "1"})
+    assert r.status_code == 200
+    st = worker.live_state_path(rid)
+    for _ in range(100):
+        if st.exists() and '"until": 0,' not in st.read_text() and '"until": 0}' not in st.read_text():
+            break
+        time.sleep(0.05)
+    import json as _j
+    assert _j.loads(st.read_text())["until"] == 15
+    client.put(f"/api/uploads/{rid}", content=bytes(data[first:]), headers={**H, "X-Offset": str(first), "X-Live": "1"})
+    r = client.post(f"/api/uploads/{rid}/complete?filename=2026-10-09_1100.wav", headers={**H, "X-Total-Size": str(len(data))})
+    j = wait(client, r.json()["id"])
+    assert j["status"] == "done" and abs(j["duration"] - 60) < 0.1
+    segs = client.get(f"/api/jobs/{j['id']}/transcript.json", headers=H).json()["segments"]
+    nums = [int(s["text"].split()[-1].rstrip(".")) for s in segs]
+    assert nums == list(range(1, 13))                                  # no gaps, no doubles
+    assert not st.exists() and (worker.result_dir(j["id"]) / "live.json").exists()

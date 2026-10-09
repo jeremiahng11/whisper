@@ -46,6 +46,15 @@ tr.job:hover td{background:var(--chip)}
 #fedit{width:100%;min-height:360px;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:10px;font:13px/1.5 ui-monospace,Menlo,monospace}
 #fview h1,#fview h2,#fview h3{margin:14px 0 6px}#fview ul{padding-left:20px;margin:4px 0}
 @media (max-width:640px){.files{grid-template-columns:1fr}.flist{border-right:0;max-height:200px}}
+.spk{display:grid;grid-template-columns:110px 170px 1fr;gap:8px;align-items:center;margin:4px 0}
+.spk .mute{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.badge{font-size:11px;padding:0 6px;border-radius:8px;background:var(--accent);color:var(--accent-ink);margin-left:4px}
+.answer{white-space:pre-wrap;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;margin-top:8px;font-size:14px}
+input[type=number]{width:64px;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px;font:inherit}
+textarea.gl{width:100%;min-height:120px;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px;font:13px/1.5 ui-monospace,Menlo,monospace}
+.sub2{font-size:13px;font-weight:600;margin:14px 0 6px}
+@media (max-width:640px){.spk{grid-template-columns:1fr 1fr}.spk .mute{grid-column:1/-1}}
+@media print{body{background:#fff;color:#000}main>*:not(#viewCard){display:none}#viewCard .row,#viewCard .noprint{display:none}#viewCard{border:0}}
 .hidden{display:none}
 @media (max-width:640px){.hide-sm{display:none}}
 </style>
@@ -76,7 +85,19 @@ tr.job:hover td{background:var(--chip)}
       <label class="mute" id="diarLabel"><input type="checkbox" id="diar" checked> Speaker labels</label>
       <input id="title" type="text" placeholder="Title (optional)">
     </div>
+    <div class="row" style="margin-top:8px">
+      <label class="mute">Meeting type <select id="tpl"></select></label>
+      <label class="mute">People <input type="number" id="ppl" min="1" max="20" placeholder="auto"></label>
+      <input id="att" type="text" placeholder="Names of attendees (optional, comma separated)" style="flex:1;min-width:220px">
+      <label class="mute" id="bestLabel"><input type="checkbox" id="best"> Best quality (slower)</label>
+    </div>
     <div id="up" class="hidden"><div class="mute" id="upText"></div><div class="bar"><i id="upBar"></i></div></div>
+  </div>
+
+  <div class="card">
+    <strong>Ask your meetings</strong>
+    <div class="row" style="margin-top:8px"><input id="qAll" type="text" placeholder="e.g. What did we decide about the rollback plan?" style="flex:1;min-width:240px"><button id="askAll">Ask</button><button class="ghost" id="findAll">Search</button></div>
+    <div id="ansAll"></div>
   </div>
 
   <div class="card">
@@ -88,9 +109,28 @@ tr.job:hover td{background:var(--chip)}
   <div class="card hidden" id="viewCard">
     <div class="row" style="justify-content:space-between">
       <div class="row" id="dl"></div>
-      <div class="row"><button class="ghost" id="resum">Redo summary</button><button class="danger" id="del">Delete</button></div>
+      <div class="row"><select id="reTpl" title="Meeting type for the new minutes"></select><label class="mute" id="reBestLabel"><input type="checkbox" id="reBest"> Best</label><button class="ghost" id="resum">Redo minutes</button><button class="danger" id="del">Delete</button></div>
+    </div>
+    <div id="spkBox" class="hidden noprint">
+      <div class="sub2">Who's speaking? <span class="mute" style="font-weight:400">Type names - voices are remembered, so next time they're named automatically.</span></div>
+      <div id="spkList"></div>
+      <div class="row" style="margin-top:6px"><button id="spkSave">Save names</button><label class="mute"><input type="checkbox" id="spkRemember" checked> Remember voices</label><span class="mute" id="spkMsg"></span></div>
+    </div>
+    <div id="askBox" class="hidden noprint">
+      <div class="sub2">Ask about this meeting</div>
+      <div class="row"><input id="qOne" type="text" placeholder="e.g. What did San agree to do?" style="flex:1;min-width:220px"><button id="askOne">Ask</button><button class="ghost" id="email">Draft follow-up email</button></div>
+      <div id="ansOne"></div>
     </div>
     <div id="view"></div>
+  </div>
+
+  <div class="card">
+    <strong>Names &amp; terms</strong>
+    <p class="mute">One per line: people, companies, products and jargon. Used to spell them right in transcripts and minutes.</p>
+    <textarea class="gl" id="gloss" placeholder="Aleta Planet&#10;SkenPay&#10;San Tan&#10;Coolify"></textarea>
+    <div class="row" style="margin-top:6px"><button id="glossSave">Save</button><span class="mute" id="glossMsg"></span></div>
+    <div class="sub2">Known voices</div>
+    <div id="voices" class="mute">None yet - name the speakers of a recording to add them.</div>
   </div>
   <div class="card" id="notesCard">
     <div class="row" style="justify-content:space-between">
@@ -124,7 +164,7 @@ async function api(path, opt = {}) {
   if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.status);
   return r;
 }
-$("#saveKey").onclick = () => { KEY = $("#key").value.trim(); try { localStorage.setItem("whisperKey", KEY); } catch (e) {} load(); loadDevices(); };
+$("#saveKey").onclick = () => { KEY = $("#key").value.trim(); try { localStorage.setItem("whisperKey", KEY); } catch (e) {} load(); loadDevices(); loadGlossary(); loadVoices(); };
 
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const dur = s => !s ? "" : s >= 3600 ? `${Math.floor(s / 3600)}h ${Math.round(s % 3600 / 60)}m` : s >= 60 ? `${Math.round(s / 60)} min` : `${Math.round(s)} s`;
@@ -193,10 +233,16 @@ async function show(id) {
   } else {
     const text = await (await api(j.results.markdown)).text();
     $("#view").innerHTML = md(text);
-    $("#dl").innerHTML = [["markdown", "Minutes .md"], ["text", "Transcript .txt"], ["srt", "Subtitles .srt"]]
-      .map(([k, label]) => `<button class="ghost" data-u="${j.results[k]}">${label}</button>`).join("");
-    document.querySelectorAll("#dl button").forEach(b => b.onclick = () => download(b.dataset.u));
+    $("#dl").innerHTML = [["docx", "Word"], ["markdown", "Minutes .md"], ["text", "Transcript .txt"], ["srt", "Subtitles .srt"]]
+      .map(([k, label]) => `<button class="ghost" data-u="${j.results[k]}">${label}</button>`).join("") +
+      '<button class="ghost" id="pdf">Print / PDF</button>';
+    document.querySelectorAll("#dl button[data-u]").forEach(b => b.onclick = () => download(b.dataset.u));
+    $("#pdf").onclick = () => window.print();
+    $("#reTpl").value = j.template || "general"; $("#reBest").checked = !!j.best;
+    $("#askBox").classList.remove("hidden"); $("#ansOne").innerHTML = "";
+    loadSpeakers(id);
   }
+  if (j.status !== "done") { $("#askBox").classList.add("hidden"); $("#spkBox").classList.add("hidden"); }
   $("#viewCard").scrollIntoView({ behavior: "smooth" });
 }
 
@@ -212,7 +258,87 @@ $("#del").onclick = async () => {
   try { await api(`/api/jobs/${current}`, { method: "DELETE" }); } catch (e) { $("#view").innerHTML = `<p>${esc(e.message)}</p>`; return; }
   $("#viewCard").classList.add("hidden"); current = null; load();
 };
-$("#resum").onclick = async () => { if (current) { await api(`/api/jobs/${current}/summarize`, { method: "POST" }); load(); show(current); } };
+$("#resum").onclick = async () => {
+  if (!current) return;
+  await api(`/api/jobs/${current}/summarize`, { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ template: $("#reTpl").value, best: $("#reBest").checked }) });
+  load(); show(current);
+};
+
+// ---------------------------------------------------------------- speakers
+async function loadSpeakers(id) {
+  const sp = (await (await api(`/api/jobs/${id}/speakers`)).json()).speakers;
+  $("#spkBox").classList.toggle("hidden", !sp.length);
+  $("#spkList").innerHTML = sp.map(s => `<div class="spk"><span>${esc(s.label)}${s.auto ? '<span class="badge" title="recognised by voice">recognised</span>' : ""}</span>
+    <input type="text" data-l="${esc(s.label)}" value="${esc(s.name)}" placeholder="Name">
+    <span class="mute" title="${esc(s.sample)}">${Math.round(s.seconds / 60) || "<1"} min · "${esc(s.sample)}"</span></div>`).join("");
+}
+$("#spkSave").onclick = async () => {
+  const names = {}; document.querySelectorAll("#spkList input").forEach(i => names[i.dataset.l] = i.value.trim());
+  await api(`/api/jobs/${current}/speakers`, { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ names, remember: $("#spkRemember").checked }) });
+  await show(current); $("#spkMsg").textContent = "Saved - minutes updated."; loadVoices();
+  setTimeout(() => $("#spkMsg").textContent = "", 4000);
+};
+
+// ---------------------------------------------------------------- ask
+async function askAI(body, out) {
+  out.innerHTML = '<div class="answer mute">Thinking…</div>';
+  try {
+    const t = await (await api("/api/ask", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })).json();
+    for (let i = 0; i < 600; i++) {
+      await new Promise(r => setTimeout(r, 1500));
+      const a = await (await api(`/api/ask/${t.id}`)).json();
+      if (a.status === "done") { out.innerHTML = `<div class="answer">${esc(a.answer)}</div>`; return a.answer; }
+      if (a.status === "error") { out.innerHTML = `<div class="answer">Failed: ${esc(a.error)}</div>`; return; }
+    }
+  } catch (e) { out.innerHTML = `<div class="answer">Failed: ${esc(e.message)}</div>`; }
+}
+const q1 = () => [{ role: "user", content: $("#qOne").value.trim() }];
+$("#askOne").onclick = () => $("#qOne").value.trim() && askAI({ recording: current, messages: q1() }, $("#ansOne"));
+$("#qOne").onkeydown = e => { if (e.key === "Enter") $("#askOne").click(); };
+$("#email").onclick = async () => {
+  const txt = await askAI({ recording: current, task: "email" }, $("#ansOne"));
+  if (!txt) return;
+  const m = txt.match(/^\s*Subject:\s*(.+)$/im), subj = m ? m[1].trim() : "Follow-up";
+  const body = m ? txt.replace(m[0], "").trim() : txt;
+  $("#ansOne").insertAdjacentHTML("beforeend", `<div class="row" style="margin-top:6px"><button class="ghost" id="copyMail">Copy</button>
+    <a class="mute" href="mailto:?subject=${encodeURIComponent(subj)}&body=${encodeURIComponent(body)}">Open in mail app</a></div>`);
+  $("#copyMail").onclick = () => navigator.clipboard.writeText(txt);
+};
+$("#askAll").onclick = () => $("#qAll").value.trim() && askAI({ scope: "meetings", messages: [{ role: "user", content: $("#qAll").value.trim() }] }, $("#ansAll"));
+$("#qAll").onkeydown = e => { if (e.key === "Enter") $("#askAll").click(); };
+$("#findAll").onclick = async () => {
+  const q = $("#qAll").value.trim(); if (q.length < 2) return;
+  const hits = (await (await api(`/api/search?q=${encodeURIComponent(q)}`)).json()).hits;
+  $("#ansAll").innerHTML = hits.length ? hits.map(h => `<div class="answer job" style="cursor:pointer" data-id="${h.job_id}"><strong>${esc(h.title)}</strong> <span class="mute">${esc(h.date)} ${h.start >= 0 ? "· " + new Date(h.start * 1000).toISOString().substr(h.start >= 3600 ? 11 : 14, h.start >= 3600 ? 8 : 5) : "· minutes"}</span><br>${esc(h.speaker ? h.speaker + ": " : "")}${esc(h.text.replace(/^#+\s*/gm, "").replace(/- \[[ x]\] /g, "• ").replace(/\*\*/g, "").split("\n").filter(Boolean).slice(h.start < 0 ? 1 : 0).join(" · ").slice(0, 300))}</div>`).join("")
+    : '<div class="answer mute">Nothing found.</div>';
+  document.querySelectorAll("#ansAll [data-id]").forEach(el => el.onclick = () => show(el.dataset.id));
+};
+
+// ---------------------------------------------------------------- glossary + voices + templates
+async function loadGlossary() {
+  try { $("#gloss").value = (await (await api("/api/glossary")).json()).text.trim(); } catch (e) {}
+}
+$("#glossSave").onclick = async () => {
+  const t = (await (await api("/api/glossary", { method: "PUT", body: $("#gloss").value })).json()).terms;
+  $("#glossMsg").textContent = `Saved ${t.length} names and terms.`;
+};
+async function loadVoices() {
+  try {
+    const v = (await (await api("/api/voices")).json()).voices;
+    $("#voices").innerHTML = v.length ? v.map(x => `<span class="chip" style="margin:2px">${esc(x.name)} <a href="#" data-n="${esc(x.name)}" title="Forget this voice" style="color:var(--warn);text-decoration:none">×</a></span>`).join("")
+      : "None yet - name the speakers of a recording to add them.";
+    document.querySelectorAll("#voices a").forEach(a => a.onclick = async e => { e.preventDefault(); if (confirm("Forget " + a.dataset.n + "'s voice?")) { await api(`/api/voices/${encodeURIComponent(a.dataset.n)}`, { method: "DELETE" }); loadVoices(); } });
+  } catch (e) {}
+}
+async function loadTemplates() {
+  const t = await (await fetch("/api/templates")).json();
+  const opts = t.templates.map(x => `<option value="${x.id}">${esc(x.label)}</option>`).join("");
+  $("#tpl").innerHTML = opts; $("#reTpl").innerHTML = opts;
+  if (!t.best_available) for (const id of ["#best", "#reBest"]) { $(id).disabled = true; $(id).parentElement.title = "Set OLLAMA_MODEL_BEST on the server to enable"; }
+}
+loadTemplates(); loadGlossary(); loadVoices();
 $("#refresh").onclick = load;
 
 function upload(file) {
@@ -220,6 +346,10 @@ function upload(file) {
   const q = new URLSearchParams({ summarize: $("#sum").checked, diarize: $("#diar").checked });
   if ($("#lang").value) q.set("language", $("#lang").value);
   if ($("#title").value.trim()) q.set("title", $("#title").value.trim());
+  if ($("#tpl").value && $("#tpl").value !== "general") q.set("template", $("#tpl").value);
+  if (+$("#ppl").value) q.set("speakers", +$("#ppl").value);
+  if ($("#att").value.trim()) q.set("attendees", $("#att").value.trim());
+  if ($("#best").checked) q.set("best", "true");
   const x = new XMLHttpRequest();
   x.open("POST", "/api/jobs?" + q);
   x.setRequestHeader("Authorization", "Bearer " + KEY);

@@ -13,12 +13,12 @@ from typing import Optional
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
 
-from . import agenda, chat, db, summarize, transcribe, worker
+from . import agenda, chat, db, redact, render, search, summarize, transcribe, voices, worker
 from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -82,21 +82,54 @@ def job_out(j: dict) -> dict:
         "duration": j["duration"],
         "created_at": j["created_at"],
         "finished_at": j["finished_at"],
+        "template": (j.get("options") or {}).get("template", "general"),
+        "best": bool((j.get("options") or {}).get("best")),
+        "speakers": (j.get("options") or {}).get("speakers"),
+        "speaker_names": (j.get("options") or {}).get("speaker_names") or {},
+        "speaker_auto": (j.get("options") or {}).get("speaker_auto") or [],
         "results": {
             "markdown": f"{base}/result.md",
             "text": f"{base}/transcript.txt",
             "srt": f"{base}/transcript.srt",
             "json": f"{base}/transcript.json",
+            "actions": f"{base}/actions.json",
+            "docx": f"{base}/result.docx",
         } if done else None,
     }
 
 
-def options(language: Optional[str], summarize_: bool, diarize: Optional[bool], title: Optional[str]) -> dict:
-    o = {"summarize": summarize_, "diarize": settings.diarize if diarize is None else diarize}
+def options(language: Optional[str], summarize_: bool, diarize: Optional[bool], title: Optional[str],
+            template: Optional[str] = None, speakers: Optional[int] = None, best: Optional[bool] = None,
+            redact_: Optional[bool] = None, attendees: Optional[str] = None) -> dict:
+    o = {"summarize": summarize_, "diarize": settings.diarize if diarize is None else diarize,
+         "redact": settings.redact if redact_ is None else redact_}
     if language and language.lower() != "auto":
         o["language"] = language.lower()
     if title:
         o["title"] = title[:200]
+    if template:
+        if template not in summarize.TEMPLATES:
+            raise HTTPException(400, f"template must be one of {', '.join(summarize.TEMPLATES)}")
+        o["template"] = template
+    if speakers:
+        if not 1 <= speakers <= 20:
+            raise HTTPException(400, "speakers must be 1-20")
+        o["speakers"] = speakers
+    if best:
+        o["best"] = True
+    if attendees:
+        o["attendees"] = [a.strip()[:60] for a in attendees.split(",") if a.strip()][:30]
+    return o
+
+
+def apply_extra(o: dict, extra: dict) -> dict:
+    """Merge the JSON body the device sends on complete: notes, attendees."""
+    notes = extra.get("notes") if isinstance(extra.get("notes"), str) else ""
+    if notes.strip():
+        o["notes"] = redact.redact(notes[:20000]) if o.get("redact") else notes[:20000]
+    att = extra.get("attendees")
+    if isinstance(att, list) and att:
+        o["attendees"] = [str(a).strip()[:60] for a in att if str(a).strip()][:30]
     return o
 
 
@@ -119,7 +152,13 @@ def new_job(src: Path, filename: str, opts: dict, rid: Optional[str], priority: 
     ext = Path(filename).suffix.lower() or ".wav"
     dest = settings.audio_dir / f"{int(time.time())}_{secrets.token_hex(4)}{ext}"
     shutil.move(str(src), dest)
+    if ext == ".wav":
+        transcribe.fix_wav_header(str(dest))          # a live upload's header still says "0 bytes"
     j = db.create(filename, str(dest), opts, rid, 1 if priority == "high" else 0)
+    if rid and (live := worker.live_state_path(rid)).exists():
+        d = worker.result_dir(j["id"])
+        d.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(live), d / "live.json")      # parts already transcribed while it was recording
     worker.wake()
     return j
 
@@ -144,6 +183,11 @@ async def create_job(
     diarize: Optional[bool] = Query(None, description="speaker labels (needs DIARIZE build)"),
     title: Optional[str] = Query(None),
     priority: str = Query("", description="'high' = jump the queue (short dictation clips)"),
+    template: Optional[str] = Query(None, description="general, standup, client, one_on_one, interview, board, memo"),
+    speakers: Optional[int] = Query(None, description="how many people talk (helps speaker labels)"),
+    best: Optional[bool] = Query(None, description="best-quality minutes (bigger model, slower)"),
+    redact_: Optional[bool] = Query(None, alias="redact"),
+    attendees: Optional[str] = Query(None, description="comma separated names"),
     x_recording_id: Optional[str] = Header(None, description="your own id; re-uploads return the same job"),
     x_filename: Optional[str] = Header(None),
 ):
@@ -166,7 +210,8 @@ async def create_job(
                 raise HTTPException(413, f"upload bigger than MAX_UPLOAD_MB={settings.max_upload_mb}")
         else:
             await save_body(request, tmp)
-        return job_out(new_job(tmp, filename, options(language, summarize_, diarize, title), rid, priority))
+        opts = options(language, summarize_, diarize, title, template, speakers, best, redact_, attendees)
+        return job_out(new_job(tmp, filename, opts, rid, priority))
     finally:
         tmp.unlink(missing_ok=True)
 
@@ -187,7 +232,8 @@ def upload_status(rid: str):
 
 
 @app.put("/api/uploads/{rid}", dependencies=[Depends(auth)])
-async def upload_chunk(rid: str, request: Request, x_offset: int = Header(0)):
+async def upload_chunk(rid: str, request: Request, x_offset: int = Header(0), x_live: Optional[str] = Header(None),
+                       language: Optional[str] = Query(None)):
     """Append the request body at byte X-Offset. Wrong offset -> 409 with the size the server has."""
     check_id(rid)
     if (j := existing_for(rid)):
@@ -196,25 +242,34 @@ async def upload_chunk(rid: str, request: Request, x_offset: int = Header(0)):
     have = p.stat().st_size if p.exists() else 0
     if x_offset == 0 and have:                      # client restarts from scratch
         p.unlink()
+        worker.live_state_path(rid).unlink(missing_ok=True)
         have = 0
     if x_offset != have:
         return JSONResponse({"recording_id": rid, "received": have, "error": "offset mismatch"}, status_code=409)
     n = await save_body(request, p, "ab", have)
+    if x_live == "1" and not worker.live_state_path(rid).exists():   # still recording: transcribe as it arrives
+        import json as _json
+        st = {"until": 0, "segments": []}
+        if language and language.lower() != "auto":
+            st["language"] = language.lower()
+        worker.live_state_path(rid).write_text(_json.dumps(st))
+    if worker.live_state_path(rid).exists():
+        worker.wake()
     return {"recording_id": rid, "received": n, "job": None}
 
 
-async def body_notes(request: Request) -> str:
-    """Optional JSON body {"notes": "..."}: notes typed on the device during a meeting."""
+async def body_extra(request: Request) -> dict:
+    """Optional JSON body {"notes": "...", "attendees": [...]}: what the device knows about the meeting."""
     try:
         raw = await request.body()
         if raw.strip():
             import json as _json
             v = _json.loads(raw)
-            if isinstance(v, dict) and isinstance(v.get("notes"), str):
-                return v["notes"][:20000]
+            if isinstance(v, dict):
+                return v
     except Exception:
         pass
-    return ""
+    return {}
 
 
 @app.post("/api/uploads/{rid}/complete", dependencies=[Depends(auth)], status_code=201)
@@ -227,10 +282,15 @@ async def upload_complete(
     title: Optional[str] = Query(None),
     filename: Optional[str] = Query(None),
     priority: str = Query(""),
+    template: Optional[str] = Query(None),
+    speakers: Optional[int] = Query(None),
+    best: Optional[bool] = Query(None),
+    redact_: Optional[bool] = Query(None, alias="redact"),
+    attendees: Optional[str] = Query(None),
     x_total_size: Optional[int] = Header(None, description="optional: full file size, checked before queueing"),
 ):
     check_id(rid)
-    notes = await body_notes(request)
+    extra = await body_extra(request)
     if (j := existing_for(rid)):
         return JSONResponse(job_out(j), status_code=200)
     p = part_path(rid)
@@ -238,9 +298,7 @@ async def upload_complete(
         raise HTTPException(404, "nothing uploaded for this recording id")
     if x_total_size is not None and p.stat().st_size != x_total_size:
         return JSONResponse({"recording_id": rid, "received": p.stat().st_size, "error": "size mismatch"}, status_code=409)
-    opts = options(language, summarize_, diarize, title)
-    if notes.strip():
-        opts["notes"] = notes
+    opts = apply_extra(options(language, summarize_, diarize, title, template, speakers, best, redact_, attendees), extra)
     return job_out(new_job(p, safe_name(filename or rid), opts, rid, priority))
 
 
@@ -277,10 +335,22 @@ RESULT_FILES = {
     "transcript.srt": ("transcript.srt", "application/x-subrip; charset=utf-8"),
     "transcript.json": ("transcript.json", "application/json"),
     "summary.md": ("summary.md", "text/markdown; charset=utf-8"),
+    "actions.json": ("actions.json", "application/json"),
 }
 
 
 def _result(j: dict, name: str):
+    if name == "result.docx":
+        if j["status"] != "done":
+            raise HTTPException(409, f"job is {j['status']}")
+        p = worker.result_dir(j["id"]) / "result.md"
+        if not p.exists():
+            raise HTTPException(404, "result not available")
+        data = render.docx(p.read_text(encoding="utf-8"))
+        stem = Path(j.get("title") or Path(j["filename"]).stem).name
+        stem = re.sub(r"[^A-Za-z0-9 ._-]", "", stem)[:80] or "minutes"
+        return Response(data, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        headers={"Content-Disposition": f'attachment; filename="{stem}.docx"'})
     if name not in RESULT_FILES:
         raise HTTPException(404, "unknown result file")
     if j["status"] != "done":
@@ -296,6 +366,8 @@ def _result(j: dict, name: str):
 
 @app.get("/api/jobs/{jid}/{name}", dependencies=[Depends(auth)])
 def job_result(jid: str, name: str):
+    if name == "speakers":
+        return get_speakers(jid)
     return _result(_job(jid), name)
 
 
@@ -308,14 +380,21 @@ def recording_result(rid: str, name: str):
 
 
 @app.post("/api/jobs/{jid}/summarize", dependencies=[Depends(auth)])
-def resummarize(jid: str):
-    """Write the summary again (e.g. after changing the LLM). Runs in the background."""
+async def resummarize(jid: str, request: Request):
+    """Write the minutes again, optionally with {"template": "...", "best": true}. Runs in the background."""
     j = _job(jid)
+    extra = await body_extra(request)
     if j["status"] not in ("done",):
         raise HTTPException(409, f"job is {j['status']}")
     if not summarize.enabled():
         raise HTTPException(400, "SUMMARY_BACKEND is none")
     opts = dict(j["options"], summarize=True, resummarize=True)
+    if extra.get("template"):
+        if extra["template"] not in summarize.TEMPLATES:
+            raise HTTPException(400, "unknown template")
+        opts["template"] = extra["template"]
+    if "best" in extra:
+        opts["best"] = bool(extra["best"])
     db.update(jid, status="queued", stage="summary queued", progress=0, options=opts)
     worker.wake()
     return job_out(db.get(jid))
@@ -344,24 +423,77 @@ def delete_job(jid: str):
 
 
 # ---------------------------------------------------------------- chat (Ask AI on the device)
+MEETING_SYSTEM = ("You answer questions about the user's recorded meetings, using only the material below. "
+                  "Be brief (a few sentences or a short list). Mention the time [mm:ss] and, when there are several "
+                  "meetings, the meeting title and date for each fact. If the answer isn't in the material, say so. "
+                  "Plain text only.")
+EMAIL_TASK = ("Draft a short follow-up email to the people in this meeting: a subject line first (\"Subject: ...\"), "
+              "then a thank-you line, a 2-3 sentence recap, the decisions, and the action items with owners and due "
+              "dates. Professional and friendly. Plain text, no Markdown.")
+
+
+def _job_for(ref: str) -> dict:
+    j = db.get(ref) or db.get_by_recording(ref)
+    if not j:
+        raise HTTPException(404, "unknown recording")
+    if j["status"] != "done":
+        raise HTTPException(409, f"recording is {j['status']}")
+    return j
+
+
+def meeting_context(j: dict, limit: int = 0) -> str:
+    limit = limit or max(8000, settings.ollama_num_ctx * 3 - 6000)
+    p = worker.result_dir(j["id"]) / "result.md"
+    md = p.read_text(encoding="utf-8") if p.exists() else ""
+    if len(md) > limit:
+        head, _, tr = md.partition("## Transcript")
+        md = head + "## Transcript (shortened)\n" + tr[: max(2000, limit - len(head))]
+    return "Meeting minutes and transcript:\n\"\"\"\n" + md + "\n\"\"\""
+
+
+def search_context(q: str) -> str:
+    hits = search.search(q, 14)
+    if not hits:
+        return "No meeting matched the question's words."
+    lines = []
+    for h in hits:
+        where = "minutes" if h["start"] < 0 else render.ts(h["start"])
+        who = f"{h['speaker']}: " if h["speaker"] else ""
+        lines.append(f"[{h['title']} - {h['date']} - {where}] {who}{h['text'][:1500]}")
+    return "Excerpts from the user's meetings (best matches first):\n\"\"\"\n" + "\n\n".join(lines) + "\n\"\"\""
+
+
 @app.post("/api/ask", dependencies=[Depends(auth)], status_code=202)
 async def ask(request: Request):
-    """{"messages": [{"role": "user"|"assistant", "content": "..."}]} -> {"id", "status": "pending"}.
-    The answer can take a while on a CPU, so poll GET /api/ask/{id}."""
+    """{"messages": [...]} -> {"id", "status": "pending"}; poll GET /api/ask/{id}.
+    Optional: "recording": <recording or job id> (ask about one meeting), "scope": "meetings" (search all
+    meetings), "task": "email" (draft a follow-up email for "recording"), "best": true."""
     try:
         data = await request.json()
     except Exception:
         raise HTTPException(400, "body must be JSON")
-    msgs = data.get("messages") if isinstance(data, dict) else None
-    if not msgs and isinstance(data, dict) and data.get("prompt"):
+    if not isinstance(data, dict):
+        raise HTTPException(400, "body must be a JSON object")
+    msgs = data.get("messages")
+    if not msgs and data.get("prompt"):
         msgs = [{"role": "user", "content": str(data["prompt"])}]
+    if data.get("task") == "email":
+        if not data.get("recording"):
+            raise HTTPException(400, "task=email needs 'recording'")
+        msgs = [{"role": "user", "content": EMAIL_TASK}]
     if not msgs or not isinstance(msgs, list):
         raise HTTPException(400, "send {'messages': [...]} or {'prompt': '...'}")
     clean = [{"role": m.get("role") if m.get("role") in ("user", "assistant") else "user", "content": str(m.get("content", ""))[:8000]}
              for m in msgs[-20:] if isinstance(m, dict)]
     if not summarize.enabled():
         raise HTTPException(400, "SUMMARY_BACKEND is none - no LLM configured")
-    return chat.start(clean)
+    context, system = "", ""
+    if data.get("recording"):
+        context, system = meeting_context(_job_for(str(data["recording"]))), MEETING_SYSTEM
+    elif data.get("scope") == "meetings":
+        q = " ".join(m["content"] for m in clean if m["role"] == "user")[-1000:]
+        context, system = search_context(q), MEETING_SYSTEM
+    return chat.start(clean, context, bool(data.get("best")), system)
 
 
 @app.get("/api/ask/{aid}", dependencies=[Depends(auth)])
@@ -370,6 +502,98 @@ def ask_result(aid: str):
     if not r:
         raise HTTPException(404, "unknown or expired")
     return r
+
+# ---------------------------------------------------------------- speakers, voices, glossary, search, templates
+@app.post("/api/jobs/{jid}/speakers", dependencies=[Depends(auth)])
+async def name_speakers(jid: str, request: Request):
+    """{"names": {"Speaker 1": "San", "Speaker 2": ""}, "remember": true} - "" goes back to the label.
+    remember = keep their voices so later recordings are named automatically."""
+    j = _job(jid)
+    data = await body_extra(request)
+    names = data.get("names")
+    if not isinstance(names, dict):
+        raise HTTPException(400, "send {'names': {'Speaker 1': 'Name'}}")
+    opts = dict(j["options"])
+    cur = dict(opts.get("speaker_names") or {})
+    auto = set(opts.get("speaker_auto") or [])
+    spk = worker.load_json(jid, "speakers.json", {}) or {}
+    for label, name in names.items():
+        label, name = str(label)[:40], re.sub(r"\s+", " ", str(name or "")).strip()[:60]
+        if not re.match(r"^Speaker \d+$", label):
+            raise HTTPException(400, f"unknown speaker label {label!r}")
+        if name:
+            cur[label] = name
+            if data.get("remember", True) and (spk.get(label) or {}).get("embedding"):
+                voices.remember(name, spk[label]["embedding"])
+        else:
+            cur.pop(label, None)
+        auto.discard(label)
+    opts["speaker_names"], opts["speaker_auto"] = cur, sorted(auto)
+    db.update(jid, options=opts)
+    if j["status"] == "done":
+        worker.build_outputs(jid)
+    return job_out(db.get(jid))
+
+
+@app.get("/api/jobs/{jid}/speakers", dependencies=[Depends(auth)])
+def get_speakers(jid: str):
+    j = _job(jid)
+    spk = worker.load_json(jid, "speakers.json", {}) or {}
+    names = (j.get("options") or {}).get("speaker_names") or {}
+    auto = set((j.get("options") or {}).get("speaker_auto") or [])
+    tr = worker.load_transcript(jid) or {}
+    sample = {}
+    for s in tr.get("segments", []):               # a line each person said, to help tell them apart
+        if s.get("speaker") and len(s["text"]) > len(sample.get(s["speaker"], "")) and len(s["text"]) < 200:
+            sample[s["speaker"]] = s["text"]
+    labels = sorted(set(spk) | {s.get("speaker") for s in tr.get("segments", []) if s.get("speaker")},
+                    key=lambda x: int(x.split()[-1]) if x.split()[-1].isdigit() else 99)
+    return {"speakers": [{"label": lab, "name": names.get(lab, ""), "auto": lab in auto,
+                          "seconds": (spk.get(lab) or {}).get("seconds", 0), "has_voice": bool((spk.get(lab) or {}).get("embedding")),
+                          "sample": sample.get(lab, "")} for lab in labels]}
+
+
+@app.get("/api/voices", dependencies=[Depends(auth)])
+def get_voices():
+    return {"voices": voices.list_voices(), "threshold": settings.voice_match}
+
+
+@app.delete("/api/voices/{name}", dependencies=[Depends(auth)])
+def delete_voice(name: str):
+    if not voices.forget(name):
+        raise HTTPException(404, "unknown voice")
+    return {"deleted": name}
+
+
+@app.get("/api/glossary", dependencies=[Depends(auth)])
+def get_glossary():
+    p = settings.glossary_path
+    return {"text": p.read_text(encoding="utf-8") if p.exists() else "", "terms": voices.glossary()}
+
+
+@app.put("/api/glossary", dependencies=[Depends(auth)])
+async def put_glossary(request: Request):
+    raw = (await request.body()).decode("utf-8", "replace")
+    try:
+        import json as _json
+        v = _json.loads(raw)
+        if isinstance(v, dict):
+            raw = str(v.get("text", ""))
+    except ValueError:
+        pass
+    return {"terms": voices.set_glossary(raw)}
+
+
+@app.get("/api/search", dependencies=[Depends(auth)])
+def search_meetings(q: str = Query(..., min_length=2), limit: int = Query(20, le=50)):
+    return {"hits": search.search(q, limit)}
+
+
+@app.get("/api/templates")
+def templates():
+    return {"templates": [{"id": k, "label": v[0]} for k, v in summarize.TEMPLATES.items()],
+            "best_available": bool(summarize.best_model())}
+
 
 # ---------------------------------------------------------------- calendar (device Agenda app)
 @app.get("/api/agenda", dependencies=[Depends(auth)])
@@ -476,6 +700,9 @@ def health():
         "diarize_installed": importlib.util.find_spec("pyannote") is not None,
         "hf_token_set": bool(settings.hf_token),
         "calendars": len(agenda.urls()),
+        "best_model": summarize.best_model(),
+        "redact": settings.redact,
+        "voices": len(voices.list_voices()),
         "jobs": db.counts(),
         "running": worker.current_job,
     }

@@ -54,6 +54,11 @@ an hour then takes about 1-2 min.
 | `KEEP_AUDIO_DAYS` | `30` | Delete audio after N days (results stay). 0 = keep |
 | `KEEP_JOBS_DAYS` | `0` | Delete whole jobs after N days. 0 = keep |
 | `MAX_UPLOAD_MB` | `2048` | Largest accepted file |
+| `OLLAMA_MODEL_BEST` | | Bigger model for "Best quality" minutes, e.g. `qwen2.5:14b-instruct` (pulled on first use, ~9 GB). Empty = option off |
+| `OPENAI_MODEL_BEST` | | Same, when `SUMMARY_BACKEND=openai` |
+| `REDACT` | `1` | Hide NRIC/FIN, card numbers (Luhn-checked), IBANs and bank account numbers in transcripts and notes |
+| `VOICE_MATCH` | `0.70` | How similar a voice must be to a known one to be named automatically (0-1) |
+| `LIVE_MIN_NEW_S` | `240` | Live uploads: transcribe a part once this many seconds of new audio arrived |
 | `CALENDAR_ICS_URLS` | | Private calendar links for the device's Agenda app, comma separated (see below) |
 | `CALENDAR_TZ` | `Asia/Singapore` | Time zone for all-day events |
 | `SYNC_MAX_KB` | `1024` | Largest text file accepted by notes sync |
@@ -120,6 +125,29 @@ Example `result.md`:
 `[00:00]` **Speaker 1:** Okay, let's start with...
 ```
 
+## Better minutes (1.2)
+
+- **Speaker names + voice memory.** Open a recording on the web page, type the names under *Who's speaking?* and save.
+  The minutes and action items are rewritten with the names, and each voice is remembered: later recordings name
+  those people automatically (badge "recognised"). `POST /api/jobs/{id}/speakers {"names": {"Speaker 1": "San"}}`,
+  `GET /api/voices`, `DELETE /api/voices/{name}`. Needs speaker labels installed (`INSTALL_DIARIZE=1`).
+- **Number of people.** `?speakers=3` on upload (web: *People*) - fixes one person being split in two.
+- **Names & terms.** One per line on the web page (`GET/PUT /api/glossary`). Fed to Whisper (spelling) and to the LLM.
+  Attendees from the device's Agenda (or `?attendees=San,Komei`) are added for that meeting.
+- **Meeting types.** `?template=` `general`, `standup`, `client`, `one_on_one`, `interview`, `board` (formal minutes with
+  RESOLVED THAT...), `memo`. Redo with another type: `POST /api/jobs/{id}/summarize {"template": "board", "best": true}`.
+- **Best quality.** `?best=true` uses `OLLAMA_MODEL_BEST`.
+- **Flagged moments.** Notes lines like `[12:03] !! budget` (the device's mark key) make the minutes cover what was
+  said there, and appear under *Flagged moments*.
+- **Action items as data.** `GET /api/jobs/{id}/actions.json` -> `[{"task","owner","due":"YYYY-MM-DD"}]` (relative dates
+  resolved). The device adds them to Tasks and sets reminders for yours.
+- **Ask.** `POST /api/ask` with `"recording": "<id>"` (one meeting), `"scope": "meetings"` (searches all of them), or
+  `"recording": "<id>", "task": "email"` (follow-up email draft). `GET /api/search?q=` = full-text search.
+- **Export.** `GET /api/jobs/{id}/result.docx` (Word); *Print / PDF* on the web page.
+- **Redaction** of NRIC/card/account numbers (on by default).
+- **Live upload.** The device uploads while it records (`PUT` with `X-Live: 1`); the server transcribes the parts as they
+  arrive, so after you stop only the last minutes are left - minutes come much sooner.
+
 ## Calendar (Agenda app on the Idea Saver)
 
 Add your calendars' **private ICS links** to `CALENDAR_ICS_URLS` and redeploy:
@@ -128,7 +156,7 @@ Add your calendars' **private ICS links** to `CALENDAR_ICS_URLS` and redeploy:
 - **Outlook / Microsoft 365:** outlook.office.com → Settings → Calendar → *Shared calendars* → **Publish a calendar** → pick "Can view all details" → copy the **ICS** link.
 - **iCloud:** Calendar app → share the calendar → *Public Calendar* → copy the link (`webcal://` is fine).
 
-`GET /api/agenda?days=7` returns `{"events":[{"title","start","end","all_day","location"}]}` (epoch seconds),
+`GET /api/agenda?days=7` returns `{"events":[{"title","start","end","all_day","location","attendees"}]}` (epoch seconds),
 recurring meetings expanded, cancelled ones dropped, duplicates across calendars merged. Links are fetched at most every 5 min.
 
 ## Meeting notes

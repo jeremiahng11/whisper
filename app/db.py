@@ -47,6 +47,10 @@ CREATE TABLE IF NOT EXISTS files (
   updated_by  TEXT DEFAULT '',
   PRIMARY KEY (device, path)
 );
+CREATE TABLE IF NOT EXISTS voices (
+  name TEXT PRIMARY KEY, embedding TEXT NOT NULL, samples INTEGER DEFAULT 1, updated_at REAL
+);
+CREATE VIRTUAL TABLE IF NOT EXISTS para_fts USING fts5(job_id UNINDEXED, start UNINDEXED, speaker UNINDEXED, text);
 CREATE TABLE IF NOT EXISTS file_history (
   device TEXT, path TEXT, rev INTEGER, content BLOB, updated_at REAL
 );

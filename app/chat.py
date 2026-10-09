@@ -16,10 +16,10 @@ _items: dict[str, dict] = {}
 _sem = threading.Semaphore(1)          # one answer at a time - the LLM runs on the same machine
 
 
-def _run(aid: str, messages: list[dict]) -> None:
+def _run(aid: str, messages: list[dict], system: str, best: bool) -> None:
     with _sem:
         try:
-            answer = summarize.chat([{"role": "system", "content": SYSTEM}] + messages)
+            answer = summarize.chat([{"role": "system", "content": system}] + messages, best)
             answer = re.sub(r"<think>.*?</think>", "", answer, flags=re.S)     # reasoning models
             res = {"id": aid, "status": "done", "answer": answer.strip()}
         except Exception as e:                       # noqa: BLE001 - report any LLM failure to the device
@@ -28,14 +28,15 @@ def _run(aid: str, messages: list[dict]) -> None:
         _items[aid].update(res, finished=time.time())
 
 
-def start(messages: list[dict]) -> dict:
+def start(messages: list[dict], context: str = "", best: bool = False, system: str = "") -> dict:
     aid = uuid.uuid4().hex[:12]
     now = time.time()
     with _lock:
         for k in [k for k, v in _items.items() if now - v["created"] > 3600]:
             del _items[k]
         _items[aid] = {"id": aid, "status": "pending", "created": now}
-    threading.Thread(target=_run, args=(aid, messages), daemon=True).start()
+    sysmsg = (system or SYSTEM) + (("\n\n" + context) if context else "")
+    threading.Thread(target=_run, args=(aid, messages, sysmsg, best), daemon=True).start()
     return {"id": aid, "status": "pending"}
 
 

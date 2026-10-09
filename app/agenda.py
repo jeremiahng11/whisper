@@ -60,6 +60,26 @@ def _epoch(v, tz) -> tuple[int, bool]:
     return 0, False
 
 
+def _people(ev) -> list[str]:
+    out = []
+    vals = ev.get("ATTENDEE", [])
+    if not isinstance(vals, list):
+        vals = [vals]
+    org = ev.get("ORGANIZER")
+    for v in ([org] if org else []) + vals:
+        try:
+            if str(getattr(v, "params", {}).get("CUTYPE", "INDIVIDUAL")).upper() not in ("INDIVIDUAL", ""):
+                continue                                # rooms, resources
+            name = str(v.params.get("CN", "")).strip().strip('"') if hasattr(v, "params") else ""
+            if not name or "@" in name:
+                name = str(v).split(":", 1)[-1].split("@")[0].replace(".", " ").title()
+            if name and name not in out:
+                out.append(name[:60])
+        except Exception:
+            continue
+    return out[:30]
+
+
 def events_from_ics(data: bytes, start: datetime, end: datetime) -> list[dict]:
     import icalendar
     import recurring_ical_events
@@ -81,6 +101,7 @@ def events_from_ics(data: bytes, start: datetime, end: datetime) -> list[dict]:
             "title": str(ev.get("SUMMARY", "")).strip() or "(no title)",
             "start": s, "end": e, "all_day": all_day,
             "location": str(ev.get("LOCATION", "")).strip().splitlines()[0][:120] if ev.get("LOCATION") else "",
+            "attendees": _people(ev),
         })
     return out
 

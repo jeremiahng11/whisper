@@ -43,7 +43,61 @@ def paragraphs(segments: list[dict], max_len: int = 600, gap: float = 2.5) -> li
     return out
 
 
+# ---------------------------------------------------------------- speaker names
+def names_of(job: dict) -> dict:
+    return {k: v for k, v in ((job.get("options") or {}).get("speaker_names") or {}).items() if v}
+
+
+def apply_names(tr: dict, names: dict) -> dict:
+    if not names:
+        return tr
+    out = dict(tr)
+    out["segments"] = [{**s, "speaker": names.get(s.get("speaker", ""), s.get("speaker", ""))} for s in tr.get("segments", [])]
+    return out
+
+
+def rename_text(text: str, names: dict, at_summary: Optional[dict] = None) -> str:
+    """Summary was written with the names known then (at_summary); bring it up to date with `names`."""
+    if not text:
+        return text
+    at_summary = at_summary or {}
+    for label in sorted(set(names) | set(at_summary), key=len, reverse=True):
+        new = names.get(label) or label
+        old = at_summary.get(label) or label
+        if old != new:
+            text = re.sub(rf"(?<!\w){re.escape(old)}(?!\w)", new, text)
+    return text
+
+
+# ---------------------------------------------------------------- flagged moments (mark key on the device)
+_MARK = re.compile(r"^\s*\[(?:(\d+):)?(\d{1,3}):(\d{2})\]\s*(?:!!|\*\*?MARK\*?\*?|\u2605)\s*(.*)$", re.I)
+
+
+def parse_marks(notes: str) -> list[tuple[float, str]]:
+    out = []
+    for line in (notes or "").splitlines():
+        m = _MARK.match(line)
+        if m:
+            h, mi, se, txt = m.groups()
+            out.append((int(h or 0) * 3600 + int(mi) * 60 + int(se), txt.strip()))
+    return out
+
+
+def around(tr: dict, t: float, before: float = 40, after: float = 20) -> str:
+    return " ".join(
+        (f"{s['speaker']}: " if s.get("speaker") else "") + s["text"].strip()
+        for s in tr.get("segments", []) if s["end"] >= t - before and s["start"] <= t + after)
+
+
+def flagged_text(tr: dict, marks: list[tuple[float, str]]) -> str:
+    return "\n\n".join(f"[{ts(t)}] {('(' + note + ') ') if note else ''}{around(tr, t)[:1500]}" for t, note in marks)
+
+
 def markdown(job: dict, tr: dict, summary_md: Optional[str], title: str = "") -> str:
+    opts = job.get("options") or {}
+    names = names_of(job)
+    tr = apply_names(tr, names)
+    summary_md = rename_text(summary_md or "", names, opts.get("names_at_summary")) or None
     when = recorded_at(job["filename"], job["created_at"])
     mins = tr.get("duration", 0) / 60
     lines = [f"# {title or job.get('title') or job['filename']}", ""]
@@ -56,7 +110,14 @@ def markdown(job: dict, tr: dict, summary_md: Optional[str], title: str = "") ->
         lines += [summary_md.strip(), ""]
     elif job.get("summary_error"):
         lines += [f"> Summary not available: {job['summary_error']}", ""]
-    notes = (job.get("options") or {}).get("notes", "").strip()
+    marks = parse_marks(opts.get("notes", ""))
+    if marks:
+        lines += ["## Flagged moments", ""]
+        for t, note in marks:
+            ctx = around(tr, t, 25, 15)
+            ctx = (ctx[:280] + "...") if len(ctx) > 280 else ctx
+            lines += [f"- `[{ts(t)}]` " + (f"**{note}** - " if note else "") + (f"*{ctx}*" if ctx else ""), ""]
+    notes = opts.get("notes", "").strip()
     if notes:
         lines += ["## My notes", "", notes, ""]
     lines += ["## Transcript", ""]
@@ -90,3 +151,61 @@ def transcript_for_llm(tr: dict) -> str:
         f"[{ts(p['start'])}] {p['speaker'] + ': ' if p['speaker'] else ''}{p['text']}"
         for p in paragraphs(tr.get("segments", []))
     )
+
+
+# ---------------------------------------------------------------- Word export
+def _runs(par, text: str) -> None:
+    for part in re.split(r"(\*\*[^*]+\*\*|`[^`]+`|\*[^*]+\*)", text):
+        if not part:
+            continue
+        if part.startswith("**") and part.endswith("**"):
+            par.add_run(part[2:-2]).bold = True
+        elif part.startswith("`") and part.endswith("`"):
+            r = par.add_run(part[1:-1])
+            r.font.name = "Consolas"
+        elif part.startswith("*") and part.endswith("*") and len(part) > 2:
+            par.add_run(part[1:-1]).italic = True
+        else:
+            par.add_run(part)
+
+
+def docx(md: str) -> bytes:
+    import io
+    from docx import Document
+    from docx.shared import Pt
+    d = Document()
+    st = d.styles["Normal"]
+    st.font.name = "Calibri"
+    st.font.size = Pt(11)
+    for line in md.splitlines():
+        s = line.rstrip()
+        if not s.strip():
+            continue
+        m = re.match(r"^(#{1,4})\s+(.*)$", s)
+        if m:
+            d.add_heading(m.group(2).strip(), level=len(m.group(1)) - 1)
+            continue
+        m = re.match(r"^\s*[-*]\s+\[( |x|X)\]\s+(.*)$", s)
+        if m:
+            p = d.add_paragraph(style="List Bullet")
+            p.add_run("\u2611 " if m.group(1).strip() else "\u2610 ")
+            _runs(p, m.group(2))
+            continue
+        m = re.match(r"^\s*[-*]\s+(.*)$", s)
+        if m:
+            _runs(d.add_paragraph(style="List Bullet"), m.group(1))
+            continue
+        m = re.match(r"^\s*\d+[.)]\s+(.*)$", s)
+        if m:
+            _runs(d.add_paragraph(style="List Number"), m.group(1))
+            continue
+        if s.startswith(">"):
+            p = d.add_paragraph()
+            _runs(p, s.lstrip("> "))
+            for r in p.runs:
+                r.italic = True
+            continue
+        _runs(d.add_paragraph(), s)
+    buf = io.BytesIO()
+    d.save(buf)
+    return buf.getvalue()
