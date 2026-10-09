@@ -73,7 +73,7 @@ tr.job:hover td{background:var(--chip)}
           <option value="vi">Vietnamese</option>
         </select></label>
       <label class="mute"><input type="checkbox" id="sum" checked> Summary</label>
-      <label class="mute"><input type="checkbox" id="diar"> Speaker labels</label>
+      <label class="mute" id="diarLabel"><input type="checkbox" id="diar" checked> Speaker labels</label>
       <input id="title" type="text" placeholder="Title (optional)">
     </div>
     <div id="up" class="hidden"><div class="mute" id="upText"></div><div class="bar"><i id="upBar"></i></div></div>
@@ -130,9 +130,16 @@ const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "
 const dur = s => !s ? "" : s >= 3600 ? `${Math.floor(s / 3600)}h ${Math.round(s % 3600 / 60)}m` : s >= 60 ? `${Math.round(s / 60)} min` : `${Math.round(s)} s`;
 const when = t => new Date(t * 1000).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
 
+let diarSet = false;
 async function health() {
   try {
     const h = await (await fetch("/api/health")).json();
+    if (!diarSet) {                       // first load: follow the server (DIARIZE), off if pyannote isn't installed
+      diarSet = true;
+      $("#diar").checked = h.diarize_installed !== false && h.diarize_default !== false;
+      $("#diar").disabled = h.diarize_installed === false;
+      $("#diarLabel").title = h.diarize_installed === false ? "Not installed: rebuild with INSTALL_DIARIZE=1" : "";
+    }
     $("#health").textContent = `${h.model}${h.model_loaded ? "" : " (loading…)"} · summary: ${h.summary_backend === "none" ? "off" : h.summary_model}`;
   } catch (e) { $("#health").textContent = "server not reachable"; }
 }
