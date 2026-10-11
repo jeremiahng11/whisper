@@ -18,7 +18,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.3.2"
+VERSION = "1.3.3"
 STATIC = Path(__file__).parent / "static"
 
 

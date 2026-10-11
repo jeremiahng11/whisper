@@ -191,16 +191,15 @@ def enabled() -> bool:
 # ---------------------------------------------------------------- LLM backends
 def _ollama_chat(messages: list[dict], retry: bool = True, model: str = "") -> str:
     model = model or settings.ollama_model
-    r = httpx.post(
-        f"{settings.ollama_url}/api/chat",
-        json={
-            "model": model,
-            "messages": messages,
-            "stream": False,
-            "options": {"num_ctx": settings.ollama_num_ctx, "temperature": 0.2},
-        },
-        timeout=settings.llm_timeout_s,
-    )
+    body = {
+        "model": model,
+        "messages": messages,
+        "stream": False,
+        "options": {"num_ctx": settings.ollama_num_ctx, "temperature": 0.2},
+    }
+    if any(k in model.lower() for k in ("qwen3", "deepseek-r1", "gpt-oss")):
+        body["think"] = False                     # reasoning models: answer straight away (much faster)
+    r = httpx.post(f"{settings.ollama_url}/api/chat", json=body, timeout=settings.llm_timeout_s)
     if retry and r.status_code == 404 and "not found" in r.text.lower() and settings.ollama_auto_pull:
         ensure_ollama_model(model)                # model not downloaded yet: pull it once, then retry
         return _ollama_chat(messages, retry=False, model=model)
