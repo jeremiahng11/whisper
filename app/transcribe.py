@@ -59,9 +59,14 @@ def _wav_pcm16(path: str) -> Optional[np.ndarray]:
                 fmt = struct.unpack("<HHIIHH", f.read(16))
                 f.seek(size - 16, 1)
             elif cid == b"data":
-                if not fmt or fmt[0] != 1 or fmt[5] != 16:
+                if not fmt:
                     return None
                 raw = f.read()
+                if fmt[0] == 0x11 and fmt[1] == 1:             # IMA ADPCM (the round Idea Saver records this)
+                    a = ima_adpcm_decode(raw, fmt[4]).astype(np.float32) / 32768.0
+                    return _resample(a, fmt[2])
+                if fmt[0] != 1 or fmt[5] != 16:
+                    return None
                 break
             else:
                 f.seek(size + (size & 1), 1)
@@ -70,10 +75,32 @@ def _wav_pcm16(path: str) -> Optional[np.ndarray]:
     a = np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32768.0
     if ch > 1:
         a = a.reshape(-1, ch).mean(axis=1)
+    return _resample(a, rate)
+
+
+def _resample(a: np.ndarray, rate: int) -> np.ndarray:
     if rate != SR:
         n = int(len(a) * SR / rate)
         a = np.interp(np.linspace(0, len(a) - 1, n), np.arange(len(a)), a).astype(np.float32) if n else a[:0]
     return a
+
+
+_SWAP = bytes(((b & 0x0F) << 4) | (b >> 4) for b in range(256))     # WAV IMA: low nibble first
+
+
+def ima_adpcm_decode(raw: bytes, block_align: int) -> np.ndarray:
+    """Mono IMA ADPCM WAV blocks -> int16 samples. A cut-off last block (file still being recorded) is skipped."""
+    import audioop                                        # in the stdlib up to 3.12; audioop-lts on 3.13+
+    out = []
+    n = len(raw) // block_align
+    for i in range(n):
+        blk = raw[i * block_align:(i + 1) * block_align]
+        pred, idx = struct.unpack("<hB", blk[:3])
+        idx = min(idx, 88)
+        pcm, _ = audioop.adpcm2lin(blk[4:].translate(_SWAP), 2, (pred, idx))
+        out.append(struct.pack("<h", pred))
+        out.append(pcm)
+    return np.frombuffer(b"".join(out), dtype="<i2")
 
 
 def load_audio(path: str) -> np.ndarray:

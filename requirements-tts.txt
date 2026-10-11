@@ -1,0 +1,2 @@
+# text-to-speech for the round Idea Saver - installed when the image is built with INSTALL_TTS=1
+piper-tts>=1.2,<2

@@ -444,3 +444,105 @@ def test_live_upload_transcribes_while_recording(client, monkeypatch):
     nums = [int(s["text"].split()[-1].rstrip(".")) for s in segs]
     assert nums == list(range(1, 13))                                  # no gaps, no doubles
     assert not st.exists() and (worker.result_dir(j["id"]) / "live.json").exists()
+
+
+# ---------------------------------------------------------------- round Idea Saver: voice
+STEP = [7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45, 50, 55, 60, 66, 73, 80, 88, 97, 107,
+        118, 130, 143, 157, 173, 190, 209, 230, 253, 279, 307, 337, 371, 408, 449, 494, 544, 598, 658, 724, 796, 876, 963,
+        1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066, 2272, 2499, 2749, 3024, 3327, 3660, 4026, 4428, 4871, 5358, 5894,
+        6484, 7132, 7845, 8630, 9493, 10442, 11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767]
+IDXT = [-1, -1, -1, -1, 2, 4, 6, 8] * 2
+
+
+def adpcm_wav(samples, header_sizes=True):
+    """Same IMA ADPCM WAV the round device writes (256-byte blocks, 505 samples each)."""
+    data, pred, idx = bytearray(), 0, 0
+    for i in range(0, len(samples) - 504, 505):
+        blk = samples[i:i + 505]
+        pred = int(blk[0])
+        data += struct.pack("<hBB", pred, idx, 0)
+        nib = []
+        for s in blk[1:]:
+            step, diff, code = STEP[idx], int(s) - pred, 0
+            if diff < 0:
+                code, diff = 8, -diff
+            d = step >> 3
+            if diff >= step: code |= 4; diff -= step; d += step
+            step >>= 1
+            if diff >= step: code |= 2; diff -= step; d += step
+            step >>= 1
+            if diff >= step: code |= 1; d += step
+            pred = max(-32768, min(32767, pred - d if code & 8 else pred + d))
+            idx = max(0, min(88, idx + IDXT[code]))
+            nib.append(code)
+        for j in range(0, len(nib), 2):
+            data.append(nib[j] | (nib[j + 1] << 4))
+    fmt = struct.pack("<HHIIHHHH", 0x11, 1, 16000, 8110, 256, 4, 2, 505)
+    size = len(data) if header_sizes else 0
+    return b"RIFF" + struct.pack("<I", 4 + 8 + len(fmt) + 8 + size if header_sizes else 0) + b"WAVE" + \
+        b"fmt " + struct.pack("<I", len(fmt)) + fmt + b"data" + struct.pack("<I", size) + bytes(data)
+
+
+def test_adpcm_recordings_decode(tmp_path):
+    import numpy as np
+    from app.transcribe import load_audio
+    t = np.arange(16000 * 3) / 16000
+    x = (8000 * np.sin(2 * np.pi * 440 * t)).astype(np.int16)
+    for full in (True, False):                                  # finished file, and one still being recorded
+        p = tmp_path / f"a{full}.wav"
+        p.write_bytes(adpcm_wav(x, full))
+        y = load_audio(str(p)) * 32768
+        n = len(y)
+        assert abs(n - 16000 * 3) < 600
+        snr = 10 * np.log10(np.mean(x[:n].astype(float) ** 2) / np.mean((y - x[:n]) ** 2))
+        assert snr > 25
+
+
+def test_adpcm_upload_full_flow(client):
+    import numpy as np
+    x = np.zeros(16000 * 12, dtype=np.int16)
+    data = adpcm_wav(x)
+    r = client.post("/api/jobs?summarize=false", content=data, headers={**H, "X-Filename": "memo_2026-10-11_093000.wav"})
+    j = wait(client, r.json()["id"])
+    assert j["status"] == "done" and abs(j["duration"] - 12) < 0.2
+
+
+def test_stt(client):
+    r = client.post("/api/stt", content=wav_bytes(7), headers=H)
+    assert r.status_code == 200
+    assert r.json()["text"].startswith("This is test sentence number 1.") and abs(r.json()["duration"] - 7) < 0.1
+    assert client.post("/api/stt", content=b"", headers=H).status_code == 400
+
+
+def test_intent_rules():
+    from datetime import datetime, timedelta, timezone
+    from app.speech import intent
+    tz = timezone(timedelta(hours=8))
+    now = int(datetime(2026, 10, 11, 13, 5, tzinfo=tz).timestamp())          # Sunday 1:05 pm
+    at = lambda h, m, d=11: int(datetime(2026, 10, d, h, m, tzinfo=tz).timestamp())
+    assert intent("Set a timer for 10 minutes", now)["seconds"] == 600
+    assert intent("timer one hour and 30 minutes", now)["seconds"] == 5400
+    r = intent("Remind me at 3 to call San", now)
+    assert r["type"] == "reminder" and r["at"] == at(15, 0) and r["text"].lower() == "call san"
+    r = intent("remind me tomorrow at 9:30 am to send the rollback plan", now)
+    assert r["at"] == at(9, 30, 12) and "rollback" in r["text"]
+    assert intent("remind me in 20 minutes to check the oven", now)["at"] == now + 1200
+    r = intent("Add buy RTX riser to my tasks", now)
+    assert r == {"type": "task", "text": "buy RTX riser", "source": "rules"}
+    assert intent("take a note the Wi-Fi password is on the fridge", now)["type"] == "note"
+    assert intent("start a meeting called Q4 planning", now) == {"type": "meeting", "title": "Q4 planning", "source": "rules"}
+    r = intent("how do you say good morning in Japanese", now)
+    assert r["type"] == "translate" and r["lang"] == "Japanese" and r["text"] == "good morning"
+
+
+def test_intent_llm_fallback(client):
+    r = client.post("/api/intent", json={"text": "what's the capital of France?", "now": 1791700000, "tz": 480}, headers=H)
+    assert r.status_code == 200 and r.json()["type"] == "question"
+
+
+def test_tts_not_installed(client):
+    assert client.post("/api/tts", json={"text": "hi"}, headers=H).status_code == 503
+    from app.speech import to_wav16k
+    import numpy as np
+    w = to_wav16k(np.zeros(22050, dtype=np.int16), 22050)
+    assert w[:4] == b"RIFF" and abs(len(w) - 44 - 32000) < 4

@@ -13,12 +13,12 @@ from typing import Optional
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
 
-from . import agenda, chat, db, redact, render, search, summarize, transcribe, voices, worker
+from . import agenda, chat, db, redact, render, search, speech, summarize, transcribe, voices, worker
 from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -595,6 +595,51 @@ def templates():
             "best_available": bool(summarize.best_model())}
 
 
+# ---------------------------------------------------------------- voice (round Idea Saver)
+@app.post("/api/stt", dependencies=[Depends(auth)])
+async def speech_to_text(request: Request, language: Optional[str] = Query(None)):
+    """Short clip (WAV, up to ~2 min) -> {"text", "language", "duration"} right away, outside the job queue."""
+    tmp = settings.upload_dir / f"stt_{secrets.token_hex(6)}.wav"
+    try:
+        n = await save_body(request, tmp)
+        if n > 8 * 1024 * 1024:
+            raise HTTPException(413, "clip too long for /api/stt - use the upload API")
+        if n < 100:
+            raise HTTPException(400, "empty audio")
+        transcribe.fix_wav_header(str(tmp))
+        from starlette.concurrency import run_in_threadpool
+        lang = language if language and language.lower() != "auto" else None
+        return await run_in_threadpool(speech.stt, str(tmp), lang)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+@app.post("/api/intent", dependencies=[Depends(auth)])
+async def voice_intent(request: Request):
+    """{"text": "remind me at 3 to call San", "now": <epoch>, "tz": <minutes from UTC>} -> an action:
+    reminder {text, at, repeat} | timer {seconds, label} | task {text} | note {text} | meeting {title} |
+    translate {text, lang} | question."""
+    data = await body_extra(request)
+    from starlette.concurrency import run_in_threadpool
+    return await run_in_threadpool(speech.intent, str(data.get("text", ""))[:1000],
+                                   int(data["now"]) if str(data.get("now", "")).isdigit() else None,
+                                   int(data.get("tz", 480)) if str(data.get("tz", "480")).lstrip("-").isdigit() else 480)
+
+
+@app.post("/api/tts", dependencies=[Depends(auth)])
+async def text_to_speech(request: Request):
+    """{"text": "...", "lang": "en"} -> audio/wav (16 kHz mono). 503 when no TTS is installed."""
+    data = await body_extra(request)
+    if not speech.tts_available():
+        raise HTTPException(503, "text-to-speech not installed (build with INSTALL_TTS=1, TTS=piper)")
+    from starlette.concurrency import run_in_threadpool
+    try:
+        wav = await run_in_threadpool(speech.tts, str(data.get("text", "")), str(data.get("lang", "en")))
+    except Exception as e:
+        raise HTTPException(500, f"tts failed: {str(e)[:200]}")
+    return Response(wav, media_type="audio/wav")
+
+
 # ---------------------------------------------------------------- calendar (device Agenda app)
 @app.get("/api/agenda", dependencies=[Depends(auth)])
 def get_agenda(days: int = Query(7, ge=1, le=60)):
@@ -703,6 +748,7 @@ def health():
         "best_model": summarize.best_model(),
         "redact": settings.redact,
         "voices": len(voices.list_voices()),
+        "tts": speech.tts_available(),
         "jobs": db.counts(),
         "running": worker.current_job,
     }

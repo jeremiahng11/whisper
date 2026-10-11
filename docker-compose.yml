@@ -7,6 +7,7 @@ services:
       args:
         INSTALL_DIARIZE: ${INSTALL_DIARIZE:-0}   # 1 = speaker labels (also set DIARIZE=1 + HF_TOKEN)
         GPU: ${GPU:-0}                           # 1 = NVIDIA GPU (see the deploy: block below)
+        INSTALL_TTS: ${INSTALL_TTS:-1}           # 1 = Piper text-to-speech (the round Idea Saver talks back)
     environment:
       - SERVICE_FQDN_WHISPER_8000                # Coolify routes your domain to port 8000
       - API_KEY=${API_KEY}
@@ -28,6 +29,15 @@ services:
       - KEEP_AUDIO_DAYS=${KEEP_AUDIO_DAYS:-30}
       - MAX_UPLOAD_MB=${MAX_UPLOAD_MB:-2048}
       - TZ=${TZ:-Asia/Singapore}
+      - OLLAMA_MODEL_BEST=${OLLAMA_MODEL_BEST:-}
+      - OPENAI_MODEL_BEST=${OPENAI_MODEL_BEST:-}
+      - CALENDAR_ICS_URLS=${CALENDAR_ICS_URLS:-}
+      - CALENDAR_TZ=${CALENDAR_TZ:-Asia/Singapore}
+      - REDACT=${REDACT:-1}
+      - VOICE_MATCH=${VOICE_MATCH:-0.70}
+      - LIVE_MIN_NEW_S=${LIVE_MIN_NEW_S:-240}
+      - TTS=${TTS:-piper}
+      - TTS_VOICES=${TTS_VOICES:-en=en_US-lessac-medium,zh=zh_CN-huayan-medium}
     volumes:
       - whisper-data:/data                       # recordings, results, job database, model cache
     depends_on:

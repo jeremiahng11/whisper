@@ -59,6 +59,7 @@ an hour then takes about 1-2 min.
 | `REDACT` | `1` | Hide NRIC/FIN, card numbers (Luhn-checked), IBANs and bank account numbers in transcripts and notes |
 | `VOICE_MATCH` | `0.70` | How similar a voice must be to a known one to be named automatically (0-1) |
 | `LIVE_MIN_NEW_S` | `240` | Live uploads: transcribe a part once this many seconds of new audio arrived |
+| `TTS` / `TTS_VOICES` | `piper` / en + zh | Spoken answers for the round Idea Saver (see Voice API) |
 | `CALENDAR_ICS_URLS` | | Private calendar links for the device's Agenda app, comma separated (see below) |
 | `CALENDAR_TZ` | `Asia/Singapore` | Time zone for all-day events |
 | `SYNC_MAX_KB` | `1024` | Largest text file accepted by notes sync |
@@ -147,6 +148,18 @@ Example `result.md`:
 - **Redaction** of NRIC/card/account numbers (on by default).
 - **Live upload.** The device uploads while it records (`PUT` with `X-Live: 1`); the server transcribes the parts as they
   arrive, so after you stop only the last minutes are left - minutes come much sooner.
+
+## Voice API (round Idea Saver, 1.3)
+
+- `POST /api/stt?language=` body = WAV (PCM or IMA ADPCM, up to ~2 min) -> `{"text","language","duration"}` right away
+  (not queued) - used for voice commands, Ask AI and Translate.
+- `POST /api/intent {"text","now","tz"}` -> the action to take: `reminder {text, at, repeat}`, `timer {seconds, label}`,
+  `task {text}`, `note {text}`, `meeting {title}`, `translate {text, lang}` or `question`. Common phrasings ("remind me at 3
+  to...", "timer 10 minutes", "add ... to my tasks") are parsed instantly with rules; the rest goes to the LLM.
+- `POST /api/tts {"text","lang"}` -> 16 kHz WAV, spoken by [Piper](https://github.com/rhasspy/piper). Built in by default
+  (`INSTALL_TTS=1`); voices download from huggingface.co on first use. `TTS_VOICES=en=en_US-lessac-medium,zh=zh_CN-huayan-medium`
+  (any voice name from rhasspy/piper-voices). `TTS=none` turns it off.
+- Recordings can be IMA ADPCM WAV (4-bit, 4x smaller) - the round device records that so ~50 min fit in its flash.
 
 ## Calendar (Agenda app on the Idea Saver)
 

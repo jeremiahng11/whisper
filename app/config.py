@@ -65,6 +65,10 @@ class Settings:
     # --- live upload (device uploads while it records; transcribed in parts) ---
     live_min_new_s: int = _int("LIVE_MIN_NEW_S", 240)     # transcribe a part once this much new audio arrived
 
+    # --- voice (round Idea Saver): text-to-speech ---
+    tts_backend: str = os.getenv("TTS", "piper").lower()          # piper | none
+    tts_voices: str = os.getenv("TTS_VOICES", "en=en_US-lessac-medium,zh=zh_CN-huayan-medium")
+
     # --- calendar (device Agenda app) ---
     calendar_ics_urls: str = os.getenv("CALENDAR_ICS_URLS", "")   # private ICS links, comma separated
     calendar_tz: str = os.getenv("CALENDAR_TZ", os.getenv("TZ", "Asia/Singapore"))
