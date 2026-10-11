@@ -18,7 +18,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.3.4"
+VERSION = "1.3.5"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -747,6 +747,8 @@ def health():
         "summary_backend": settings.summary_backend,
         "summary_model": settings.ollama_model if settings.summary_backend == "ollama" else settings.openai_model,
         "llm": summarize.llm_status(),
+        "default_language": settings.default_language or "auto",
+        "summary_language": settings.summary_language or "same as speech",
         "diarize_default": settings.diarize,
         "diarize_installed": importlib.util.find_spec("pyannote") is not None,
         "hf_token_set": bool(settings.hf_token),
