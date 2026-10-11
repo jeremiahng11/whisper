@@ -483,11 +483,14 @@ async def ask(request: Request):
         msgs = [{"role": "user", "content": EMAIL_TASK}]
     if not msgs or not isinstance(msgs, list):
         raise HTTPException(400, "send {'messages': [...]} or {'prompt': '...'}")
+    sys_given = " ".join(str(m.get("content", ""))[:4000] for m in msgs if isinstance(m, dict) and m.get("role") == "system")
     clean = [{"role": m.get("role") if m.get("role") in ("user", "assistant") else "user", "content": str(m.get("content", ""))[:8000]}
-             for m in msgs[-20:] if isinstance(m, dict)]
+             for m in msgs[-20:] if isinstance(m, dict) and m.get("role") != "system"]
+    if not clean:
+        raise HTTPException(400, "no user message")
     if not summarize.enabled():
         raise HTTPException(400, "SUMMARY_BACKEND is none - no LLM configured")
-    context, system = "", ""
+    context, system = "", sys_given
     if data.get("recording"):
         context, system = meeting_context(_job_for(str(data["recording"]))), MEETING_SYSTEM
     elif data.get("scope") == "meetings":
