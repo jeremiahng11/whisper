@@ -24,7 +24,27 @@ log = logging.getLogger("speech")
 
 
 # ---------------------------------------------------------------- speech to text
-def stt(path: str, language: Optional[str] = None) -> dict:
+def pick_language(path: str, candidates: list[str]) -> Optional[str]:
+    """Detect the spoken language but only choose among `candidates` (e.g. ["en", "zh"] for a two-way
+    translator) - stops accented English being heard as Malay, Indonesian, Welsh..."""
+    cands = [c.strip().lower() for c in candidates if c.strip()]
+    if not cands:
+        return None
+    if len(cands) == 1 or settings.transcriber == "fake":
+        return cands[0]
+    try:
+        audio = transcribe.load_audio(path)
+        _, _, probs = transcribe.get_model().detect_language(audio, vad_filter=True)
+        p = dict(probs)
+        return max(cands, key=lambda c: p.get(c, 0.0))
+    except Exception as e:                                   # noqa: BLE001
+        log.warning("language pick failed: %s", e)
+        return cands[0]
+
+
+def stt(path: str, language: Optional[str] = None, candidates: Optional[list[str]] = None) -> dict:
+    if not language and candidates:
+        language = pick_language(path, candidates)
     tr = transcribe.transcribe(path, language, lambda p, s: None, diarize=False, prompt=voices.whisper_prompt())
     text = " ".join(s.text.strip() for s in tr.segments).strip()
     if settings.redact:

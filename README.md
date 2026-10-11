@@ -160,6 +160,8 @@ Example `result.md`:
   (`INSTALL_TTS=1`); voices download from huggingface.co on first use. `TTS_VOICES=en=en_US-lessac-medium,zh=zh_CN-huayan-medium`
   (any voice name from rhasspy/piper-voices). `TTS=none` turns it off.
 - Recordings can be IMA ADPCM WAV (4-bit, 4x smaller) - the round device records that so ~50 min fit in its flash.
+* `POST /api/stt?languages=en,zh` detects the language but only picks from the list (stops accented English
+  being heard as Malay); `?language=en` forces one.
 
 ## AI answers not working? ("Name or service not known")
 

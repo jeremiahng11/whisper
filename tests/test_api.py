@@ -512,6 +512,8 @@ def test_stt(client):
     assert r.status_code == 200
     assert r.json()["text"].startswith("This is test sentence number 1.") and abs(r.json()["duration"] - 7) < 0.1
     assert client.post("/api/stt", content=b"", headers=H).status_code == 400
+    r = client.post("/api/stt?languages=zh,en", content=wav_bytes(3), headers=H)     # pick from a list
+    assert r.status_code == 200 and r.json()["language"] == "zh"
 
 
 def test_intent_rules():

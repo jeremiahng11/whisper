@@ -18,7 +18,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.3.1"
+VERSION = "1.3.2"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -600,8 +600,9 @@ def templates():
 
 # ---------------------------------------------------------------- voice (round Idea Saver)
 @app.post("/api/stt", dependencies=[Depends(auth)])
-async def speech_to_text(request: Request, language: Optional[str] = Query(None)):
-    """Short clip (WAV, up to ~2 min) -> {"text", "language", "duration"} right away, outside the job queue."""
+async def speech_to_text(request: Request, language: Optional[str] = Query(None), languages: Optional[str] = Query(None)):
+    """Short clip (WAV, up to ~2 min) -> {"text", "language", "duration"} right away, outside the job queue.
+    language=en forces one language; languages=en,zh detects but only picks from that list."""
     tmp = settings.upload_dir / f"stt_{secrets.token_hex(6)}.wav"
     try:
         n = await save_body(request, tmp)
@@ -612,7 +613,8 @@ async def speech_to_text(request: Request, language: Optional[str] = Query(None)
         transcribe.fix_wav_header(str(tmp))
         from starlette.concurrency import run_in_threadpool
         lang = language if language and language.lower() != "auto" else None
-        return await run_in_threadpool(speech.stt, str(tmp), lang)
+        cands = [c for c in (languages or "").split(",") if c.strip()] or None
+        return await run_in_threadpool(speech.stt, str(tmp), lang, cands)
     finally:
         tmp.unlink(missing_ok=True)
 
