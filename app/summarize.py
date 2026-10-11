@@ -189,6 +189,15 @@ def enabled() -> bool:
 
 
 # ---------------------------------------------------------------- LLM backends
+def strip_thinking(text: str) -> str:
+    """Remove a reasoning model's thinking: <think>...</think>, or everything before a lone </think>
+    (the chat template opens the tag in the prompt, so the reply often only contains the closing one)."""
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.S)
+    if "</think>" in text:
+        text = text.split("</think>")[-1]
+    return text.strip()
+
+
 def _ollama_chat(messages: list[dict], retry: bool = True, model: str = "") -> str:
     model = model or settings.ollama_model
     body = {
@@ -199,12 +208,19 @@ def _ollama_chat(messages: list[dict], retry: bool = True, model: str = "") -> s
     }
     if any(k in model.lower() for k in ("qwen3", "deepseek-r1", "gpt-oss")):
         body["think"] = False                     # reasoning models: answer straight away (much faster)
+        if "qwen3" in model.lower() and messages:  # older Ollama ignores "think": qwen3's own switch
+            msgs = [dict(m) for m in messages]
+            for m in reversed(msgs):
+                if m.get("role") == "user":
+                    m["content"] = str(m.get("content", "")) + " /no_think"
+                    break
+            body["messages"] = msgs
     r = httpx.post(f"{settings.ollama_url}/api/chat", json=body, timeout=settings.llm_timeout_s)
     if retry and r.status_code == 404 and "not found" in r.text.lower() and settings.ollama_auto_pull:
         ensure_ollama_model(model)                # model not downloaded yet: pull it once, then retry
         return _ollama_chat(messages, retry=False, model=model)
     r.raise_for_status()
-    return r.json()["message"]["content"]
+    return strip_thinking(r.json()["message"]["content"])
 
 
 def _openai_chat(messages: list[dict], model: str = "") -> str:
@@ -216,7 +232,7 @@ def _openai_chat(messages: list[dict], model: str = "") -> str:
         timeout=settings.llm_timeout_s,
     )
     r.raise_for_status()
-    return r.json()["choices"][0]["message"]["content"]
+    return strip_thinking(r.json()["choices"][0]["message"]["content"])
 
 
 def best_model() -> str:
@@ -327,6 +343,10 @@ def summarize(transcript_text: str, language: str, progress: Optional[Callable[[
               flagged: str = "", meeting_date: str = "") -> tuple[str, str]:
     """Returns (title, markdown body without the title line)."""
     progress = progress or (lambda p, s: None)
+    spoken = re.sub(r"\[\d+:\d+(:\d+)?\]|\[[^\]]*\]:?", " ", transcript_text)
+    if len(spoken.split()) < 18 and not user_notes.strip():          # a quick test or a few words: no minutes
+        first = " ".join(spoken.split()[:8])
+        return (first[:60] or "Short recording"), "_Short recording - too little speech for minutes; see the transcript._\n"
     lang = settings.summary_language or language
     lang_line = f"Write the minutes in {lang_name(lang)}.\n\n" if lang else ""
     system = SYSTEM

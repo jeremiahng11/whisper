@@ -168,7 +168,7 @@ def test_long_transcript_is_summarised_in_parts(client):
 def test_summary_failure_keeps_transcript_then_redo(client):
     FAIL["on"] = True
     try:
-        j = wait(client, client.post("/api/jobs", content=wav_bytes(4), headers=H).json()["id"])
+        j = wait(client, client.post("/api/jobs", content=wav_bytes(20), headers=H).json()["id"])
     finally:
         FAIL["on"] = False
     assert j["status"] == "done" and "LLM is down" in j["summary_error"]
@@ -555,3 +555,16 @@ def test_llm_error_explained(monkeypatch):
     monkeypatch.setattr(summarize.settings, "summary_backend", "ollama")
     msg = summarize.explain_llm_error(Exception("[Errno -2] Name or service not known"))
     assert "OLLAMA_URL" in msg and "host.docker.internal" in msg
+
+
+def test_strip_thinking():
+    from app.summarize import strip_thinking
+    assert strip_thinking("<think>hmm</think>\n\nHello") == "Hello"
+    assert strip_thinking("We are given a transcript...\nlots of reasoning\n</think>\n\nTitle: X") == "Title: X"
+    assert strip_thinking("plain answer") == "plain answer"
+
+
+def test_short_recording_skips_minutes():
+    from app.summarize import summarize
+    title, body = summarize("[00:00] Testing one, this is one. Testing two.", "en")
+    assert "too little speech" in body and title.startswith("Testing")
