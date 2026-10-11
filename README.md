@@ -161,6 +161,16 @@ Example `result.md`:
   (any voice name from rhasspy/piper-voices). `TTS=none` turns it off.
 - Recordings can be IMA ADPCM WAV (4-bit, 4x smaller) - the round device records that so ~50 min fit in its flash.
 
+## AI answers not working? ("Name or service not known")
+
+`GET /api/health` now shows `"llm": "ok"` or the reason the summary/answer model can't be reached.
+"Name or service not known" means the container can't find the host in `OLLAMA_URL` (default `http://ollama:11434`,
+the `ollama` service in this compose file). Fix one of:
+* the `ollama` service isn't running in Coolify - start it (it pulls the model on first use);
+* Ollama runs directly on the server - set `OLLAMA_URL=http://host.docker.internal:11434` (the compose file maps that
+  name to the host) and start Ollama with `OLLAMA_HOST=0.0.0.0`;
+* Ollama runs on another machine - set `OLLAMA_URL=http://<its-ip>:11434`.
+
 ## Calendar (Agenda app on the Idea Saver)
 
 Add your calendars' **private ICS links** to `CALENDAR_ICS_URLS` and redeploy:

@@ -18,7 +18,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.3.0"
+VERSION = "1.3.1"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -744,6 +744,7 @@ def health():
         "model_loaded": transcribe.model_loaded() or settings.transcriber == "fake",
         "summary_backend": settings.summary_backend,
         "summary_model": settings.ollama_model if settings.summary_backend == "ollama" else settings.openai_model,
+        "llm": summarize.llm_status(),
         "diarize_default": settings.diarize,
         "diarize_installed": importlib.util.find_spec("pyannote") is not None,
         "hf_token_set": bool(settings.hf_token),

@@ -226,6 +226,44 @@ def best_model() -> str:
     return settings.ollama_model_best if b == "ollama" else settings.openai_model_best if b == "openai" else ""
 
 
+_llm_cache: dict = {"at": 0.0, "status": ""}
+
+
+def llm_status() -> str:
+    """'ok', 'off', or why the LLM can't be reached (checked at most every 30 s, 3 s timeout)."""
+    import time
+    if not enabled():
+        return "off"
+    if time.time() - _llm_cache["at"] < 30:
+        return _llm_cache["status"]
+    backend = settings.summary_backend.lower()
+    try:
+        if backend == "ollama":
+            httpx.get(f"{settings.ollama_url}/api/tags", timeout=3).raise_for_status()
+        status = "ok"
+    except Exception as e:                                   # noqa: BLE001
+        status = explain_llm_error(e)
+    _llm_cache.update(at=time.time(), status=status)
+    return status
+
+
+def explain_llm_error(e: Exception) -> str:
+    """Turn 'Name or service not known' etc. into something the user can act on."""
+    msg = str(e)
+    if settings.summary_backend.lower() == "ollama":
+        where = settings.ollama_url
+        low = msg.lower()
+        if "name or service not known" in low or "nodename nor servname" in low or "temporary failure in name resolution" in low:
+            return (f"can't find the Ollama server '{where}' - set OLLAMA_URL to an address the container can reach, "
+                    "e.g. http://host.docker.internal:11434 (Ollama on the same machine) or http://<server-ip>:11434")
+        if "connection refused" in low or "connect" in low:
+            return (f"Ollama at '{where}' refused the connection - is Ollama running, and listening on 0.0.0.0 "
+                    "(OLLAMA_HOST=0.0.0.0) if it is outside this container?")
+        if "404" in low and "model" in low:
+            return f"Ollama has no model {settings.ollama_model} - run: ollama pull {settings.ollama_model}"
+    return msg[:300]
+
+
 def chat(messages: list[dict], best: bool = False) -> str:
     backend = settings.summary_backend.lower()
     model = best_model() if best else ""

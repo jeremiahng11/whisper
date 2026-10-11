@@ -23,7 +23,7 @@ def _run(aid: str, messages: list[dict], system: str, best: bool) -> None:
             answer = re.sub(r"<think>.*?</think>", "", answer, flags=re.S)     # reasoning models
             res = {"id": aid, "status": "done", "answer": answer.strip()}
         except Exception as e:                       # noqa: BLE001 - report any LLM failure to the device
-            res = {"id": aid, "status": "error", "error": str(e)[:300]}
+            res = {"id": aid, "status": "error", "error": summarize.explain_llm_error(e)[:300]}
     with _lock:
         _items[aid].update(res, finished=time.time())
 

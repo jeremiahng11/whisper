@@ -8,6 +8,8 @@ services:
         INSTALL_DIARIZE: ${INSTALL_DIARIZE:-0}   # 1 = speaker labels (also set DIARIZE=1 + HF_TOKEN)
         GPU: ${GPU:-0}                           # 1 = NVIDIA GPU (see the deploy: block below)
         INSTALL_TTS: ${INSTALL_TTS:-1}           # 1 = Piper text-to-speech (the round Idea Saver talks back)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"     # lets OLLAMA_URL=http://host.docker.internal:11434 reach Ollama on the host
     environment:
       - SERVICE_FQDN_WHISPER_8000                # Coolify routes your domain to port 8000
       - API_KEY=${API_KEY}

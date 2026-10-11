@@ -546,3 +546,10 @@ def test_tts_not_installed(client):
     import numpy as np
     w = to_wav16k(np.zeros(22050, dtype=np.int16), 22050)
     assert w[:4] == b"RIFF" and abs(len(w) - 44 - 32000) < 4
+
+
+def test_llm_error_explained(monkeypatch):
+    from app import summarize
+    monkeypatch.setattr(summarize.settings, "summary_backend", "ollama")
+    msg = summarize.explain_llm_error(Exception("[Errno -2] Name or service not known"))
+    assert "OLLAMA_URL" in msg and "host.docker.internal" in msg
