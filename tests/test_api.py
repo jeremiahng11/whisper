@@ -568,3 +568,11 @@ def test_short_recording_skips_minutes():
     from app.summarize import summarize
     title, body = summarize("[00:00] Testing one, this is one. Testing two.", "en")
     assert "too little speech" in body and title.startswith("Testing")
+
+
+def test_region_sg_hints(monkeypatch):
+    from app import voices
+    monkeypatch.setattr(voices.settings, "region", "sg")
+    assert "Shenzhen" in voices.whisper_prompt() and "Shenzhen" in voices.region_rule()
+    monkeypatch.setattr(voices.settings, "region", "")
+    assert voices.region_rule() == ""

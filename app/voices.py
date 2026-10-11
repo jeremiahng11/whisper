@@ -30,9 +30,30 @@ def set_glossary(text: str) -> list[str]:
     return glossary()
 
 
+# Region packs: a short vocabulary hint for Whisper (it reads only ~220 tokens) and a rule for the minutes LLM.
+REGION_HINTS = {
+    "sg": {
+        "whisper": ("Singapore meeting, English mixed with Singlish, Mandarin and Malay: lah, leh, lor, meh, can or not, "
+                    "Shenzhen, Guangzhou, Shanghai, Johor Bahru, Jurong, Tampines, Changi, MRT, HDB."),
+        "llm": ("The speakers are in Singapore and often mix English with Singlish, Mandarin, Malay or Hokkien words. "
+                "Speech recognition often mis-hears Chinese and Malay names and places (for example 'Sun Jun' or "
+                "'Shen Jun' for Shenzhen, 'Guang Jo' for Guangzhou, 'Johor Baru' for Johor Bahru). Correct such names "
+                "when the context makes it clear, and leave Singlish particles (lah, leh, lor) out of the minutes."),
+    },
+}
+
+
+def region_rule() -> str:
+    hint = REGION_HINTS.get(settings.region)
+    return hint["llm"] if hint else ""
+
+
 def whisper_prompt(attendees: Optional[list[str]] = None) -> str:
     """Vocabulary hint for Whisper (it only reads the last ~220 tokens, so keep it short)."""
     parts = []
+    hint = REGION_HINTS.get(settings.region)
+    if hint:
+        parts.append(hint["whisper"])
     if settings.initial_prompt:
         parts.append(settings.initial_prompt.strip())
     names = [a for a in (attendees or []) if a]

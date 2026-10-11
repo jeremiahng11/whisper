@@ -44,6 +44,7 @@ an hour then takes about 1-2 min.
 | `WHISPER_THREADS` | `0` | CPU threads, 0 = all |
 | `DEFAULT_LANGUAGE` | *(auto)* | e.g. `en`. Setting it avoids wrong-language detection on short clips |
 | `INITIAL_PROMPT` | | Names and jargon to help spelling, e.g. `Aleta Planet, SkenPay, Coolify, MAS` |
+| `REGION` | (none) | `sg` = Singapore: Whisper and the minutes expect English mixed with Singlish, Mandarin and Malay, and fix mis-heard names like "Sun Jun" -> Shenzhen |
 | `SUMMARY_BACKEND` | `ollama` | `ollama`, `openai` (any compatible API: OpenAI, OpenRouter, vLLM, LM Studio...) or `none` |
 | `OLLAMA_MODEL` | `qwen2.5:7b-instruct` | Pulled automatically on first use |
 | `OLLAMA_NUM_CTX` | `16384` | LLM context window; longer transcripts are summarised in parts automatically |

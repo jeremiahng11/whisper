@@ -354,6 +354,9 @@ def summarize(transcript_text: str, language: str, progress: Optional[Callable[[
         system += "\n- People in this meeting (from the calendar invite): " + ", ".join(attendees[:30]) + "."
     if glossary:
         system += "\n- Correct spellings of names and terms (fix mis-heard versions): " + ", ".join(glossary[:200]) + "."
+    from .voices import region_rule
+    if region_rule():
+        system += "\n- " + region_rule()
     sys = {"role": "system", "content": system}
 
     parts = _chunks(transcript_text, max(2000, settings.summary_chunk_chars))

@@ -34,6 +34,7 @@ class Settings:
     whisper_beam: int = _int("WHISPER_BEAM", 5)
     default_language: str = os.getenv("DEFAULT_LANGUAGE", "")       # "" = auto-detect, e.g. "en"
     initial_prompt: str = os.getenv("INITIAL_PROMPT", "")           # vocabulary hints: names, products, jargon
+    region: str = os.getenv("REGION", "").strip().lower()           # "sg" = Singapore: mixed English/Singlish/Mandarin/Malay
     vad: bool = _bool("VAD", True)
 
     # --- speaker labels (needs image built with INSTALL_DIARIZE=1 and a Hugging Face token) ---
