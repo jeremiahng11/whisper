@@ -6,6 +6,7 @@
 - tts(text, lang): speech as 16 kHz mono WAV with Piper voices (optional, TTS=piper).
 """
 import io
+import struct
 import json
 import logging
 import re
@@ -286,6 +287,44 @@ def to_wav16k(pcm: np.ndarray, rate: int) -> bytes:
         w.setframerate(16000)
         w.writeframes(np.clip(a, -32768, 32767).astype("<i2").tobytes())
     return buf.getvalue()
+
+
+def warm_voices() -> None:
+    """Download (first time) and load every configured voice in the background at start-up."""
+    for code in tts_voices():
+        try:
+            _get_voice(code)
+            log.info("tts voice for %s ready", code)
+        except Exception as e:                           # noqa: BLE001
+            log.warning("tts voice for %s: %s", code, e)
+
+
+def wav_to_ima_adpcm(wav16: bytes) -> bytes:
+    """16 kHz mono PCM16 WAV -> IMA ADPCM WAV in 256-byte blocks (the round Idea Saver's recording format):
+    4x smaller, so the watch downloads it and starts talking sooner."""
+    try:
+        import audioop                                    # stdlib up to 3.12; audioop-lts on 3.13+
+    except ImportError:
+        return wav16
+    from . import transcribe
+    with wave.open(io.BytesIO(wav16), "rb") as r:
+        pcm = np.frombuffer(r.readframes(r.getnframes()), dtype="<i2")
+    align, spb = 256, 505
+    pad = (-len(pcm)) % spb
+    pcm = np.concatenate([pcm, np.zeros(pad, dtype="<i2")]) if pad else pcm
+    out, idx = [], 0
+    for b in range(len(pcm) // spb):
+        blk = pcm[b * spb:(b + 1) * spb]
+        pred = int(blk[0])                                # each block starts with one plain sample + the step index
+        nib, state = audioop.lin2adpcm(blk[1:].tobytes(), 2, (pred, idx))
+        out.append(struct.pack("<hBB", pred, idx, 0) + nib.translate(transcribe._SWAP))
+        idx = state[1]
+    data = b"".join(out)
+    rate = 16000
+    hdr = (b"RIFF" + struct.pack("<I", 40 + len(data)) + b"WAVEfmt " +
+           struct.pack("<IHHIIHHHH", 20, 0x11, 1, rate, rate * align // spb, align, 4, 2, spb) +
+           b"data" + struct.pack("<I", len(data)))
+    return hdr + data
 
 
 def tts(text: str, lang: str = "en") -> bytes:

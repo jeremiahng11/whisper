@@ -622,3 +622,20 @@ def client_health_has_storage():
     from app import main as m
     with TestClient(m.app) as c:
         return c.get("/api/health").json()["storage"] in ("temporary", "persistent", "unknown")
+
+
+def test_tts_adpcm_is_smaller_and_decodes():
+    import numpy as np
+    from app import speech, transcribe
+    sr = 16000
+    x = np.arange(sr * 3)
+    pcm = (np.sin(2 * np.pi * 300 * x / sr) * 8000).astype(np.float32)
+    wav = speech.to_wav16k(pcm, sr)
+    ad = speech.wav_to_ima_adpcm(wav)
+    assert len(ad) < len(wav) / 3.5 and ad[20:22] == b"\x11\x00"            # IMA ADPCM format tag
+    from pathlib import Path
+    p = Path(tempfile.mkdtemp()) / "t.wav"
+    p.write_bytes(ad)
+    dec = transcribe.load_audio(str(p))[:len(pcm)] * 32768
+    err = np.sqrt(np.mean((pcm - dec) ** 2)) / np.sqrt(np.mean(pcm ** 2))
+    assert len(dec) == len(pcm) and err < 0.05

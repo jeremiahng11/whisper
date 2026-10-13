@@ -19,7 +19,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.3.8"
+VERSION = "1.3.9"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -29,6 +29,9 @@ async def lifespan(app: FastAPI):
         raise RuntimeError("Set the API_KEY environment variable (any long random string).")
     db.init()
     worker.start()
+    if speech.tts_available():                       # load the voices now, not on the first spoken answer
+        import threading
+        threading.Thread(target=speech.warm_voices, daemon=True).start()
     log.info("whisper service %s ready - model %s, summary %s", VERSION, settings.whisper_model, settings.summary_backend)
     yield
     worker.stop()
@@ -692,13 +695,16 @@ async def voice_intent(request: Request):
 
 @app.post("/api/tts", dependencies=[Depends(auth)])
 async def text_to_speech(request: Request):
-    """{"text": "...", "lang": "en"} -> audio/wav (16 kHz mono). 503 when no TTS is installed."""
+    """{"text": "...", "lang": "en", "format": "adpcm"} -> audio/wav (16 kHz mono; "adpcm" = IMA ADPCM, 4x smaller,
+    what the round Idea Saver asks for). 503 when no TTS is installed."""
     data = await body_extra(request)
     if not speech.tts_available():
         raise HTTPException(503, "text-to-speech not installed (build with INSTALL_TTS=1, TTS=piper)")
     from starlette.concurrency import run_in_threadpool
     try:
         wav = await run_in_threadpool(speech.tts, str(data.get("text", "")), str(data.get("lang", "en")))
+        if str(data.get("format", "")).lower() == "adpcm":
+            wav = await run_in_threadpool(speech.wav_to_ima_adpcm, wav)
     except Exception as e:
         raise HTTPException(500, f"tts failed: {str(e)[:200]}")
     return Response(wav, media_type="audio/wav")
