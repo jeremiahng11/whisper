@@ -2,6 +2,7 @@
 import importlib.util
 import logging
 import os
+import json
 import re
 import secrets
 import shutil
@@ -18,7 +19,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.3.6"
+VERSION = "1.3.7"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -365,10 +366,24 @@ def _result(j: dict, name: str):
 
 
 @app.get("/api/jobs/{jid}/{name}", dependencies=[Depends(auth)])
-def job_result(jid: str, name: str):
+def job_result(jid: str, name: str, start: float = Query(0.0, ge=0), end: float = Query(0.0, ge=0)):
     if name == "speakers":
         return get_speakers(jid)
+    if name == "clip":
+        return job_clip(jid, start, end)
     return _result(_job(jid), name)
+
+
+def job_clip(jid: str, start: float, end: float):
+    """GET /api/jobs/{id}/clip?start=12.5&end=20 -> that stretch of the meeting as a WAV (at most 60 s)."""
+    j = _job(jid)
+    if not j["audio_path"] or not os.path.exists(j["audio_path"]):
+        raise HTTPException(410, "the audio of this recording is no longer kept")
+    if end <= start:
+        end = start + 8
+    end = min(end, start + 60)
+    a = transcribe.load_range(j["audio_path"], start, end)
+    return Response(transcribe.wav16(a), media_type="audio/wav", headers={"Cache-Control": "private, max-age=3600"})
 
 
 @app.get("/api/recordings/{rid}/{name}", dependencies=[Depends(auth)])
@@ -536,6 +551,50 @@ async def name_speakers(jid: str, request: Request):
     if j["status"] == "done":
         worker.build_outputs(jid)
     return job_out(db.get(jid))
+
+
+@app.post("/api/jobs/{jid}/segments/{idx}", dependencies=[Depends(auth)])
+async def tag_segment(jid: str, idx: int, request: Request):
+    """Say who really spoke one transcript line: {"name": "Alan", "learn": true} or {"speaker": "Speaker 2"}.
+    A name used in this meeting goes to that speaker; a new name becomes a new speaker. learn = also add this
+    clip to that person's voice print, so later meetings recognise them better."""
+    j = _job(jid)
+    if j["status"] != "done":
+        raise HTTPException(409, f"job is {j['status']}")
+    data = await body_extra(request)
+    tr = worker.load_transcript(jid)
+    segs = (tr or {}).get("segments", [])
+    if not 0 <= idx < len(segs):
+        raise HTTPException(404, "no such line")
+    opts = dict(j["options"])
+    names = dict(opts.get("speaker_names") or {})
+    labels = {s.get("speaker") for s in segs if s.get("speaker")} | set(names)
+    name = re.sub(r"\s+", " ", str(data.get("name") or "")).strip()[:60]
+    label = str(data.get("speaker") or "").strip()
+    if name:
+        label = next((lab for lab, n in names.items() if n.lower() == name.lower()), "")
+        if not label:                                    # someone new in this meeting
+            nums = [int(x.split()[-1]) for x in labels if re.match(r"^Speaker \d+$", x or "")]
+            label = f"Speaker {max(nums, default=0) + 1}"
+            names[label] = name
+    if not re.match(r"^Speaker \d+$", label):
+        raise HTTPException(400, "send {'name': 'Alan'} or {'speaker': 'Speaker 2'}")
+    segs[idx]["speaker"] = label
+    worker._write(jid, "transcript.json", json.dumps(tr, ensure_ascii=False, indent=1))
+    learned = False
+    who = names.get(label, "")
+    if data.get("learn", True) and who and j["audio_path"] and os.path.exists(j["audio_path"]):
+        from starlette.concurrency import run_in_threadpool
+        clip = await run_in_threadpool(transcribe.load_range, j["audio_path"], float(segs[idx]["start"]), float(segs[idx]["end"]))
+        emb = await run_in_threadpool(transcribe.embed_clip, clip)
+        if emb:
+            voices.remember(who, emb)
+            learned = True
+    opts["speaker_names"] = names
+    opts["speaker_auto"] = sorted(set(opts.get("speaker_auto") or []) - {label})
+    db.update(jid, options=opts)
+    worker.build_outputs(jid)
+    return {"index": idx, "speaker": label, "name": who, "learned": learned}
 
 
 @app.get("/api/jobs/{jid}/speakers", dependencies=[Depends(auth)])

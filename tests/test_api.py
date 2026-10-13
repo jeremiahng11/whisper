@@ -576,3 +576,28 @@ def test_region_sg_hints(monkeypatch):
     assert "Shenzhen" in voices.whisper_prompt() and "Shenzhen" in voices.region_rule()
     monkeypatch.setattr(voices.settings, "region", "")
     assert voices.region_rule() == ""
+
+
+# ---------------------------------------------------------------- listen to a line and say who it was
+def test_clip_and_tag_a_line(client):
+    j = upload(client, "dev1-tag", 40, "diarize=true&speakers=2")
+    assert j["status"] == "done"
+    r = client.get(f"/api/jobs/{j['id']}/clip?start=10&end=14", headers=H)
+    assert r.status_code == 200 and r.headers["content-type"] == "audio/wav"
+    assert abs((len(r.content) - 44) / 32000 - 4) < 0.05                  # 4 s of 16 kHz PCM16
+    segs = client.get(f"/api/jobs/{j['id']}/transcript.json", headers=H).json()["segments"]
+    i = next(k for k, s in enumerate(segs) if s.get("speaker") == "Speaker 1")
+    # a new name -> a new speaker in this meeting, and the voice is learned
+    r = client.post(f"/api/jobs/{j['id']}/segments/{i}", json={"name": "Priya", "learn": True}, headers=H)
+    assert r.status_code == 200, r.text
+    out = r.json()
+    assert out["name"] == "Priya" and out["speaker"] not in ("Speaker 1", "Speaker 2") and out["learned"]
+    segs2 = client.get(f"/api/jobs/{j['id']}/transcript.json", headers=H).json()["segments"]
+    assert segs2[i]["speaker"] == out["speaker"]
+    assert "**Priya:**" in client.get(f"/api/jobs/{j['id']}/result.md", headers=H).text
+    assert any(v["name"] == "Priya" for v in client.get("/api/voices", headers=H).json()["voices"])
+    # the same name again maps to that speaker, not another new one
+    k = next(n for n, s in enumerate(segs) if n != i and s.get("speaker") == "Speaker 2")
+    assert client.post(f"/api/jobs/{j['id']}/segments/{k}", json={"name": "priya"}, headers=H).json()["speaker"] == out["speaker"]
+    assert client.post(f"/api/jobs/{j['id']}/segments/9999", json={"name": "x"}, headers=H).status_code == 404
+    assert client.post(f"/api/jobs/{j['id']}/segments/{i}", json={}, headers=H).status_code == 400

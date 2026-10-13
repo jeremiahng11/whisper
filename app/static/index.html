@@ -48,12 +48,21 @@ tr.job:hover td{background:var(--chip)}
 @media (max-width:640px){.files{grid-template-columns:1fr}.flist{border-right:0;max-height:200px}}
 .spk{display:grid;grid-template-columns:110px 170px 1fr;gap:8px;align-items:center;margin:4px 0}
 .spk .mute{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.spk{grid-template-columns:34px 110px 170px 1fr}
+.play{width:30px;height:30px;padding:0;border-radius:50%;font-size:12px;line-height:30px}
+.play.on{background:var(--warn);color:#fff}
+#tagBox .line{display:grid;grid-template-columns:34px 54px 160px 1fr;gap:8px;align-items:start;padding:5px 0;border-top:1px solid var(--line)}
+#tagBox .line .t{font-variant-numeric:tabular-nums;color:var(--mute);font-size:13px;padding-top:6px}
+#tagBox .line select{width:100%}
+#tagBox .line .x{padding-top:5px}
+#tagBox .line.done select{border-color:var(--accent)}
+#tagLines{max-height:520px;overflow:auto}
 .badge{font-size:11px;padding:0 6px;border-radius:8px;background:var(--accent);color:var(--accent-ink);margin-left:4px}
 .answer{white-space:pre-wrap;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;margin-top:8px;font-size:14px}
 input[type=number]{width:64px;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px;font:inherit}
 textarea.gl{width:100%;min-height:120px;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px;font:13px/1.5 ui-monospace,Menlo,monospace}
 .sub2{font-size:13px;font-weight:600;margin:14px 0 6px}
-@media (max-width:640px){.spk{grid-template-columns:1fr 1fr}.spk .mute{grid-column:1/-1}}
+@media (max-width:640px){.spk{grid-template-columns:34px 1fr 1fr}.spk .mute{grid-column:1/-1}#tagBox .line{grid-template-columns:34px 1fr}#tagBox .line .t{display:none}#tagBox .line .x{grid-column:1/-1}}
 @media print{body{background:#fff;color:#000}main>*:not(#viewCard){display:none}#viewCard .row,#viewCard .noprint{display:none}#viewCard{border:0}}
 .hidden{display:none}
 @media (max-width:640px){.hide-sm{display:none}}
@@ -115,6 +124,12 @@ textarea.gl{width:100%;min-height:120px;background:var(--bg);color:var(--ink);bo
       <div class="sub2">Who's speaking? <span class="mute" style="font-weight:400">Type names - voices are remembered, so next time they're named automatically.</span></div>
       <div id="spkList"></div>
       <div class="row" style="margin-top:6px"><button id="spkSave">Save names</button><label class="mute"><input type="checkbox" id="spkRemember" checked> Remember voices</label><span class="mute" id="spkMsg"></span></div>
+    </div>
+    <div id="tagBox" class="hidden noprint">
+      <div class="sub2">Who said what <span class="mute" style="font-weight:400">Play a line, then pick who it really was. With "Remember voices" on, that clip also teaches the server their voice.</span></div>
+      <div class="row"><select id="tagFilter"></select><span class="mute" id="tagMsg"></span></div>
+      <div id="tagLines"></div>
+      <div class="row"><button class="ghost hidden" id="tagMore">Show more lines</button><span class="mute">The minutes' wording changes only with "Redo minutes"; names update right away.</span></div>
     </div>
     <div id="askBox" class="hidden noprint">
       <div class="sub2">Ask about this meeting</div>
@@ -242,7 +257,8 @@ async function show(id) {
     $("#askBox").classList.remove("hidden"); $("#ansOne").innerHTML = "";
     loadSpeakers(id);
   }
-  if (j.status !== "done") { $("#askBox").classList.add("hidden"); $("#spkBox").classList.add("hidden"); }
+  if (j.status !== "done") { $("#askBox").classList.add("hidden"); $("#spkBox").classList.add("hidden"); $("#tagBox").classList.add("hidden"); }
+  stopPlay();
   $("#viewCard").scrollIntoView({ behavior: "smooth" });
 }
 
@@ -266,12 +282,106 @@ $("#resum").onclick = async () => {
 };
 
 // ---------------------------------------------------------------- speakers
+// one shared player: plays a stretch of the meeting fetched from /clip (the API key can't go in an <audio src>)
+const player = new Audio();
+let playingBtn = null;
+function stopPlay() { player.pause(); if (playingBtn) { playingBtn.classList.remove("on"); playingBtn.textContent = "▶"; } playingBtn = null; }
+player.onended = stopPlay;
+async function playClip(btn, start, end) {
+  if (playingBtn === btn) { stopPlay(); return; }
+  stopPlay();
+  playingBtn = btn; btn.classList.add("on"); btn.textContent = "■";
+  try {
+    const blob = await (await api(`/api/jobs/${current}/clip?start=${start.toFixed(2)}&end=${end.toFixed(2)}`)).blob();
+    if (playingBtn !== btn) return;
+    if (player.src) URL.revokeObjectURL(player.src);
+    player.src = URL.createObjectURL(blob);
+    await player.play();
+  } catch (e) { stopPlay(); $("#tagMsg").textContent = "Can't play: " + e.message; }
+}
+const mmss = t => { t = Math.floor(t); const h = Math.floor(t / 3600), m = Math.floor(t % 3600 / 60), s = t % 60;
+  return (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" + String(s).padStart(2, "0"); };
+
+let tagSegs = [], tagSpk = [], tagShown = 200;
+function spkName(label) { const s = tagSpk.find(x => x.label === label); return s && s.name ? s.name : label; }
+function speakerOptions(cur) {
+  const opts = tagSpk.map(s => `<option value="${esc(s.label)}"${s.label === cur ? " selected" : ""}>${esc(s.name || s.label)}${s.name ? "" : ""}</option>`);
+  if (cur && !tagSpk.some(s => s.label === cur)) opts.unshift(`<option value="${esc(cur)}" selected>${esc(cur)}</option>`);
+  if (!cur) opts.unshift('<option value="" selected>?</option>');
+  return opts.join("") + '<option value="__new">Someone else…</option>';
+}
+function renderLines() {
+  const f = $("#tagFilter").value;
+  const rows = tagSegs.map((s, i) => ({ ...s, i })).filter(s => !f || s.speaker === f);
+  $("#tagLines").innerHTML = rows.slice(0, tagShown).map(s => `<div class="line" data-i="${s.i}">
+    <button class="ghost play" data-s="${s.start}" data-e="${s.end}" title="Play this line">▶</button>
+    <span class="t">${mmss(s.start)}</span>
+    <select data-i="${s.i}">${speakerOptions(s.speaker)}</select>
+    <span class="x">${esc(s.text)}</span></div>`).join("") || '<p class="mute">No lines.</p>';
+  $("#tagMore").classList.toggle("hidden", rows.length <= tagShown);
+  document.querySelectorAll("#tagLines .play").forEach(b => b.onclick = () => playClip(b, +b.dataset.s, Math.max(+b.dataset.e, +b.dataset.s + 1.5)));
+  document.querySelectorAll("#tagLines select").forEach(sel => sel.onchange = () => tagLine(sel));
+}
+async function tagLine(sel) {
+  const i = +sel.dataset.i;
+  let body;
+  if (sel.value === "__new") {
+    const n = (prompt("Who is speaking in this line?") || "").trim();
+    if (!n) { renderLines(); return; }
+    body = { name: n };
+  } else {
+    const s = tagSpk.find(x => x.label === sel.value);
+    body = s && s.name ? { name: s.name } : { speaker: sel.value };
+  }
+  body.learn = $("#spkRemember").checked;
+  $("#tagMsg").textContent = "Saving…";
+  try {
+    const r = await (await api(`/api/jobs/${current}/segments/${i}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })).json();
+    tagSegs[i].speaker = r.speaker;
+    if (r.name && !tagSpk.some(x => x.label === r.speaker)) tagSpk.push({ label: r.speaker, name: r.name });
+    else if (r.name) tagSpk.find(x => x.label === r.speaker).name = r.name;
+    $("#tagMsg").textContent = `${mmss(tagSegs[i].start)} → ${r.name || r.speaker}` + (r.learned ? " · voice learned" : "");
+    renderLines();
+    const line = document.querySelector(`#tagLines .line[data-i="${i}"]`); if (line) line.classList.add("done");
+    loadVoices();
+    refreshAfterTag(i);
+  } catch (e) { $("#tagMsg").textContent = "Couldn't save: " + e.message; renderLines(); }
+}
+// minutes + speaker list show the new name, without losing your place in the lines
+async function refreshAfterTag(i) {
+  const id = current, top = $("#tagLines").scrollTop, f = $("#tagFilter").value, shown = tagShown;
+  try {
+    const j = await (await api(`/api/jobs/${id}`)).json();
+    if (id !== current) return;
+    $("#view").innerHTML = md(await (await api(j.results.markdown)).text());
+    await loadSpeakers(id);
+    if ([...$("#tagFilter").options].some(o => o.value === f)) $("#tagFilter").value = f;
+    tagShown = shown; renderLines();
+    $("#tagLines").scrollTop = top;
+    const line = document.querySelector(`#tagLines .line[data-i="${i}"]`); if (line) line.classList.add("done");
+  } catch (e) {}
+}
+$("#tagFilter").onchange = () => { tagShown = 200; renderLines(); };
+$("#tagMore").onclick = () => { tagShown += 300; renderLines(); };
+
 async function loadSpeakers(id) {
   const sp = (await (await api(`/api/jobs/${id}/speakers`)).json()).speakers;
+  let segs = [];
+  try { segs = (await (await api(`/api/jobs/${id}/transcript.json`)).json()).segments || []; } catch (e) {}
+  tagSegs = segs; tagSpk = sp.map(s => ({ label: s.label, name: s.name })); tagShown = 200;
+  // each speaker's longest line (up to 12 s) to listen to
+  const longest = {};
+  segs.forEach(s => { if (s.speaker && (!longest[s.speaker] || s.end - s.start > longest[s.speaker].end - longest[s.speaker].start)) longest[s.speaker] = s; });
+  $("#tagBox").classList.toggle("hidden", !segs.length);
+  $("#tagFilter").innerHTML = '<option value="">All lines</option>' + sp.map(s => `<option value="${esc(s.label)}">Only ${esc(s.name || s.label)}</option>`).join("");
+  renderLines();
   $("#spkBox").classList.toggle("hidden", !sp.length);
-  $("#spkList").innerHTML = sp.map(s => `<div class="spk"><span>${esc(s.label)}${s.auto ? '<span class="badge" title="recognised by voice">recognised</span>' : ""}</span>
+  $("#spkList").innerHTML = sp.map(s => `<div class="spk"><button class="ghost play" data-l="${esc(s.label)}" title="Hear them"${longest[s.label] ? "" : " disabled"}>▶</button><span>${esc(s.label)}${s.auto ? '<span class="badge" title="recognised by voice">recognised</span>' : ""}</span>
     <input type="text" data-l="${esc(s.label)}" value="${esc(s.name)}" placeholder="Name">
     <span class="mute" title="${esc(s.sample)}">${Math.round(s.seconds / 60) || "<1"} min · "${esc(s.sample)}"</span></div>`).join("");
+  document.querySelectorAll("#spkList .play").forEach(b => b.onclick = () => {
+    const s = longest[b.dataset.l]; if (s) playClip(b, s.start, Math.min(s.end, s.start + 12));
+  });
 }
 $("#spkSave").onclick = async () => {
   const names = {}; document.querySelectorAll("#spkList input").forEach(i => names[i.dataset.l] = i.value.trim());

@@ -174,6 +174,20 @@ the `ollama` service in this compose file). Fix one of:
   name to the host) and start Ollama with `OLLAMA_HOST=0.0.0.0`;
 * Ollama runs on another machine - set `OLLAMA_URL=http://<its-ip>:11434`.
 
+## Who said what (1.3.7)
+
+Open a recording on the web page:
+
+* **Who's speaking?** - each speaker has a ▶ button that plays their longest line. Type names and *Save names*.
+* **Who said what** - every transcript line with ▶ (play just that line) and a speaker menu. Pick who really said it,
+  or *Someone else…* to add a person. With *Remember voices* on, that clip is added to the person's voice print, so
+  later meetings name them automatically (and better each time you correct one). Filter to one speaker to check them.
+* Names change in the minutes right away; *Redo minutes* rewrites the wording with the corrected speakers.
+
+API: `GET /api/jobs/{id}/clip?start=12.5&end=20` (WAV, at most 60 s) and
+`POST /api/jobs/{id}/segments/{line}` with `{"name": "Alan", "learn": true}` or `{"speaker": "Speaker 2"}`.
+The watch can name speakers too (meeting list → hold → *Name the speakers*).
+
 ## Calendar (Agenda app on the Idea Saver)
 
 Add your calendars' **private ICS links** to `CALENDAR_ICS_URLS` and redeploy:

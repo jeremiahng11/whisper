@@ -263,6 +263,83 @@ def partial(path: str, state: dict, prompt: str = "", max_part_s: int = 600) -> 
     return True
 
 
+# ---------------------------------------------------------------- clips (listen to one stretch of a meeting)
+def load_range(path: str, start: float, end: float) -> np.ndarray:
+    """Audio from start..end seconds as 16 kHz float32. Plain PCM16 / IMA ADPCM WAVs are read by seeking (fast even
+    for a 2-hour meeting); anything else is decoded whole and cut."""
+    start, end = max(0.0, start), max(start, end)
+    try:
+        with open(path, "rb") as f:
+            head = f.read(12)
+            if head[:4] == b"RIFF" and head[8:12] == b"WAVE":
+                fmt = None
+                while True:
+                    ch = f.read(8)
+                    if len(ch) < 8:
+                        break
+                    cid, size = ch[:4], struct.unpack("<I", ch[4:])[0]
+                    if cid == b"fmt ":
+                        fmt = struct.unpack("<HHIIHH", f.read(16))
+                        f.seek(size - 16 + (size & 1), 1)
+                    elif cid == b"data" and fmt:
+                        tag, chans, rate, _, align, bits = fmt
+                        base = f.tell()
+                        if tag == 0x11 and chans == 1:                     # IMA ADPCM blocks
+                            spb = (align - 4) * 2 + 1
+                            b0, b1 = int(start * rate) // spb, int(end * rate) // spb + 1
+                            f.seek(base + b0 * align)
+                            a = ima_adpcm_decode(f.read((b1 - b0) * align), align).astype(np.float32) / 32768.0
+                            a = _resample(a, rate)
+                            off = int(start * SR) - round(b0 * spb * SR / rate)
+                            return a[max(0, off):max(0, off) + int(end * SR) - int(start * SR)]
+                        if tag == 1 and bits == 16:
+                            frame = 2 * chans
+                            f.seek(base + int(start * rate) * frame)
+                            raw = f.read(int((end - start) * rate) * frame)
+                            raw = raw[: len(raw) // frame * frame]
+                            a = np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32768.0
+                            if chans > 1:
+                                a = a.reshape(-1, chans).mean(axis=1)
+                            return _resample(a, rate)
+                        break
+                    else:
+                        f.seek(size + (size & 1), 1)
+    except OSError:
+        pass
+    a = load_audio(path)
+    return a[int(start * SR):int(end * SR)]
+
+
+def wav16(a: np.ndarray) -> bytes:
+    """float32 16 kHz mono -> a small PCM16 WAV the browser can play."""
+    pcm = (np.clip(a, -1, 1) * 32767).astype("<i2").tobytes()
+    return (b"RIFF" + struct.pack("<I", 36 + len(pcm)) + b"WAVEfmt " + struct.pack("<IHHIIHH", 16, 1, 1, SR, SR * 2, 2, 16)
+            + b"data" + struct.pack("<I", len(pcm)) + pcm)
+
+
+def embed_clip(a: np.ndarray) -> Optional[list[float]]:
+    """Voice print of one clip, in the same space as the diarizer's speaker embeddings (None if not available)."""
+    if len(a) < SR * 1.5:
+        return None
+    if settings.diarizer == "fake":
+        return [1.0, 0.0, 0.0, 0.0]
+    try:
+        import torch
+        pipe = _get_diarizer()
+        emb_model = getattr(pipe, "_embedding", None)
+        if emb_model is None:
+            return None
+        w = torch.from_numpy(a[: SR * 30].astype(np.float32)).reshape(1, 1, -1)
+        v = emb_model(w)
+        v = np.asarray(v.detach().cpu() if hasattr(v, "detach") else v).reshape(-1)
+        if not len(v) or np.any(np.isnan(v)):
+            return None
+        return [round(float(x), 5) for x in v]
+    except Exception as e:                                   # noqa: BLE001
+        log.warning("voice print of a clip failed: %s", e)
+        return None
+
+
 # ---------------------------------------------------------------- speaker labels
 _diar = None
 
