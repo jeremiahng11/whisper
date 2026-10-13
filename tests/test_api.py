@@ -601,3 +601,24 @@ def test_clip_and_tag_a_line(client):
     assert client.post(f"/api/jobs/{j['id']}/segments/{k}", json={"name": "priya"}, headers=H).json()["speaker"] == out["speaker"]
     assert client.post(f"/api/jobs/{j['id']}/segments/9999", json={"name": "x"}, headers=H).status_code == 404
     assert client.post(f"/api/jobs/{j['id']}/segments/{i}", json={}, headers=H).status_code == 400
+
+
+def test_storage_kind_detects_temporary_volume():
+    from app import main as m
+    d = os.path.realpath(str(settings.data_dir))
+    root = "1 0 0:1 / / rw - overlay overlay rw\n"
+    anon = root + f"2 1 8:1 /var/lib/docker/volumes/{'a3' * 32}/_data {d} rw - ext4 /dev/sda1 rw\n"
+    named = root + f"2 1 8:1 /var/lib/docker/volumes/hg9f-whisper-data/_data {d} rw - ext4 /dev/sda1 rw\n"
+    bind = root + f"2 1 8:1 /srv/whisper {d} rw - ext4 /dev/sda1 rw\n"
+    assert m.storage_kind(root) == "temporary"
+    assert m.storage_kind(anon) == "temporary"
+    assert m.storage_kind(named) == "persistent"
+    assert m.storage_kind(bind) == "persistent"
+    assert client_health_has_storage()
+
+
+def client_health_has_storage():
+    from fastapi.testclient import TestClient
+    from app import main as m
+    with TestClient(m.app) as c:
+        return c.get("/api/health").json()["storage"] in ("temporary", "persistent", "unknown")

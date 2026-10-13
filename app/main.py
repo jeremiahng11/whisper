@@ -19,7 +19,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.3.7"
+VERSION = "1.3.8"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -796,6 +796,31 @@ def file_delete(path: str, device: str = Query(...), base_rev: int = Query(0), b
 
 
 # ---------------------------------------------------------------- misc
+def storage_kind(mountinfo: Optional[str] = None) -> str:
+    """Is DATA_DIR kept across redeploys? "temporary" = an anonymous Docker volume (a new, empty one each deploy,
+    e.g. Coolify's Dockerfile build pack without Persistent Storage), "persistent" = a named volume or bind mount."""
+    try:
+        if mountinfo is None:
+            with open("/proc/self/mountinfo") as f:
+                mountinfo = f.read()
+    except OSError:
+        return "unknown"
+    target = os.path.realpath(str(settings.data_dir))
+    best = None
+    for line in mountinfo.splitlines():
+        parts = line.split()
+        if len(parts) < 5:
+            continue
+        root, point = parts[3], parts[4]
+        if (target == point or target.startswith(point.rstrip("/") + "/")) and (best is None or len(point) > len(best[1])):
+            best = (root, point)
+    if not best or best[1] == "/":
+        return "temporary"                           # not a mount at all: inside the container's own layer
+    if re.search(r"/volumes/[0-9a-f]{64}/_data", best[0]):
+        return "temporary"                           # anonymous volume (64-hex name)
+    return "persistent"
+
+
 @app.get("/api/health")
 def health():
     return {
@@ -808,6 +833,7 @@ def health():
         "llm": summarize.llm_status(),
         "default_language": settings.default_language or "auto",
         "region": settings.region or "none",
+        "storage": storage_kind(),
         "summary_language": settings.summary_language or "same as speech",
         "diarize_default": settings.diarize,
         "diarize_installed": importlib.util.find_spec("pyannote") is not None,

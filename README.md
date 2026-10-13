@@ -20,8 +20,22 @@ summary, key points, decisions, action items and the full timestamped transcript
    so give it a few minutes. `GET /api/health` shows `"model_loaded": true` when ready.
 5. Open the domain in a browser, paste the API key, drop in an audio file.
 
-Coolify uses named volumes, so nothing else is needed. (If you switch to a bind mount, make the folder
-writable by uid 1000.)
+With the Docker Compose build pack Coolify uses the named volumes from `docker-compose.yml`, so nothing else is
+needed. (If you switch to a bind mount, make the folder writable by uid 1000.)
+
+**Using the Dockerfile build pack instead?** Then Coolify ignores `docker-compose.yml` and `/data` is a temporary
+volume: every deploy starts empty (recordings, minutes, Names & terms, remembered voices, the downloaded model).
+The web page shows a red warning and `/api/health` says `"storage": "temporary"`. Fix it once:
+app → **Persistent Storage** → **+ Add** → *Volume*, name `whisper-data`, destination path `/data` → redeploy.
+To keep what is there now, copy it out first (on the server):
+
+```
+C=$(docker ps --format '{{.Names}} {{.Image}}' | grep -i whisper | grep -vi ollama | head -1 | cut -d' ' -f1)
+docker cp "$C":/data /root/whisper-backup                 # before adding the storage
+# add Persistent Storage /data in Coolify, redeploy, then:
+C=$(docker ps --format '{{.Names}} {{.Image}}' | grep -i whisper | grep -vi ollama | head -1 | cut -d' ' -f1)
+docker cp /root/whisper-backup/. "$C":/data/ && docker restart "$C"
+```
 
 **Cloudflare:** the free plan limits a single request to 100 MB. A 1-hour 16 kHz WAV is ~115 MB, so either
 use the resumable upload below (chunks of a few MB - what the Idea Saver does), or turn off the proxy (grey cloud)

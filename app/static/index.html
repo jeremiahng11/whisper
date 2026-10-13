@@ -73,6 +73,13 @@ textarea.gl{width:100%;min-height:120px;background:var(--bg);color:var(--ink);bo
   <h1>Whisper Minutes</h1>
   <p class="sub">Self-hosted transcription and meeting summaries. Recordings stay on this server.</p>
 
+  <div class="card hidden" id="storageWarn" style="border-color:var(--warn)">
+    <strong style="color:var(--warn)">Your data is wiped on every deploy.</strong>
+    This server keeps recordings, minutes, Names &amp; terms and remembered voices in <code>/data</code>, but <code>/data</code>
+    is a temporary Docker volume. In Coolify open this app → <b>Persistent Storage</b> → <b>+ Add</b> → Volume, name
+    <code>whisper-data</code>, destination path <code>/data</code>, then redeploy. (Copy your Names &amp; terms first.)
+  </div>
+
   <div class="card row">
     <input id="key" type="password" placeholder="API key" autocomplete="off">
     <button class="ghost" id="saveKey">Save key</button>
@@ -195,6 +202,7 @@ async function health() {
       $("#diar").disabled = h.diarize_installed === false;
       $("#diarLabel").title = h.diarize_installed === false ? "Not installed: rebuild with INSTALL_DIARIZE=1" : "";
     }
+    $("#storageWarn").classList.toggle("hidden", h.storage !== "temporary");
     $("#health").textContent = `${h.model}${h.model_loaded ? "" : " (loading…)"} · summary: ${h.summary_backend === "none" ? "off" : h.summary_model}`;
   } catch (e) { $("#health").textContent = "server not reachable"; }
 }
