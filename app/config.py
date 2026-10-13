@@ -74,6 +74,11 @@ class Settings:
     calendar_ics_urls: str = os.getenv("CALENDAR_ICS_URLS", "")   # private ICS links, comma separated
     calendar_tz: str = os.getenv("CALENDAR_TZ", os.getenv("TZ", "Asia/Singapore"))
     calendar_cache_s: int = _int("CALENDAR_CACHE_S", 300)
+    # Microsoft 365 / Teams calendar read directly (Microsoft Graph, app-only, read-only): no public link needed
+    ms_tenant_id: str = os.getenv("MS_TENANT_ID", "")
+    ms_client_id: str = os.getenv("MS_CLIENT_ID", "")
+    ms_client_secret: str = os.getenv("MS_CLIENT_SECRET", "")
+    ms_calendar_user: str = os.getenv("MS_CALENDAR_USER", "")    # mailbox(es) to read, e.g. you@company.com
 
     # --- file sync (device notes backup) ---
     sync_max_kb: int = _int("SYNC_MAX_KB", 1024)                    # largest text file accepted

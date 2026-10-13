@@ -213,6 +213,32 @@ Add your calendars' **private ICS links** to `CALENDAR_ICS_URLS` and redeploy:
 `GET /api/agenda?days=7` returns `{"events":[{"title","start","end","all_day","location","attendees"}]}` (epoch seconds),
 recurring meetings expanded, cancelled ones dropped, duplicates across calendars merged. Links are fetched at most every 5 min.
 
+
+### Teams / Outlook (Microsoft 365) without a public link
+
+If "Publish a calendar" isn't available (often switched off on work accounts), the server can read your calendar
+through Microsoft Graph, read-only, signed in as an app:
+
+1. **entra.microsoft.com** → *App registrations* → *New registration*: name `Whisper Minutes calendar`,
+   single tenant, no redirect URI → *Register*. Copy the **Application (client) ID** and **Directory (tenant) ID**.
+2. *API permissions* → *Add a permission* → *Microsoft Graph* → **Application permissions** → `Calendars.Read`
+   → *Add*, then **Grant admin consent**.
+3. *Certificates & secrets* → *New client secret* (e.g. 24 months) → copy the **Value** (shown once).
+4. **Limit it to your mailbox** (otherwise the app may read every calendar in the company). In Exchange Online
+   PowerShell (`Connect-ExchangeOnline`):
+   ```
+   New-ApplicationAccessPolicy -AppId <client id> -PolicyScopeGroupId you@company.com -AccessRight RestrictAccess `
+     -Description "Whisper Minutes: only my calendar"
+   Test-ApplicationAccessPolicy -AppId <client id> -Identity you@company.com      # AccessCheckResult: Granted
+   Test-ApplicationAccessPolicy -AppId <client id> -Identity someone.else@company.com   # Denied
+   ```
+5. In Coolify set `MS_TENANT_ID`, `MS_CLIENT_ID`, `MS_CLIENT_SECRET`, `MS_CALENDAR_USER=you@company.com`
+   (and `CALENDAR_TZ=Asia/Singapore`), redeploy. `/api/health` shows `"calendars": 1`; errors from Microsoft show
+   in `GET /api/agenda` under `errors`.
+
+Meetings come with their real attendee names (rooms left out), cancelled ones are skipped. ICS links and
+Microsoft 365 can be used together.
+
 ## Meeting notes
 
 The device sends notes typed during a recording as a JSON body on `POST /api/uploads/{rid}/complete`:

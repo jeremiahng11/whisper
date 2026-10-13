@@ -639,3 +639,38 @@ def test_tts_adpcm_is_smaller_and_decodes():
     dec = transcribe.load_audio(str(p))[:len(pcm)] * 32768
     err = np.sqrt(np.mean((pcm - dec) ** 2)) / np.sqrt(np.mean(pcm ** 2))
     assert len(dec) == len(pcm) and err < 0.05
+
+
+def test_microsoft_graph_calendar(client, monkeypatch):
+    from app import agenda
+    import httpx as _h
+    monkeypatch.setattr(settings, "ms_tenant_id", "t"); monkeypatch.setattr(settings, "ms_client_id", "c")
+    monkeypatch.setattr(settings, "ms_client_secret", "s"); monkeypatch.setattr(settings, "ms_calendar_user", "me@aleta.test")
+    monkeypatch.setattr(settings, "calendar_ics_urls", "")
+    agenda._cache.clear(); agenda._token = (0.0, "")
+    calls = []
+
+    class R:
+        def __init__(self, code, j): self.status_code, self._j, self.text = code, j, ""
+        def json(self): return self._j
+
+    def post(url, **kw):
+        calls.append(("POST", url)); assert kw["data"]["grant_type"] == "client_credentials"
+        return R(200, {"access_token": "tok", "expires_in": 3600})
+
+    def get(url, params=None, headers=None, **kw):
+        calls.append(("GET", url)); assert headers["Authorization"] == "Bearer tok" and "me@aleta.test" in url
+        return R(200, {"value": [
+            {"subject": "Shenzhen supplier call", "start": {"dateTime": "2030-01-07T02:00:00.0000000"},
+             "end": {"dateTime": "2030-01-07T03:00:00.0000000"}, "isAllDay": False, "location": {"displayName": "Microsoft Teams Meeting"},
+             "organizer": {"emailAddress": {"name": "Jeremiah Ng"}},
+             "attendees": [{"type": "required", "emailAddress": {"name": "Alan Lim"}}, {"type": "resource", "emailAddress": {"name": "Room 3"}}]},
+            {"subject": "Cancelled one", "isCancelled": True, "start": {"dateTime": "2030-01-07T05:00:00"}, "end": {"dateTime": "2030-01-07T06:00:00"}},
+        ]})
+    monkeypatch.setattr(_h, "post", post); monkeypatch.setattr(_h, "get", get)
+    assert client.get("/api/health").json()["calendars"] == 1
+    ev = client.get("/api/agenda?days=7", headers=H).json()["events"]
+    assert len(ev) == 1 and ev[0]["title"] == "Shenzhen supplier call" and ev[0]["attendees"] == ["Jeremiah Ng", "Alan Lim"]
+    assert ev[0]["start"] == 1893981600 and ev[0]["location"] == "Microsoft Teams Meeting"      # 2030-01-07 02:00 UTC
+    client.get("/api/agenda?days=7", headers=H)
+    assert [c[0] for c in calls] == ["POST", "GET"]                                            # token + events cached

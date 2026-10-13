@@ -19,7 +19,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.3.9"
+VERSION = "1.4.0"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -713,8 +713,8 @@ async def text_to_speech(request: Request):
 # ---------------------------------------------------------------- calendar (device Agenda app)
 @app.get("/api/agenda", dependencies=[Depends(auth)])
 def get_agenda(days: int = Query(7, ge=1, le=60)):
-    if not agenda.urls():
-        raise HTTPException(503, "no calendars configured - set CALENDAR_ICS_URLS")
+    if not agenda.sources():
+        raise HTTPException(503, "no calendars configured - set CALENDAR_ICS_URLS or MS_TENANT_ID/MS_CLIENT_ID/MS_CLIENT_SECRET/MS_CALENDAR_USER")
     return agenda.agenda(days)
 
 
@@ -844,7 +844,7 @@ def health():
         "diarize_default": settings.diarize,
         "diarize_installed": importlib.util.find_spec("pyannote") is not None,
         "hf_token_set": bool(settings.hf_token),
-        "calendars": len(agenda.urls()),
+        "calendars": agenda.sources(),
         "best_model": summarize.best_model(),
         "redact": settings.redact,
         "voices": len(voices.list_voices()),
