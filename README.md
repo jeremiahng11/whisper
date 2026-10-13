@@ -221,17 +221,20 @@ through Microsoft Graph, read-only, signed in as an app:
 
 1. **entra.microsoft.com** → *App registrations* → *New registration*: name `Whisper Minutes calendar`,
    single tenant, no redirect URI → *Register*. Copy the **Application (client) ID** and **Directory (tenant) ID**.
-2. *API permissions* → *Add a permission* → *Microsoft Graph* → **Application permissions** → `Calendars.Read`
-   → *Add*, then **Grant admin consent**.
+2. **Don't** add `Calendars.Read` under *API permissions* (an Entra grant there means *every* calendar in the
+   company). The permission is given in Exchange instead, for your mailbox only (RBAC for Applications - it replaces
+   Application Access Policies).
 3. *Certificates & secrets* → *New client secret* (e.g. 24 months) → copy the **Value** (shown once).
-4. **Limit it to your mailbox** (otherwise the app may read every calendar in the company). In Exchange Online
-   PowerShell (`Connect-ExchangeOnline`):
+4. Exchange Online PowerShell (`Connect-ExchangeOnline`, as Exchange admin). Take the IDs from
+   *Enterprise applications* → `Whisper Minutes calendar` (the Object ID there, not the one in App registrations):
    ```
-   New-ApplicationAccessPolicy -AppId <client id> -PolicyScopeGroupId you@company.com -AccessRight RestrictAccess `
-     -Description "Whisper Minutes: only my calendar"
-   Test-ApplicationAccessPolicy -AppId <client id> -Identity you@company.com      # AccessCheckResult: Granted
-   Test-ApplicationAccessPolicy -AppId <client id> -Identity someone.else@company.com   # Denied
+   New-ServicePrincipal -AppId <application id> -ObjectId <enterprise app object id> -DisplayName "Whisper Minutes calendar"
+   New-ManagementScope -Name "Whisper - my mailbox" -RecipientRestrictionFilter "PrimarySmtpAddress -eq 'you@company.com'"
+   New-ManagementRoleAssignment -App <application id> -Role "Application Calendars.Read" -CustomResourceScope "Whisper - my mailbox"
+   Test-ServicePrincipalAuthorization -Identity <application id> -Resource you@company.com | Format-Table   # InScope True
+   Test-ServicePrincipalAuthorization -Identity <application id> -Resource someone.else@company.com | Format-Table  # False
    ```
+   It can take 30 minutes to 2 hours before it works.
 5. In Coolify set `MS_TENANT_ID`, `MS_CLIENT_ID`, `MS_CLIENT_SECRET`, `MS_CALENDAR_USER=you@company.com`
    (and `CALENDAR_TZ=Asia/Singapore`), redeploy. `/api/health` shows `"calendars": 1`; errors from Microsoft show
    in `GET /api/agenda` under `errors`.
