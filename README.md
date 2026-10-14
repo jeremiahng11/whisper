@@ -241,7 +241,8 @@ Open a recording on the web page:
 * **Dynamics tab:** per meeting - talk share, turns, average and longest turn, questions, cutting in, who answered
   whom, who opened and closed - and an AI read of how it ran (who led, who drove what, open disagreements, and with
   a vendor / partner / client: who spoke for us and what the other side pushed for). Mark a meeting as external there.
-  `GET/POST /api/jobs/{id}/dynamics` (`{"external": true}`, `{"write": true}`).
+  `GET/POST /api/jobs/{id}/dynamics` (`{"external": true}`, `{"write": true}`). The AI read is written by itself when
+  the server is idle (recent 30 meetings, one at a time) and rewritten after names or lines change.
 * **Fix the words, the server learns:** click a line's words in *Who said what*, correct them, press Enter. The
   words you replaced are remembered (`TAPIN` -> `DABIN`, `B to B` -> `B2B`, `see trip` -> `CTRIP`) and fixed in every
   meeting, new ones as they're transcribed, and the right words are given to Whisper as hints. Everyday English

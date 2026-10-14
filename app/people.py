@@ -427,7 +427,15 @@ def _sweep() -> None:
                         if n:
                             log.info("kept %d more voice samples from %s", n, j["id"])
                             break
-                for n in all_names():
+                from . import dynamics
+                busy = False
+                for j in db.list_jobs(30, "done"):         # the AI read of recent meetings, kept up to date
+                    if dynamics.needs_note(j["id"]):
+                        log.info("writing the AI read of %s", j["id"])
+                        dynamics.write_note(j["id"])
+                        busy = True
+                        break
+                for n in ([] if busy else all_names()):
                     p = get(n)
                     if not p or p.get("sig") != _sig(n):
                         log.info("updating the profile of %s", n)

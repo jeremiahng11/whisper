@@ -128,12 +128,33 @@ def write_note(jid: str) -> None:
             tr = worker.load_transcript(jid) or {}
             st = stats(job, tr)
             n = note(job, tr, st)
+            cached = worker.load_json(jid, "dynamics.json", {}) or {}
             if n:
-                worker._write(jid, "dynamics.json", json.dumps({"note": n, "sig": _sig(job, tr, st), "at": int(time.time())},
-                                                               ensure_ascii=False))
+                cached = {"note": n, "sig": _sig(job, tr, st), "at": int(time.time())}
+            else:                                            # the model failed: don't retry this every few minutes
+                cached.update(failed_sig=_sig(job, tr, st), failed_at=int(time.time()))
+            worker._write(jid, "dynamics.json", json.dumps(cached, ensure_ascii=False))
         finally:
             _writing.discard(jid)
     threading.Thread(target=run, daemon=True).start()
+
+
+def needs_note(jid: str) -> bool:
+    """No AI read yet, or names / lines changed since it was written (and there are speakers and a model)."""
+    if not summarize.enabled() or jid in _writing:
+        return False
+    job = db.get(jid)
+    if not job or job.get("status") != "done":
+        return False
+    tr = worker.load_transcript(jid) or {}
+    st = stats(job, tr)
+    if len(st["people"]) < 2:
+        return False
+    cached = worker.load_json(jid, "dynamics.json", {}) or {}
+    sig = _sig(job, tr, st)
+    if cached.get("failed_sig") == sig and time.time() - cached.get("failed_at", 0) < 3600:
+        return False
+    return cached.get("sig") != sig
 
 
 def get(jid: str) -> dict:

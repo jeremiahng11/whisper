@@ -640,8 +640,8 @@ async function loadDynamics(force) {
     ${replies ? `<div class="sub2" style="margin-top:16px">Who answered whom</div><ul class="replies">${replies}</ul>` : ""}
     <div class="block pnote"><div class="row" style="justify-content:space-between"><div class="sub2">AI read of the meeting</div>
       ${d.llm ? `<button class="ghost" id="dynWrite">${d.note ? "Write again" : "Write it"}</button>` : ""}</div>
-      ${d.writing ? '<p class="mute">Writing… about a minute.</p>' : d.note ? md(d.note) + (d.note_stale ? '<p class="mute">Names or the meeting changed since this was written - write it again for an up-to-date read.</p>' : "")
-        : `<p class="mute">${d.llm ? "How the meeting ran, who drove what, and how the team dealt with the other party. Click Write it." : "Needs a summary model (SUMMARY_BACKEND)."}</p>`}</div>`;
+      ${d.writing ? '<p class="mute">Writing… about a minute.</p>' : d.note ? md(d.note) + (d.note_stale ? '<p class="mute">Names or lines changed since this was written. It updates by itself within a few minutes when the server is free, or click Write again.</p>' : "")
+        : `<p class="mute">${d.llm ? "How the meeting ran, who drove what, and how the team dealt with the other party. It's written by itself a few minutes after the meeting is ready (when the server is free) - or click Write it now." : "Needs a summary model (SUMMARY_BACKEND)."}</p>`}</div>`;
   document.querySelectorAll('#dynBox input[name=ext]').forEach(r => r.onchange = async () => {
     await api(`/api/jobs/${id}/dynamics`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ external: r.value === "1" }) });
     loadDynamics();

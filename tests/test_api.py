@@ -1228,3 +1228,21 @@ def test_passkey_site_follows_the_browser_behind_a_proxy():
         ("whisper.jeremiah.sg", "https://whisper.jeremiah.sg")
     assert login._site(req({"host": "whisper.jeremiah.sg", "origin": "https://evil.example"}))[1] == "http://whisper.jeremiah.sg"
     assert login._site(req({"host": "whisper.jeremiah.sg", "x-forwarded-proto": "https"}))[1] == "https://whisper.jeremiah.sg"
+
+
+def test_ai_read_needed_when_names_change(client):
+    from app import dynamics, worker, summarize
+    j = upload(client, "dev1-dynauto", 40, "diarize=true&speakers=2")
+    real = summarize.enabled
+    summarize.enabled = lambda: True
+    try:
+        assert dynamics.needs_note(j["id"])
+        worker._write(j["id"], "dynamics.json", '{"note": "x", "sig": ' + __import__("json").dumps(
+            dynamics._sig(__import__("app.db", fromlist=["get"]).get(j["id"]), worker.load_transcript(j["id"]),
+                          dynamics.stats(__import__("app.db", fromlist=["get"]).get(j["id"]), worker.load_transcript(j["id"])))) + '}')
+        assert not dynamics.needs_note(j["id"])
+        segs = worker.load_transcript(j["id"])["segments"]
+        client.post(f"/api/jobs/{j['id']}/speakers", json={"names": {segs[0]["speaker"]: "Wen Hui"}}, headers=H)
+        assert dynamics.needs_note(j["id"])                     # names changed: the read is out of date
+    finally:
+        summarize.enabled = real
