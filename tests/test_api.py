@@ -1246,3 +1246,20 @@ def test_ai_read_needed_when_names_change(client):
         assert dynamics.needs_note(j["id"])                     # names changed: the read is out of date
     finally:
         summarize.enabled = real
+
+
+def test_builtin_fintech_vocabulary(client):
+    from app import terms, vocab
+    tr = {"segments": [{"text": "the k y c and K.Y.C. checks, s g q r and the psp, fast transfer, the bin is full"}]}
+    terms.fix_transcript(tr)
+    t = tr["segments"][0]["text"]
+    assert "KYC and KYC" in t and "SGQR" in t and "PSP" in t and "fast transfer" in t and "the bin is full" in t, t
+    v = client.get("/api/vocab", headers=H).json()["packs"]
+    assert {p["id"] for p in v} == {"payments", "tech", "finance"} and all(p["on"] for p in v)
+    client.put("/api/vocab", json={"on": ["tech", "finance"]}, headers=H)
+    assert "SGQR" not in vocab.terms()
+    tr = {"segments": [{"text": "s g q r"}]}
+    terms.fix_transcript(tr)
+    assert tr["segments"][0]["text"] == "s g q r"
+    client.put("/api/vocab", json={"on": ["payments", "tech", "finance"]}, headers=H)
+    assert "SGQR" in vocab.terms()

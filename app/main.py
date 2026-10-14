@@ -15,12 +15,12 @@ from typing import Optional
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse, FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
 
-from . import agenda, autotag, chat, db, dynamics, login, people, redact, render, search, speech, summarize, terms, transcribe, voices, worker
+from . import agenda, autotag, chat, db, dynamics, login, people, vocab, redact, render, search, speech, summarize, terms, transcribe, voices, worker
 from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.9.3"
+VERSION = "1.10.0"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -768,6 +768,24 @@ async def edit_line(jid: str, idx: int, request: Request):
     if learned:
         worker.refresh_terms_everywhere()            # the same mistake in your other meetings
     return {"index": idx, "text": text, "learned": [{"heard": h, "right": r} for h, r in learned]}
+
+
+@app.get("/api/vocab", dependencies=[Depends(auth)])
+def get_vocab():
+    """Built-in vocabularies (payments / tech / finance) and which are on."""
+    on = set(vocab.enabled_packs())
+    return {"packs": [{"id": k, "label": v[0], "on": k in on, "terms": vocab._split(v[1])} for k, v in vocab.PACKS.items()]}
+
+
+@app.put("/api/vocab", dependencies=[Depends(auth)])
+async def set_vocab(request: Request):
+    """{"on": ["payments", "tech"]} - the rest are turned off; meetings are re-spelled in the background."""
+    data = await body_extra(request)
+    on = set(data.get("on") or [])
+    vocab.set_off([k for k in vocab.PACKS if k not in on])
+    vocab._recent["at"] = 0
+    worker.refresh_terms_everywhere()
+    return get_vocab()
 
 
 @app.get("/api/corrections", dependencies=[Depends(auth)])

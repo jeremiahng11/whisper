@@ -52,6 +52,7 @@ class Settings:
     autotag_new: bool = _bool("AUTOTAG_NEW", True)       # new meetings: name lines of voices already remembered
     autotag_sweep: bool = _bool("AUTOTAG_SWEEP", True)
     people_sweep: bool = _bool("PEOPLE_SWEEP", True)
+    vocab_packs: str = os.getenv("VOCAB_PACKS", "all")       # built-in vocabularies: payments,tech,finance | none
     admin_id: str = os.getenv("ADMIN_ID", "").strip()        # web page sign-in (both set = sign-in required)
     admin_pass: str = os.getenv("ADMIN_PASS", "")
     session_secret: str = os.getenv("SESSION_SECRET", "")    # optional; otherwise a random key kept in /data

@@ -374,6 +374,11 @@ ul.replies{margin:4px 0;padding-left:20px;font-size:13.5px}
         <div class="row" style="margin-top:8px"><button id="glossSave">Save</button><span class="mute" id="glossMsg"></span></div>
       </div>
       <div class="block">
+        <div class="sub2">Built-in vocabularies</div>
+        <p class="mute" style="margin:0 0 8px">Terms that come up in almost every meeting: spelled right in transcripts and minutes, and given to the speech model as hints. Spelled-out letters ("k y c", "K.Y.C.") become the acronym. Your own Names & terms and corrections always come first; everyday words in the lists (fast, bin, pin) are only hints and never changed in the text.</p>
+        <div id="vocab" class="mute">Loading…</div>
+      </div>
+      <div class="block">
         <div class="sub2">Learned corrections</div>
         <p class="mute" style="margin:0 0 8px">Words the speech model mis-heard and you fixed. They're corrected in every meeting, and new meetings get them right as they're transcribed.</p>
         <div id="corr" class="mute">None yet.</div>
@@ -606,6 +611,18 @@ function editWords(w) {
       if (r.learned.length) loadCorrections();
     } catch (e) { w.textContent = w.dataset.was; $("#tagMsg").textContent = "Couldn't save: " + e.message; }
   };
+}
+async function loadVocab() {
+  try {
+    const v = (await (await api("/api/vocab")).json()).packs;
+    $("#vocab").innerHTML = v.map(p => `<div style="margin:6px 0"><label class="mute" style="color:var(--ink);font-size:14px"><input type="checkbox" data-p="${p.id}"${p.on ? " checked" : ""}> <b>${esc(p.label)}</b> <span class="mute">${p.terms.length} terms</span></label>
+      <details style="margin:2px 0 0 24px"><summary class="mute" style="cursor:pointer">Show the terms</summary><div class="words">${p.terms.map(t => `<span>${esc(t)}</span>`).join("")}</div></details></div>`).join("");
+    document.querySelectorAll("#vocab input[data-p]").forEach(c => c.onchange = async () => {
+      const on = [...document.querySelectorAll("#vocab input[data-p]:checked")].map(x => x.dataset.p);
+      await api("/api/vocab", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ on }) });
+      $("#glossMsg").textContent = "Vocabularies saved - your meetings are re-spelled in the background.";
+    });
+  } catch (e) { $("#vocab").textContent = e.message; }
 }
 async function loadCorrections() {
   try {
@@ -1141,7 +1158,7 @@ $("#findAll").onclick = async () => {
 let glossLinks = { voices_linked: [] };
 async function loadGlossary() {
   try { const g = await (await api("/api/glossary")).json(); $("#gloss").value = g.text.trim(); glossLinks = g; } catch (e) {}
-  loadVoices(); loadCorrections();
+  loadVoices(); loadCorrections(); loadVocab();
 }
 $("#glossSave").onclick = async () => {
   const r = await (await api("/api/glossary", { method: "PUT", body: $("#gloss").value })).json();

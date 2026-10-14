@@ -112,11 +112,13 @@ def apply_corrections(text: str, c: Optional[dict] = None) -> str:
     return text
 
 
-def known_terms() -> list[str]:
+def known_terms(packs: bool = True) -> list[str]:
     """Names & terms, plus everyone with a remembered voice (they're spelled the same way everywhere), plus the right
-    words of your corrections."""
+    words of your corrections - then the built-in vocabularies (payments / tech / finance), after yours."""
+    from . import vocab
     out, seen = [], set()
-    for t in voices.glossary() + [v["name"] for v in voices.list_voices()] + [me_name()] + list(corrections().values()):
+    own = voices.glossary() + [v["name"] for v in voices.list_voices()] + [me_name()] + list(corrections().values())
+    for t in own + (vocab.terms(for_text=True) if packs else []):
         t = (t or "").strip()
         if t and t.lower() not in seen:
             seen.add(t.lower())
@@ -230,12 +232,14 @@ def fix_transcript(tr: dict, terms: list[str] | None = None) -> int:
     terms = known_terms() if terms is None else terms
     prepped = _prep(terms)
     corr = corrections()
+    from . import vocab
+    acr = [t for t in terms if re.fullmatch(r"[A-Z0-9]{2,6}\+?", t) and not t.isdigit()]
     n = 0
     for s in tr.get("segments", []):
         if s.get("edited"):                                 # you wrote this line yourself: leave it
             continue
         orig = s.get("heard") or s.get("text", "")
-        new = fix_text(apply_corrections(orig, corr), terms, prepped)
+        new = fix_text(vocab.spelled_acronyms(apply_corrections(orig, corr), acr), terms, prepped)
         if new != s.get("text", ""):
             n += 1
         if new != orig:

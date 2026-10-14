@@ -243,6 +243,11 @@ Open a recording on the web page:
   a vendor / partner / client: who spoke for us and what the other side pushed for). Mark a meeting as external there.
   `GET/POST /api/jobs/{id}/dynamics` (`{"external": true}`, `{"write": true}`). The AI read is written by itself when
   the server is idle (recent 30 meetings, one at a time) and rewritten after names or lines change.
+* **Built-in vocabularies** (Names page, `VOCAB_PACKS=all|payments,tech,finance|none`): about 280 payments /
+  fintech (KYC, AML, PSP, VASP, PayNow, SGQR, chargeback, MDR ...), tech (API, UAT, OAuth, Kubernetes ...) and finance
+  & compliance (MAS TRM, PDPA, EBITDA, P&L, STR, PEP ...) terms, spelled right in transcripts and minutes and given to
+  the speech model as hints (the ones your meetings use most go first). Spelled-out letters ("k y c", "K.Y.C.")
+  become the acronym. Your own Names & terms and corrections come first; everyday words (fast, bin, pin) are hints only.
 * **Fix the words, the server learns:** click a line's words in *Who said what*, correct them, press Enter. The
   words you replaced are remembered (`TAPIN` -> `DABIN`, `B to B` -> `B2B`, `see trip` -> `CTRIP`) and fixed in every
   meeting, new ones as they're transcribed, and the right words are given to Whisper as hints. Everyday English

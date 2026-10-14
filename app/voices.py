@@ -60,7 +60,9 @@ def whisper_prompt(attendees: Optional[list[str]] = None) -> str:
     if names:
         parts.append("People: " + ", ".join(names[:20]) + ".")
     from .terms import known_terms
-    terms = [t for t in known_terms() if t not in names]
+    from . import vocab
+    terms = [t for t in known_terms(packs=False) if t not in names]
+    terms += [t for t in vocab.recent() if t not in terms]  # the payments / tech / finance words your meetings use
     if terms:
         parts.append("Terms: " + ", ".join(terms) + ".")
     return " ".join(parts)[:700]

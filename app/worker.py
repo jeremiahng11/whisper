@@ -40,7 +40,7 @@ def load_summary(jid: str) -> str | None:
 def _write(jid: str, name: str, data: str) -> None:
     d = result_dir(jid)
     d.mkdir(parents=True, exist_ok=True)
-    tmp = d / (name + ".tmp")
+    tmp = d / f"{name}.{os.getpid()}.{threading.get_ident()}.tmp"   # unique: two writers never share a temp file
     tmp.write_text(data, encoding="utf-8")
     os.replace(tmp, d / name)
 

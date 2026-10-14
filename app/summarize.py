@@ -389,7 +389,8 @@ def summarize(transcript_text: str, language: str, progress: Optional[Callable[[
     if attendees:
         system += "\n- People in this meeting (from the calendar invite): " + ", ".join(attendees[:30]) + "."
     if glossary:
-        system += "\n- Correct spellings of names and terms (fix mis-heard versions): " + ", ".join(glossary[:200]) + "."
+        system += ("\n- Correct spellings of names and terms (fix mis-heard versions; keep acronyms like KYC, MAS, PSP "
+                   "in capitals): " + ", ".join(glossary[:260]) + ".")
     if people:
         system += ("\n- What earlier meetings show about the people speaking (use it to understand who means what and "
                    "who owns what; never copy it into the minutes):\n" + people)
