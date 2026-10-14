@@ -376,7 +376,7 @@ Use them to get names, decisions and action items right, and give them priority 
 def summarize(transcript_text: str, language: str, progress: Optional[Callable[[float, str], None]] = None,
               user_notes: str = "", template: str = "general", best: bool = False,
               attendees: Optional[list[str]] = None, glossary: Optional[list[str]] = None,
-              flagged: str = "", meeting_date: str = "") -> tuple[str, str]:
+              flagged: str = "", meeting_date: str = "", people: str = "") -> tuple[str, str]:
     """Returns (title, markdown body without the title line)."""
     progress = progress or (lambda p, s: None)
     spoken = re.sub(r"\[\d+:\d+(:\d+)?\]|\[[^\]]*\]:?", " ", transcript_text)
@@ -390,6 +390,9 @@ def summarize(transcript_text: str, language: str, progress: Optional[Callable[[
         system += "\n- People in this meeting (from the calendar invite): " + ", ".join(attendees[:30]) + "."
     if glossary:
         system += "\n- Correct spellings of names and terms (fix mis-heard versions): " + ", ".join(glossary[:200]) + "."
+    if people:
+        system += ("\n- What earlier meetings show about the people speaking (use it to understand who means what and "
+                   "who owns what; never copy it into the minutes):\n" + people)
     from .voices import region_rule
     if region_rule():
         system += "\n- " + region_rule()

@@ -9,7 +9,7 @@ import traceback
 from dataclasses import asdict
 from pathlib import Path
 
-from . import db, redact, render, search, summarize, terms, transcribe, voices
+from . import db, people, redact, render, search, summarize, terms, transcribe, voices
 from .config import settings
 
 log = logging.getLogger("worker")
@@ -132,6 +132,7 @@ def run_summary(jid: str) -> None:
             attendees=opts.get("attendees"), glossary=terms.known_terms(),
             flagged=render.flagged_text(named, render.parse_marks(opts.get("notes", ""))),
             meeting_date=meeting_date(job),
+            people=people.context_for(sorted(set(names.values()))),
         )
         _write(jid, "summary.md", body)
         opts = db.get(jid).get("options", {})

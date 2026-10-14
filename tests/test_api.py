@@ -16,6 +16,7 @@ os.environ["PRELOAD_MODEL"] = "0"
 os.environ["DIARIZER"] = "fake"
 os.environ["AUTOTAG_NEW"] = "0"          # tested on their own below (they'd change other tests' meetings)
 os.environ["AUTOTAG_SWEEP"] = "0"
+os.environ["PEOPLE_SWEEP"] = "0"
 
 import pytest
 from fastapi.testclient import TestClient
@@ -1132,3 +1133,41 @@ def test_speakers_renumbered_without_gaps(client):
     assert o["speaker_names"] == {"Speaker 1": "James"} and o["manual_lines"] == {"0": "Speaker 1"}
     assert "Speaker 2 - send the plan" in (worker.result_dir(jid) / "summary.md").read_text()
     assert autotag.renumber(jid) == {}
+
+
+def test_pitch_of_a_voice():
+    import numpy as np
+    from app import people
+    t = np.arange(16000 * 3) / 16000
+    a = (0.3 * np.sin(2 * np.pi * 140 * t) + 0.15 * np.sin(2 * np.pi * 280 * t)).astype(np.float32)
+    v = people.voice_stats([a])
+    assert 130 <= v["pitch_hz"] <= 150, v
+
+
+def test_people_profiles_and_samples(client):
+    from app import people, voices
+    _only_these_voices()
+    j = upload(client, "dev1-people", 40, "diarize=true&speakers=2")
+    client.post(f"/api/jobs/{j['id']}/segments/0", json={"name": "Priscilla"}, headers=H)
+    _wait_autotag(client, j["id"])
+    assert people.samples("Priscilla")["Priscilla"]                 # the tagged clip is kept as a sample
+    lst = client.get("/api/people", headers=H).json()["people"]
+    assert any(p["name"] == "Priscilla" for p in lst)
+    p = client.get("/api/people/Priscilla", headers=H).json()
+    assert p["lines"] >= 1 and p["meetings"][0]["id"] == j["id"] and p["samples"] >= 1
+    assert "sentence" in p["language"]["words"] or p["language"]["words"] == [] or p["language"]["pace_wpm"] is not None
+    # many samples: a voice close to one of them is still recognised
+    voices.remember("Zed", [0.0, 0.0, 1.0, 0.0])
+    voices.remember("Zed", [0.0, 0.0, 0.0, 1.0])
+    assert voices.match({"Speaker 9": {"embedding": [0.0, 0.0, 0.0, 1.0], "seconds": 10}}).get("Speaker 9") == "Zed"
+    assert client.delete("/api/voices/Zed", headers=H).status_code in (200, 204)
+    assert not people.samples("Zed")
+
+
+def test_meeting_dynamics(client):
+    j = upload(client, "dev1-dyn", 40, "diarize=true&speakers=2")
+    d = client.get(f"/api/jobs/{j['id']}/dynamics", headers=H).json()
+    assert len(d["people"]) == 2 and sum(p["share"] for p in d["people"]) in (99, 100, 101)
+    assert d["turns"] >= 4 and d["replies"] and not d["external"]
+    d = client.post(f"/api/jobs/{j['id']}/dynamics", json={"external": True}, headers=H).json()
+    assert d["external"]

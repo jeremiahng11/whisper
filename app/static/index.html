@@ -180,6 +180,33 @@ textarea.gl{width:100%;min-height:180px;font:13px/1.55 ui-monospace,Menlo,monosp
 #voices .chip{background:var(--chip);color:var(--ink);font-size:12.5px;line-height:24px;padding:0 10px}
 #storageWarn{border-color:var(--warn)}
 
+/* people */
+.ppl{display:grid;grid-template-columns:260px 1fr;gap:20px;align-items:start}
+.plist{background:var(--surface);border:1px solid var(--rule);border-radius:var(--r);padding:6px;max-height:70vh;overflow:auto}
+.plist .p{padding:8px 10px;border-radius:8px;cursor:pointer}
+.plist .p:hover{background:var(--sunk)}.plist .p.on{background:var(--chip)}
+.plist .p b{display:block;font-size:14px;font-weight:600}
+.pview h3{font-size:24px;margin:0 0 2px;letter-spacing:-.015em}
+.facts{display:flex;flex-wrap:wrap;gap:22px;margin:16px 0}
+.facts div{min-width:90px}.facts b{display:block;font-size:20px;font-weight:600;font-variant-numeric:tabular-nums}
+.facts span{font-size:12.5px;color:var(--mute)}
+.pitchbar{position:relative;height:8px;border-radius:4px;background:var(--chip);margin:6px 0 2px;max-width:420px}
+.pitchbar i{position:absolute;top:0;bottom:0;border-radius:4px;background:var(--action);opacity:.55}
+.pitchbar em{position:absolute;top:-3px;width:3px;height:14px;background:var(--action);border-radius:2px}
+.pitchaxis{display:flex;justify-content:space-between;max-width:420px;font-size:11.5px;color:var(--mute)}
+.words{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0}
+.words span{background:var(--chip);border-radius:12px;padding:1px 10px;font-size:13px}
+.pnote{max-width:72ch}.pnote h3{font-size:15px;margin:16px 0 4px;letter-spacing:0}.pnote ul{padding-left:20px;margin:4px 0}
+.share{height:10px;border-radius:5px;background:var(--chip);overflow:hidden}.share i{display:block;height:100%;border-radius:5px}
+table.dyn{width:100%;border-collapse:collapse;font-size:13.5px}
+table.dyn th{font-size:12px;color:var(--mute);font-weight:500;text-align:left;padding:6px 8px;border-bottom:1px solid var(--rule)}
+table.dyn td{padding:7px 8px;border-bottom:1px solid var(--rule)}
+table.dyn .num{text-align:right;font-variant-numeric:tabular-nums}
+ul.replies{margin:4px 0;padding-left:20px;font-size:13.5px}
+.pmeet div{padding:5px 0;border-bottom:1px solid var(--rule);cursor:pointer;font-size:13.5px;display:flex;justify-content:space-between;gap:10px}
+.pmeet div:hover{color:var(--action)}
+@media (max-width:900px){.ppl{grid-template-columns:1fr}.plist{max-height:220px}}
+
 /* device notes */
 .files{display:grid;grid-template-columns:240px 1fr;gap:16px}
 .flist{max-height:520px;overflow:auto;border-right:1px solid var(--rule);padding-right:8px}
@@ -223,6 +250,7 @@ textarea.gl{width:100%;min-height:180px;font:13px/1.55 ui-monospace,Menlo,monosp
     <nav class="nav" aria-label="Sections">
       <button data-go="meetings" aria-current="true">Meetings</button>
       <button data-go="ask">Ask</button>
+      <button data-go="people">People</button>
       <button data-go="names">Names</button>
       <button data-go="notes">Notes</button>
       <button data-go="key" title="API key">Key</button>
@@ -281,6 +309,7 @@ textarea.gl{width:100%;min-height:180px;font:13px/1.55 ui-monospace,Menlo,monosp
         <div class="tabs noprint" role="tablist" id="mTabs">
           <button role="tab" data-tab="minutesTab" aria-selected="true">Minutes</button>
           <button role="tab" data-tab="speakersTab">Who said what<span class="n" id="qCount"></span></button>
+          <button role="tab" data-tab="dynTab">Dynamics</button>
           <button role="tab" data-tab="askTab">Ask</button>
         </div>
         <div id="minutesTab" role="tabpanel"><div id="view"></div></div>
@@ -307,6 +336,7 @@ textarea.gl{width:100%;min-height:180px;font:13px/1.55 ui-monospace,Menlo,monosp
             <div class="legend">Click a line's words to fix them; the fix is learned for every meeting. &nbsp; <span class="tag me">✓</span> you picked this name &nbsp; <span class="tag">auto</span> filled in from the same voice, check these &nbsp; no mark: the speaker separation's guess. The colour on the left is the speaker; striped is unnamed.</div>
           </div>
         </div>
+        <div id="dynTab" role="tabpanel" class="hidden noprint"><div id="dynBox"></div></div>
         <div id="askTab" role="tabpanel" class="hidden">
           <div id="askBox" class="hidden noprint">
             <div class="row" style="margin-top:16px"><input id="qOne" type="text" placeholder="What did San agree to do?" style="flex:1;min-width:220px"><button id="askOne">Ask</button><button class="ghost" id="email">Draft follow-up email</button></div>
@@ -321,6 +351,15 @@ textarea.gl{width:100%;min-height:180px;font:13px/1.55 ui-monospace,Menlo,monosp
       <p class="mute">Questions are answered from all your minutes and transcripts. Search finds the exact lines.</p>
       <div class="row"><input id="qAll" type="text" placeholder="What did we decide about the rollback plan?" style="flex:1;min-width:240px"><button id="askAll">Ask</button><button class="ghost" id="findAll">Search</button></div>
       <div id="ansAll"></div>
+    </section>
+
+    <section class="panel hidden" data-panel="people">
+      <h2>People</h2>
+      <p class="mute">What Oracle Minutes has learned about everyone you've named, from all your meetings: their voice, how they speak and the words they use. It helps recognise them, and the minutes and Ask use it to understand who's who. It all stays on this server.</p>
+      <div class="ppl">
+        <div class="plist" id="plist"><span class="mute">Loading…</span></div>
+        <div id="pview" class="pview"><div class="empty"><strong>Pick a person</strong>Their voice, words and an AI note open here.</div></div>
+      </div>
     </section>
 
     <section class="panel hidden" data-panel="names">
@@ -430,13 +469,15 @@ function status(j) {
 
 // ---------------------------------------------------------------- layout: sections, tabs, meeting header
 function go(name) {
+  if (name === "people") loadPeople();
   document.querySelectorAll(".panel").forEach(p => p.classList.toggle("hidden", p.dataset.panel !== name));
   document.querySelectorAll(".nav button").forEach(b => b.setAttribute("aria-current", b.dataset.go === name));
 }
 document.querySelectorAll(".nav button").forEach(b => b.onclick = () => go(b.dataset.go));
 function tab(id) {
   document.querySelectorAll("#mTabs button").forEach(b => b.setAttribute("aria-selected", b.dataset.tab === id));
-  ["minutesTab", "speakersTab", "askTab"].forEach(t => $("#" + t).classList.toggle("hidden", t !== id));
+  ["minutesTab", "speakersTab", "dynTab", "askTab"].forEach(t => $("#" + t).classList.toggle("hidden", t !== id));
+  if (id === "dynTab") loadDynamics();
 }
 document.querySelectorAll("#mTabs button").forEach(b => b.onclick = () => tab(b.dataset.tab));
 let autoOpened = false;
@@ -558,6 +599,92 @@ async function loadCorrections() {
       : "None yet. Click any line in Who said what to fix its words; the fix is learned here.";
     document.querySelectorAll("#corr a").forEach(a => a.onclick = async e => { e.preventDefault(); await api(`/api/corrections/${encodeURIComponent(a.dataset.h)}`, { method: "DELETE" }); loadCorrections(); });
   } catch (e) {}
+}
+// ---------------------------------------------------------------- meeting dynamics
+let dynTimer = 0;
+async function loadDynamics(force) {
+  const id = current;
+  let d;
+  try { d = await (await api(`/api/jobs/${id}/dynamics`)).json(); } catch (e) { $("#dynBox").innerHTML = `<p class="mute">${esc(e.message)}</p>`; return; }
+  if (id !== current) return;
+  const max = Math.max(...d.people.map(p => p.share), 1);
+  const rows = d.people.map(p => `<tr><td><b>${esc(p.name)}</b>${p.known ? "" : ' <span class="badge">new</span>'}</td>
+    <td style="width:34%"><div class="share"><i style="width:${100 * p.share / max}%;background:${spkColorByName(p.name)}"></i></div></td>
+    <td class="num">${p.share}%</td><td class="num">${p.turns}</td><td class="num">${p.avg_turn}s</td><td class="num">${p.longest}s</td>
+    <td class="num">${p.questions}</td><td class="num">${p.interrupts}</td></tr>`).join("");
+  const replies = d.replies.map(r => `<li><b>${esc(r.from)}</b> answered <b>${esc(r.to)}</b> ${r.times} time${r.times > 1 ? "s" : ""}</li>`).join("");
+  $("#dynBox").innerHTML = `
+    <div class="row" style="margin:16px 0 4px"><span class="mute">This meeting was</span>
+      <label class="mute"><input type="radio" name="ext" value="0"${d.external ? "" : " checked"}> with our team only</label>
+      <label class="mute"><input type="radio" name="ext" value="1"${d.external ? " checked" : ""}> with a vendor, partner or client</label></div>
+    <div class="facts"><div><b>${d.minutes} min</b><span>long</span></div><div><b>${d.people.length}</b><span>people talking</span></div>
+      <div><b>${d.turns}</b><span>turns, ${d.turns_per_min} a minute</span></div><div><b>${d.silence_pct}%</b><span>quiet</span></div>
+      <div><b>${esc(d.opened_by || "-")}</b><span>opened</span></div><div><b>${esc(d.closed_by || "-")}</b><span>closed</span></div></div>
+    <table class="dyn"><thead><tr><th>Person</th><th>Talk</th><th class="num">Share</th><th class="num">Turns</th><th class="num">Avg turn</th><th class="num">Longest</th><th class="num">Questions</th><th class="num">Cut in</th></tr></thead><tbody>${rows}</tbody></table>
+    ${replies ? `<div class="sub2" style="margin-top:16px">Who answered whom</div><ul class="replies">${replies}</ul>` : ""}
+    <div class="block pnote"><div class="row" style="justify-content:space-between"><div class="sub2">AI read of the meeting</div>
+      ${d.llm ? `<button class="ghost" id="dynWrite">${d.note ? "Write again" : "Write it"}</button>` : ""}</div>
+      ${d.writing ? '<p class="mute">Writing… about a minute.</p>' : d.note ? md(d.note) + (d.note_stale ? '<p class="mute">Names or the meeting changed since this was written - write it again for an up-to-date read.</p>' : "")
+        : `<p class="mute">${d.llm ? "How the meeting ran, who drove what, and how the team dealt with the other party. Click Write it." : "Needs a summary model (SUMMARY_BACKEND)."}</p>`}</div>`;
+  document.querySelectorAll('#dynBox input[name=ext]').forEach(r => r.onchange = async () => {
+    await api(`/api/jobs/${id}/dynamics`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ external: r.value === "1" }) });
+    loadDynamics();
+  });
+  if ($("#dynWrite")) $("#dynWrite").onclick = async () => {
+    await api(`/api/jobs/${id}/dynamics`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ write: true }) });
+    loadDynamics();
+  };
+  clearTimeout(dynTimer);
+  if (d.writing) dynTimer = setTimeout(() => { if (!$("#dynTab").classList.contains("hidden")) loadDynamics(); }, 4000);
+}
+function spkColorByName(n) { const s = tagSpk.find(x => (x.name || x.label) === n); return s ? spkColor(s.label) : "var(--unknown)"; }
+
+// ---------------------------------------------------------------- people
+let personOn = "";
+const mins = s => s >= 3600 ? `${Math.floor(s / 3600)}h ${Math.round(s % 3600 / 60)}m` : `${Math.max(1, Math.round(s / 60))} min`;
+async function loadPeople() {
+  try {
+    const p = (await (await api("/api/people")).json()).people;
+    $("#plist").innerHTML = p.length ? p.map(x => `<div class="p${x.name === personOn ? " on" : ""}" data-n="${esc(x.name)}"><b>${esc(x.name)}</b><span class="mute">${x.built ? `${x.meetings} meeting${x.meetings === 1 ? "" : "s"}, ${mins(x.talk_seconds)} talking` : "Not looked at yet"}</span></div>`).join("")
+      : '<span class="mute">Nobody yet. Name the speakers of a meeting and they appear here.</span>';
+    document.querySelectorAll("#plist .p").forEach(d => d.onclick = () => showPerson(d.dataset.n));
+  } catch (e) { $("#plist").innerHTML = `<span class="mute">${esc(e.message)}</span>`; }
+}
+async function showPerson(name, refresh) {
+  personOn = name;
+  document.querySelectorAll("#plist .p").forEach(d => d.classList.toggle("on", d.dataset.n === name));
+  $("#pview").innerHTML = `<p class="mute">${refresh ? "Listening to all their lines again and writing a new note… this can take a minute." : "Loading…"}</p>`;
+  let p;
+  try { p = await (await api(`/api/people/${encodeURIComponent(name)}${refresh ? "/refresh" : ""}`, refresh ? { method: "POST" } : {})).json(); }
+  catch (e) { $("#pview").innerHTML = `<p class="mute">${esc(e.message)}</p>`; return; }
+  if (personOn !== name) return;
+  const v = p.voice || {}, l = p.language || {};
+  const facts = [[p.meetings.length, "meetings"], [mins(p.talk_seconds || 0), "talking"], [p.lines, "lines"]];
+  if (l.pace_wpm) facts.push([`${l.pace_wpm}`, `words a minute, ${l.pace}`]);
+  if (v.pitch_hz) facts.push([`${v.pitch_hz} Hz`, `typical pitch, ${v.pitch_range} range`]);
+  facts.push([p.samples, "voice samples"]);
+  const sp = p.split || {};
+  if (sp.external_meetings && sp.internal_meetings) facts.push([`${sp.internal_share ?? "-"}% / ${sp.external_share ?? "-"}%`, "of the talking: team / external"]);
+  else if (sp.external_meetings) facts.push([`${sp.external_meetings}`, "external meetings"]);
+  const lo = 70, hi = 320, pos = x => Math.max(0, Math.min(100, 100 * (x - lo) / (hi - lo)));
+  const pitch = v.pitch_hz ? `<div class="sub2" style="margin-top:6px">Pitch</div><div class="pitchbar"><i style="left:${pos(v.pitch_low_hz)}%;right:${100 - pos(v.pitch_high_hz)}%"></i><em style="left:${pos(v.pitch_hz)}%"></em></div><div class="pitchaxis"><span>Low ${lo} Hz</span><span>High ${hi} Hz</span></div>` : "";
+  const chips = (title, arr) => arr && arr.length ? `<div class="sub2" style="margin-top:14px">${title}</div><div class="words">${arr.map(w => `<span>${esc(w)}</span>`).join("")}</div>` : "";
+  const mix = Object.entries(l.mix || {}).map(([k, w]) => `${k} (${w.join(", ")})`);
+  $("#pview").innerHTML = `<h3>${esc(p.name)}</h3><div class="mute">Last heard ${p.last_seen ? when(p.last_seen) : "never"}</div>
+    <div class="facts">${facts.map(([a, b]) => `<div><b>${esc(a)}</b><span>${esc(b)}</span></div>`).join("")}</div>
+    <div class="row">${p.sample ? '<button class="ghost" id="pPlay">▶ Hear them</button>' : ""}<button class="ghost" id="pRefresh">Update now</button><button class="danger" id="pForget">Forget this voice</button></div>
+    ${pitch}
+    ${chips("Words they use more than others", l.words)}${chips("Phrases", l.phrases)}${chips("Names & terms they use", l.terms)}${chips("Mixes in", mix)}
+    ${p.note ? `<div class="block pnote"><div class="sub2">AI note</div>${md(p.note)}</div>` : `<p class="mute" style="margin-top:14px">${p.lines < 8 ? "An AI note is written once they have a few more named lines." : "The AI note is being written in the background - open them again in a minute."}</p>`}
+    <div class="sub2" style="margin-top:14px">Meetings</div><div class="pmeet">${p.meetings.map(m => `<div data-id="${m.id}"><span>${esc(m.title)}</span><span class="mute">${shortWhen(m.when)}, ${mins(m.seconds)}</span></div>`).join("")}</div>`;
+  document.querySelectorAll(".pmeet div").forEach(d => d.onclick = () => show(d.dataset.id));
+  if ($("#pPlay")) { $("#pPlay").dataset.label = "▶ Hear them"; $("#pPlay").onclick = () => playClip($("#pPlay"), p.sample.start, p.sample.end, p.sample.job); }
+  $("#pRefresh").onclick = () => showPerson(name, true);
+  $("#pForget").onclick = async () => {
+    if (!confirm(`Forget ${name}'s voice and profile? Their names in meetings stay.`)) return;
+    await api(`/api/voices/${encodeURIComponent(name)}`, { method: "DELETE" }).catch(() => {});
+    personOn = ""; loadPeople(); $("#pview").innerHTML = '<div class="empty"><strong>Forgotten</strong>Their voice samples and profile were removed.</div>';
+  };
 }
 // each speaker keeps one colour: in the ribbon, on their lines and in the speaker list
 function spkColor(label) {
@@ -703,13 +830,13 @@ const player = new Audio();
 let playingBtn = null;
 function stopPlay() { player.pause(); if (playingBtn) { playingBtn.classList.remove("on"); playingBtn.textContent = playingBtn.dataset.label || "▶"; } playingBtn = null; }
 player.onended = stopPlay;
-async function playClip(btn, start, end) {
+async function playClip(btn, start, end, jid) {
   if (playingBtn === btn) { stopPlay(); return; }
   stopPlay();
   playingBtn = btn; btn.classList.add("on"); btn.textContent = btn.dataset.label ? "■ " + btn.dataset.label : "■";
   try {
     const enh = $("#clearAudio") && !$("#clearAudio").checked ? "&enhance=false" : "";
-    const blob = await (await api(`/api/jobs/${current}/clip?start=${start.toFixed(2)}&end=${end.toFixed(2)}${enh}`)).blob();
+    const blob = await (await api(`/api/jobs/${jid || current}/clip?start=${start.toFixed(2)}&end=${end.toFixed(2)}${enh}`)).blob();
     if (playingBtn !== btn) return;
     if (player.src) URL.revokeObjectURL(player.src);
     player.src = URL.createObjectURL(blob);

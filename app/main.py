@@ -6,6 +6,7 @@ import json
 import re
 import secrets
 import shutil
+import threading
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -14,12 +15,12 @@ from typing import Optional
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
 
-from . import agenda, autotag, chat, db, redact, render, search, speech, summarize, terms, transcribe, voices, worker
+from . import agenda, autotag, chat, db, dynamics, people, redact, render, search, speech, summarize, terms, transcribe, voices, worker
 from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.7.2"
+VERSION = "1.8.0"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -30,6 +31,7 @@ async def lifespan(app: FastAPI):
     db.init()
     worker.start()
     autotag.start_sweeper()
+    people.start_sweeper()
     if speech.tts_available():                       # load the voices now, not on the first spoken answer
         import threading
         threading.Thread(target=speech.warm_voices, daemon=True).start()
@@ -394,6 +396,10 @@ def job_result(jid: str, name: str, start: float = Query(0.0, ge=0), end: float 
     if name == "autotag":
         _job(jid)
         return autotag.status(jid)
+    if name == "dynamics":
+        if _job(jid)["status"] != "done":
+            raise HTTPException(409, "not finished yet")
+        return dynamics.get(jid)
     return _result(_job(jid), name)
 
 
@@ -556,11 +562,15 @@ async def ask(request: Request):
     if not summarize.enabled():
         raise HTTPException(400, "SUMMARY_BACKEND is none - no LLM configured")
     context, system = "", sys_given
+    q = " ".join(m["content"] for m in clean if m["role"] == "user")[-1000:]
     if data.get("recording"):
         context, system = meeting_context(_job_for(str(data["recording"]))), MEETING_SYSTEM
     elif data.get("scope") == "meetings":
-        q = " ".join(m["content"] for m in clean if m["role"] == "user")[-1000:]
         context, system = search_context(q), MEETING_SYSTEM
+    if data.get("recording") or data.get("scope") == "meetings":
+        who = [n for n in people.all_names() if re.search(r"\b" + re.escape(n) + r"\b", q, re.I)]
+        if who:                                      # "what does Priscilla usually raise?"
+            context += "\n\nWhat Oracle Minutes knows about these people from all meetings:\n" + people.context_for(who, 3000)
     return chat.start(clean, context, bool(data.get("best")), system)
 
 
@@ -949,6 +959,53 @@ def redo_speakers(jid: str):
 def relearn_voices():
     """Learn voices again from the lines you tagged (for names that have no remembered voice)."""
     return autotag.relearn()
+
+
+@app.post("/api/jobs/{jid}/dynamics", dependencies=[Depends(auth)])
+async def meeting_dynamics(jid: str, request: Request):
+    """{"external": true|false} = was this with a vendor / partner / client; {"write": true} = (re)write the AI
+    read of how the meeting ran (background; poll GET .../dynamics)."""
+    j = _job(jid)
+    data = await body_extra(request)
+    if "external" in data:
+        with autotag.job_lock(jid):
+            o = dict((db.get(jid) or {}).get("options") or {})
+            o["external"] = bool(data["external"])
+            db.update(jid, options=o)
+    if data.get("write") and j["status"] == "done" and summarize.enabled():
+        dynamics.write_note(jid)
+    return dynamics.get(jid)
+
+
+@app.get("/api/people", dependencies=[Depends(auth)])
+def list_people():
+    """Everyone you've named: meetings, talk time, pace, pitch (profiles are updated in the background)."""
+    return {"people": people.listing()}
+
+
+@app.get("/api/people/{name}", dependencies=[Depends(auth)])
+def get_person(name: str):
+    p = people.get(name)
+    if not p:
+        if name.lower() not in {n.lower() for n in people.all_names()}:
+            raise HTTPException(404, "no such person")
+        p = people.build(name, with_note=False)      # first look: the numbers now, the AI note in the background
+        threading.Thread(target=people.build, args=(name,), daemon=True).start()
+    return p
+
+
+@app.post("/api/people/{name}/refresh", dependencies=[Depends(auth)])
+def refresh_person(name: str):
+    """Rebuild this person's profile now (numbers, words, voice, and a new AI note)."""
+    if name.lower() not in {n.lower() for n in people.all_names()}:
+        raise HTTPException(404, "no such person")
+    old = people.get(name) or {}
+    if old:
+        old["note_sig"] = ""                         # force a new note
+        with db._lock:
+            db._conn.execute("UPDATE people SET profile=? WHERE lower(name)=lower(?)", (json.dumps(old), name))
+            db._conn.commit()
+    return people.build(name)
 
 
 @app.get("/api/glossary", dependencies=[Depends(auth)])

@@ -50,7 +50,8 @@ class Settings:
     autotag_margin: float = float(os.getenv("AUTOTAG_MARGIN", "0.03") or 0.03)  # ... and more like X than anyone else
     autotag_group: float = float(os.getenv("AUTOTAG_GROUP", "0.50") or 0.50)    # a whole speaker group sounds like X
     autotag_new: bool = _bool("AUTOTAG_NEW", True)       # new meetings: name lines of voices already remembered
-    autotag_sweep: bool = _bool("AUTOTAG_SWEEP", True)   # idle server: go through older meetings with new voices   # cosine similarity to recognise a known voice
+    autotag_sweep: bool = _bool("AUTOTAG_SWEEP", True)
+    people_sweep: bool = _bool("PEOPLE_SWEEP", True)     # idle server: update each person's profile   # idle server: go through older meetings with new voices   # cosine similarity to recognise a known voice
 
     # --- summary ---
     summary_backend: str = os.getenv("SUMMARY_BACKEND", "ollama")   # ollama | openai | none

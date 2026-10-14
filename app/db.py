@@ -51,6 +51,13 @@ CREATE TABLE IF NOT EXISTS voices (
   name TEXT PRIMARY KEY, embedding TEXT NOT NULL, samples INTEGER DEFAULT 1, updated_at REAL
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS para_fts USING fts5(job_id UNINDEXED, start UNINDEXED, speaker UNINDEXED, text);
+CREATE TABLE IF NOT EXISTS voice_samples (
+  name TEXT NOT NULL, embedding TEXT NOT NULL, job_id TEXT, seg INTEGER, created REAL
+);
+CREATE INDEX IF NOT EXISTS voice_samples_name ON voice_samples(name);
+CREATE TABLE IF NOT EXISTS people (
+  name TEXT PRIMARY KEY, profile TEXT NOT NULL, updated_at REAL
+);
 CREATE TABLE IF NOT EXISTS file_history (
   device TEXT, path TEXT, rev INTEGER, content BLOB, updated_at REAL
 );

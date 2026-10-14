@@ -224,6 +224,18 @@ Open a recording on the web page:
 * **✓ Confirm auto lines:** once you've checked the *auto* lines, one click marks them ✓ (yours - never changed
   automatically again) and adds them to those people's voice prints. Pick a speaker in the filter first to confirm
   only theirs (`POST /api/jobs/{id}/autotag/accept`, `{"name": "..."}` optional).
+* **People:** everyone you've named gets a profile, built from their lines across all meetings and updated in the
+  background when the server is idle (`PEOPLE_SWEEP`): up to 100 voice samples, spread over meetings (recognition
+  uses their closest samples, not only an average - it gets better with every meeting), typical pitch and range,
+  speaking pace, the words / phrases / Names & terms they use more than others, Singlish / Malay / Hokkien /
+  Chinese mixed in, talk share in team vs external meetings, and an AI note from your own LLM (what they raise and
+  own, how they communicate, how to work with them - work and communication only). The minutes writer and Ask get
+  these profiles. `GET /api/people`, `GET /api/people/{name}`, `POST /api/people/{name}/refresh`; forgetting a voice
+  removes the samples and profile.
+* **Dynamics tab:** per meeting - talk share, turns, average and longest turn, questions, cutting in, who answered
+  whom, who opened and closed - and an AI read of how it ran (who led, who drove what, open disagreements, and with
+  a vendor / partner / client: who spoke for us and what the other side pushed for). Mark a meeting as external there.
+  `GET/POST /api/jobs/{id}/dynamics` (`{"external": true}`, `{"write": true}`).
 * **Fix the words, the server learns:** click a line's words in *Who said what*, correct them, press Enter. The
   words you replaced are remembered (`TAPIN` -> `DABIN`, `B to B` -> `B2B`, `see trip` -> `CTRIP`) and fixed in every
   meeting, new ones as they're transcribed, and the right words are given to Whisper as hints. Everyday English

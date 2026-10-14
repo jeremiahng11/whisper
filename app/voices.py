@@ -88,10 +88,12 @@ def _all() -> list[tuple[str, list[float], int]]:
     return [(r["name"], json.loads(r["embedding"]), r["samples"]) for r in rows]
 
 
-def remember(name: str, emb: list[float]) -> None:
-    """Add a sample of this person's voice (running average of normalised embeddings)."""
+def remember(name: str, emb: list[float], job_id: str = "", seg: int = -1) -> None:
+    """Add a sample of this person's voice: kept as one of their samples, and in their running average."""
     if not name or not emb:
         return
+    from . import people
+    people.add_sample(name, emb, job_id, seg)
     n = math.sqrt(sum(x * x for x in emb)) or 1.0
     emb = [x / n for x in emb]
     with _lock, db._lock:
@@ -111,6 +113,8 @@ def remember(name: str, emb: list[float]) -> None:
 
 
 def forget(name: str) -> bool:
+    from . import people
+    people.forget(name)
     with db._lock:
         n = db._conn.execute("DELETE FROM voices WHERE name=?", (name,)).rowcount
         db._conn.commit()
@@ -119,14 +123,16 @@ def forget(name: str) -> bool:
 
 def match(speakers: dict) -> dict[str, str]:
     """{"Speaker 1": {"embedding": [...]}} -> {"Speaker 1": "San"} for voices we know (each name used once)."""
+    from . import people
     known = _all()
+    samp = people.samples()
     pairs = []
     for label, info in speakers.items():
         e = (info or {}).get("embedding")
         if not e or (info or {}).get("seconds", 99) < 3:      # too little speech to be sure
             continue
         for name, v, _ in known:
-            sim = _cos(e, v)
+            sim = people.similarity(e, v, samp.get(name, []))   # their average voice or their closest samples
             if sim >= settings.voice_match:
                 pairs.append((sim, label, name))
     out, used = {}, set()
