@@ -202,6 +202,12 @@ API: `GET /api/jobs/{id}/clip?start=12.5&end=20` (WAV, at most 60 s) and
 `POST /api/jobs/{id}/segments/{line}` with `{"name": "Alan", "learn": true}` or `{"speaker": "Speaker 2"}`.
 The watch can name speakers too (meeting list → hold → *Name the speakers*).
 
+## Quiet / far-away voices (1.4.1)
+
+Before Whisper, recordings are levelled (2-second windows; quiet stretches lifted up to +18 dB, silence left alone;
+`NORMALIZE=0` turns it off) and the speech detector keeps quieter speech (`VAD_THRESHOLD`, default 0.35; Silero's
+default is 0.5 - lower keeps more, too low lets noise through as "words").
+
 ## Calendar (Agenda app on the Idea Saver)
 
 Add your calendars' **private ICS links** to `CALENDAR_ICS_URLS` and redeploy:

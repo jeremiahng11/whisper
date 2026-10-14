@@ -674,3 +674,20 @@ def test_microsoft_graph_calendar(client, monkeypatch):
     assert ev[0]["start"] == 1893981600 and ev[0]["location"] == "Microsoft Teams Meeting"      # 2030-01-07 02:00 UTC
     client.get("/api/agenda?days=7", headers=H)
     assert [c[0] for c in calls] == ["POST", "GET"]                                            # token + events cached
+
+
+def test_level_audio_lifts_quiet_voices_not_silence():
+    import numpy as np
+    from app import transcribe
+    rng = np.random.default_rng(0)
+    sr = 16000
+    sil = rng.normal(0, 0.001, sr * 4).astype(np.float32)
+    near = rng.normal(0, 0.08, sr * 4).astype(np.float32)
+    far = rng.normal(0, 0.01, sr * 4).astype(np.float32)          # 18 dB quieter
+    a = np.concatenate([sil, near, sil, far, sil])
+    b = transcribe.level_audio(a)
+    rms = lambda x: float(np.sqrt(np.mean(x ** 2)))
+    assert rms(b[sr * 13:sr * 15]) > 4 * rms(a[sr * 13:sr * 15])     # far voice lifted > 12 dB
+    assert abs(rms(b[sr * 5:sr * 7]) / rms(a[sr * 5:sr * 7]) - 1) < 0.2   # near voice ~unchanged
+    assert rms(b[sr:sr * 3]) < 2 * rms(a[sr:sr * 3])                 # silence not pumped
+    assert np.max(np.abs(b)) <= 1.0

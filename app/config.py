@@ -36,6 +36,9 @@ class Settings:
     initial_prompt: str = os.getenv("INITIAL_PROMPT", "")           # vocabulary hints: names, products, jargon
     region: str = os.getenv("REGION", "").strip().lower()           # "sg" = Singapore: mixed English/Singlish/Mandarin/Malay
     vad: bool = _bool("VAD", True)
+    # speech detection before Whisper: lower = keeps quieter / far-away voices (Silero default 0.5)
+    vad_threshold: float = float(os.getenv("VAD_THRESHOLD", "0.35"))
+    normalize: bool = _bool("NORMALIZE", True)        # level quiet recordings up before transcribing
 
     # --- speaker labels (needs image built with INSTALL_DIARIZE=1 and a Hugging Face token) ---
     diarize: bool = _bool("DIARIZE", False)

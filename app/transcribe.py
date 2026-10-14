@@ -200,11 +200,13 @@ def _run(audio: np.ndarray, offset: float, language: Optional[str], prompt: str,
         language=language or settings.default_language or None,
         beam_size=settings.whisper_beam,
         vad_filter=settings.vad,
-        vad_parameters=dict(min_silence_duration_ms=500),
+        vad_parameters=dict(min_silence_duration_ms=500, threshold=settings.vad_threshold, speech_pad_ms=400),
         condition_on_previous_text=False,     # avoids Whisper getting stuck repeating a phrase
     )
     if prompt:
         kwargs["initial_prompt"] = prompt
+    if settings.normalize:
+        audio = level_audio(audio)
     segs, info = model.transcribe(audio, **kwargs)
     out = []
     for s in segs:                                   # generator: decoding happens while we iterate
@@ -261,6 +263,25 @@ def partial(path: str, state: dict, prompt: str = "", max_part_s: int = 600) -> 
         state["language"] = lang
     log.info("live part: %.0f-%.0f s, %d segments", until, state["until"], len(keep))
     return True
+
+
+def level_audio(a: np.ndarray) -> np.ndarray:
+    """Bring speech up to a steady level: 2 s windows, gain from each window's loudness (quiet stretches = far voices
+    lifted, at most +18 dB), smoothed so it doesn't pump; silence (near the noise floor) is left alone."""
+    if len(a) < SR:
+        return a
+    win = SR * 2
+    n = (len(a) + win - 1) // win
+    rms = np.array([np.sqrt(np.mean(a[i * win:(i + 1) * win] ** 2) + 1e-12) for i in range(n)])
+    floor = np.percentile(rms, 10)
+    target = 0.08                                            # about -22 dBFS
+    g = np.where(rms > floor * 3, np.clip(target / rms, 1.0, 8.0), 1.0)
+    for i in range(1, n):                                    # smooth between windows
+        g[i] = 0.6 * g[i] + 0.4 * g[i - 1]
+    gain = np.interp(np.arange(len(a)), np.arange(n) * win + win / 2, g)
+    out = a * gain
+    peak = np.max(np.abs(out)) or 1.0
+    return (out / peak * 0.98 if peak > 1.0 else out).astype(np.float32)
 
 
 # ---------------------------------------------------------------- clips (listen to one stretch of a meeting)
