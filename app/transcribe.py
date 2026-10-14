@@ -475,14 +475,26 @@ def _hf_load(cls, name: str):
     except Exception:                                       # noqa: BLE001
         major = 3
     tries = (["token", "use_auth_token"] if major >= 4 else ["use_auth_token", "token"]) + [None]
-    last = None
+    errs = []
     for kw in tries:
         try:
             return cls.from_pretrained(name, **({kw: settings.hf_token} if kw else {}))
         except TypeError as e:                              # this version doesn't take that argument
-            last = e
+            errs.append(f"{kw or 'no token arg'}: {e}")
             log.info("from_pretrained(%s) with %s: %s", name, kw, e)
-    raise last
+    raise RuntimeError(f"loading {name} failed ({lib_versions()}) - " + " | ".join(errs))
+
+
+def lib_versions() -> str:
+    """Versions of the speaker-model libraries (they must fit together)."""
+    from importlib import metadata
+    out = []
+    for p in ("pyannote.audio", "torch", "torchaudio", "huggingface_hub", "lightning"):
+        try:
+            out.append(f"{p} {metadata.version(p)}")
+        except Exception:                                   # noqa: BLE001
+            out.append(f"{p} -")
+    return ", ".join(out)
 
 
 def _get_diarizer():

@@ -19,7 +19,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.5.9"
+VERSION = "1.5.10"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -1033,6 +1033,7 @@ def health():
         "voices": len(voices.list_voices()),
         "voice_prints": ("error: " + transcribe.embed_error) if transcribe.embed_error else "ok",
         "speaker_separation": ("error: " + transcribe.diarize_error) if transcribe.diarize_error else "ok",
+        "speaker_libs": transcribe.lib_versions(),
         "tts": speech.tts_available(),
         "jobs": db.counts(),
         "running": worker.current_job,
