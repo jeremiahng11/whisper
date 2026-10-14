@@ -709,6 +709,7 @@ async function showPerson(name, refresh) {
   const mix = Object.entries(l.mix || {}).map(([k, w]) => `${k} (${w.join(", ")})`);
   $("#pview").innerHTML = `<h3>${esc(p.name)}</h3><div class="mute">Last heard ${p.last_seen ? when(p.last_seen) : "never"}</div>
     <div class="facts">${facts.map(([a, b]) => `<div><b>${esc(a)}</b><span>${esc(b)}</span></div>`).join("")}</div>
+    ${!p.samples && p.lines ? `<p class="mute">No voice samples yet. They're taken in the background (when the server is free) from lines you ✓ confirmed or speakers you named in Who's speaking, 2.5 s or longer and not talking over someone. Press <b>Re-learn voice</b> to take them now.</p>` : ""}
     <div class="row">${p.sample ? '<button class="ghost" id="pPlay">▶ Hear them</button>' : ""}<button class="ghost" id="pRefresh">Update now</button><button class="ghost" id="pRelearn" title="Rebuild their voice only from lines named as them now - use it after correcting lines that were someone else">Re-learn voice</button><button class="danger" id="pForget">Forget this voice</button></div>
     ${pitch}
     ${chips("Words they use more than others", l.words)}${chips("Phrases", l.phrases)}${chips("Names & terms they use", l.terms)}${chips("Mixes in", mix)}

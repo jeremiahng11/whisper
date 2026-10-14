@@ -1318,3 +1318,23 @@ def test_correcting_a_name_unlearns_the_wrong_voice(client):
     assert same and all(n == "Jeremiah" for n in same), same        # and the same voice elsewhere follows
     r = client.post("/api/people/Jeremiah/relearn", headers=H).json()
     assert r["samples"] >= 1
+
+
+def test_samples_also_from_people_only_recognised_by_voice(client):
+    """Someone the server named by voice (never ✓'d here) still gets samples from lines that clearly sound like them,
+    and the People page shows the live count."""
+    from app import db, people
+    _only_these_voices()
+    a = upload(client, "dev1-samp-a", 40, "diarize=true&speakers=2")
+    client.post(f"/api/jobs/{a['id']}/speakers", json={"names": {"Speaker 1": "Wendy", "Speaker 2": "Omar"}}, headers=H)
+    b = upload(client, "dev1-samp-b", 40, "diarize=true&speakers=2")
+    _wait_autotag(client, b["id"])
+    opts = db.get(b["id"])["options"]
+    assert "Wendy" in (opts.get("speaker_names") or {}).values()
+    with db._lock:
+        before = db._conn.execute("SELECT COUNT(*) FROM voice_samples WHERE job_id=?", (b["id"],)).fetchone()[0]
+    n = people.top_up(b["id"])
+    with db._lock:
+        after = db._conn.execute("SELECT COUNT(*) FROM voice_samples WHERE job_id=?", (b["id"],)).fetchone()[0]
+    assert n >= 1 and after > before
+    assert client.get("/api/people/wendy", headers=H).json()["samples"] == people.sample_count("Wendy") >= 2

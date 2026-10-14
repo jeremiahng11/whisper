@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.10.7"
+VERSION = "1.10.8"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -1040,6 +1040,7 @@ def get_person(name: str):
             raise HTTPException(404, "no such person")
         p = people.build(name, with_note=False)      # first look: the numbers now, the AI note in the background
         threading.Thread(target=people.build, args=(name,), daemon=True).start()
+    p = dict(p, samples=people.sample_count(name))     # live: samples are added in the background
     return p
 
 

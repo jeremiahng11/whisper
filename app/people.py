@@ -73,8 +73,11 @@ def add_sample(name: str, emb: list, job_id: str = "", seg: int = -1) -> None:
 
 
 def top_up(jid: str, per_person: int = 8) -> int:
-    """After a meeting's names are settled: take a few more samples of each named person from lines you confirmed
-    (✓) or whole speakers you named - their longest, clearest lines, never two people talking at once."""
+    """After a meeting's names are settled: take a few more samples of each named person - their longest, clearest
+    stretches of talking, never two people at once. Taken from lines you confirmed (✓) and speakers you named; short
+    lines in a row from the same person are joined into one clip; and lines the server named by voice count too when
+    they sound very clearly like that person (so someone only ever recognised still builds up samples).
+    Returns how many were added, or -1 when voice prints couldn't be made (try again later)."""
     from . import autotag
     job = db.get(jid)
     if not job or not job.get("audio_path"):
@@ -86,32 +89,66 @@ def top_up(jid: str, per_person: int = 8) -> int:
     tr = worker.load_transcript(jid) or {}
     segs = tr.get("segments", [])
     cache = worker.load_json(jid, "seg_emb.json", {}) or {}
-    have = {}
+    have: dict[str, set] = {}
     with db._lock:
         for r in db._conn.execute("SELECT name, seg FROM voice_samples WHERE job_id=?", (jid,)).fetchall():
-            have.setdefault(r["name"], set()).add(r["seg"])
-    added = 0
+            have.setdefault(r["name"].lower(), set()).add(r["seg"])
+    known = {n.lower(): v for n, v, _ in voices._all()}
+    allsamp = {k.lower(): v for k, v in samples().items()}
+    strict = max(settings.voice_match + 0.08, 0.75)
+    audio_ok = os.path.exists(job["audio_path"])
+    added, failed = 0, False
+
+    def emb_of(i0: int, t0: float, t1: float):
+        nonlocal failed
+        e = cache.get(str(i0)) if t1 - t0 <= segs[i0]["end"] - segs[i0]["start"] + 0.01 else None
+        if not e and audio_ok:
+            e = transcribe.embed_clip(transcribe.load_range(job["audio_path"], t0, min(t1, t0 + 20)), t=t0)
+            if not e and transcribe.embed_error:
+                failed = True
+        return e
+
     for lab, who in names.items():
         if not who:
             continue
-        sure = [i for i, s in enumerate(segs) if s.get("speaker") == lab and not s.get("also")
-                and (i in manual or lab not in auto_named) and s["end"] - s["start"] >= 2.5]
-        sure.sort(key=lambda i: -(segs[i]["end"] - segs[i]["start"]))
-        for i in sure:
-            if len(have.get(who, set())) >= per_person:
+        key = who.lower()
+        mine = [i for i, s in enumerate(segs) if s.get("speaker") == lab and not s.get("also")]
+        sure = {i for i in mine if i in manual or lab not in auto_named}
+        # stretches: lines in a row from this speaker with little gap, joined (Singlish talk is lots of short lines)
+        runs, cur = [], []
+        for i in mine:
+            if cur and (i != cur[-1] + 1 or segs[i]["start"] - segs[cur[-1]]["end"] > 1.0 or (i in sure) != (cur[0] in sure)):
+                runs.append(cur)
+                cur = []
+            cur.append(i)
+        if cur:
+            runs.append(cur)
+        runs = [r for r in runs if segs[r[-1]]["end"] - segs[r[0]]["start"] >= 2.5]
+        runs.sort(key=lambda r: (r[0] not in sure, -(segs[r[-1]]["end"] - segs[r[0]]["start"])))
+        from_auto = 0
+        for r in runs:
+            if len(have.get(key, set())) >= per_person:
                 break
-            if i in have.get(who, set()):
+            if r[0] in have.get(key, set()):
                 continue
-            e = cache.get(str(i))
-            if not e and os.path.exists(job["audio_path"]):
-                s = segs[i]
-                e = transcribe.embed_clip(transcribe.load_range(job["audio_path"], s["start"], min(s["end"], s["start"] + 20)),
-                                          t=s["start"])
-            if e:
-                add_sample(who, e, jid, i)
-                have.setdefault(who, set()).add(i)
-                added += 1
-    return added
+            is_sure = r[0] in sure
+            if not is_sure and (from_auto >= 4 or len(allsamp.get(key, [])) >= 20 or key not in known):
+                continue
+            e = emb_of(r[0], segs[r[0]]["start"], segs[r[-1]]["end"])
+            if failed:
+                break
+            if not e:
+                continue
+            if not is_sure and similarity(e, known[key], allsamp.get(key, [])) < strict:
+                continue                                    # named by voice but not clearly them: not a sample
+            add_sample(who, e, jid, r[0])
+            have.setdefault(key, set()).add(r[0])
+            allsamp.setdefault(key, []).append(e)
+            added += 1
+            from_auto += 0 if is_sure else 1
+        if failed:
+            break
+    return -1 if failed and not added else added
 
 
 def unlearn(name: str, job_id: str, segs: list[int] | None = None) -> int:
@@ -148,7 +185,7 @@ def relearn_person(name: str) -> dict:
     for j in db.list_jobs(100000, "done"):
         if name.lower() in {(n or "").lower() for n in ((j.get("options") or {}).get("speaker_names") or {}).values()}:
             added += top_up(j["id"], per_person=12)
-    return {"name": name, "samples": len(samples(name).get(name, [])), "relearned": name in r.get("learned", []),
+    return {"name": name, "samples": sample_count(name), "relearned": name in r.get("learned", []),
             "added": added}
 
 
@@ -168,13 +205,18 @@ def rebuild_voice(name: str) -> None:
         db._conn.commit()
 
 
+def sample_count(name: str) -> int:
+    with db._lock:
+        return db._conn.execute("SELECT COUNT(*) FROM voice_samples WHERE lower(name)=lower(?)", (name,)).fetchone()[0]
+
+
 def samples(name: str = "") -> dict[str, list]:
     with db._lock:
-        rows = db._conn.execute("SELECT name, embedding FROM voice_samples" + (" WHERE name=?" if name else ""),
+        rows = db._conn.execute("SELECT name, embedding FROM voice_samples" + (" WHERE lower(name)=lower(?)" if name else ""),
                                 (name,) if name else ()).fetchall()
     out: dict[str, list] = {}
     for r in rows:
-        out.setdefault(r["name"], []).append(json.loads(r["embedding"]))
+        out.setdefault(name or r["name"], []).append(json.loads(r["embedding"]))
     return out
 
 
@@ -400,7 +442,7 @@ def build(name: str, with_note: bool = True) -> dict:
                        "text": longest["text"][:200]} if longest else None, "meetings": sorted(meetings.values(), key=lambda m: -m["when"]),
             "talk_seconds": round(sum(m["seconds"] for m in meetings.values())),
             "last_seen": max((m["when"] for m in meetings.values()), default=None),
-            "voice": voice, "language": lang, "samples": len(samples(name).get(name, [])),
+            "voice": voice, "language": lang, "samples": sample_count(name),
             "note": note, "note_sig": note_sig, "sig": sig, "updated_at": int(time.time())}
     with db._lock:
         db._conn.execute("INSERT OR REPLACE INTO people (name, profile, updated_at) VALUES (?,?,?)",
@@ -471,9 +513,11 @@ def _sweep() -> None:
             if worker.current_job is None and db.next_queued() is None and not autotag._running:
                 for j in db.list_jobs(200, "done"):         # meetings whose names changed: more voice samples
                     o = j.get("options") or {}
-                    sig = json.dumps([o.get("speaker_names") or {}, len(o.get("manual_lines") or {})], sort_keys=True)
+                    sig = json.dumps([2, o.get("speaker_names") or {}, len(o.get("manual_lines") or {})], sort_keys=True)
                     if o.get("speaker_names") and o.get("samples_sig") != sig:
                         n = top_up(j["id"])
+                        if n < 0:                           # voice prints not working right now: try later
+                            continue
                         with autotag.job_lock(j["id"]):
                             o2 = dict((db.get(j["id"]) or {}).get("options") or {})
                             o2["samples_sig"] = sig
