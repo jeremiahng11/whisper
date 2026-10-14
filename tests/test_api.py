@@ -1029,3 +1029,14 @@ def test_same_name_on_two_speakers_joins_them(client):
     assert list(names.values()).count("Priscilla") == 1 and "Speaker 3" not in names
     sp = [s["label"] for s in client.get(f"/api/jobs/{jid}/speakers", headers=H).json()["speakers"]]
     assert "Speaker 3" not in sp, sp
+
+
+def test_rename_meeting_title_kept_after_redo(client):
+    j = upload(client, "dev1-title", 20)
+    r = client.post(f"/api/jobs/{j['id']}/title", json={"title": "CTRIP dashboard review"}, headers=H).json()
+    assert r["title"] == "CTRIP dashboard review"
+    assert "CTRIP dashboard review" in client.get(f"/api/jobs/{j['id']}/result.md", headers=H).text
+    client.post(f"/api/jobs/{j['id']}/summarize", json={}, headers=H)
+    assert wait(client, j["id"])["title"] == "CTRIP dashboard review"
+    d = client.get(f"/api/jobs/{j['id']}/result.docx", headers=H)
+    assert d.status_code == 200 and "CTRIP dashboard review.docx" in d.headers["content-disposition"]

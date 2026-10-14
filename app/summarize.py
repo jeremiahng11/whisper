@@ -148,6 +148,42 @@ Title: <name of the meeting, max 8 words>
 <date if mentioned>
 
 Use formal, neutral, past-tense language. Never invent a resolution, vote or approval."""),
+    "manco": ("MANCO (management committee)", """Write management committee (MANCO) minutes in Markdown in exactly this layout:
+
+Title: MANCO - <main topic or date, max 8 words>
+
+### Attendees
+- <names, with roles or departments if said>
+
+### Summary
+<3-5 sentences: the most important outcomes for the management team>
+
+### Updates by department
+#### <department or person, e.g. Finance, Compliance, Technology, Operations, Sales>
+- **Update:** ...
+- **Numbers mentioned:** <revenue, volumes, costs, headcount, KPIs - only if said>
+- **Issues:** ...
+
+### Decisions and approvals
+- **<topic>:** <what was decided or approved, by whom> (write "Pending" if it was deferred)
+
+### Risks, compliance and regulatory matters
+- ...
+
+### Escalations
+- <issue> - <escalated to whom / for what>
+
+### Action items
+- [ ] <owner> - <what> (<due date if mentioned>)
+
+### Carried forward to next MANCO
+- ...
+
+### Next meeting
+<date if mentioned>
+
+Keep it factual and neutral; group updates under the department that gave them. Never invent figures, approvals or
+deadlines."""),
     "memo": ("Voice note", """Write the result in Markdown in exactly this layout:
 
 Title: <a short title, max 8 words>

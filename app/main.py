@@ -19,7 +19,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.6.4"
+VERSION = "1.6.5"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -430,6 +430,25 @@ async def resummarize(jid: str, request: Request):
         opts["best"] = bool(extra["best"])
     db.update(jid, status="queued", stage="summary queued", progress=0, options=opts)
     worker.wake()
+    return job_out(db.get(jid))
+
+
+@app.post("/api/jobs/{jid}/title", dependencies=[Depends(auth)])
+async def set_title(jid: str, request: Request):
+    """Rename the meeting: {"title": "CTRIP dashboard review"}. Kept when the minutes are redone; "" = back to the
+    title the minutes were written with."""
+    j = _job(jid)
+    data = await body_extra(request)
+    title = re.sub(r"\s+", " ", str(data.get("title") or "")).strip()[:120]
+    with autotag.job_lock(jid):
+        opts = dict((db.get(jid) or {}).get("options") or {})
+        if title:
+            opts["title"] = title
+        else:
+            opts.pop("title", None)
+        db.update(jid, title=title or opts.get("summary_title", j.get("title", "")), options=opts)
+    if j["status"] == "done":
+        worker.build_outputs(jid)
     return job_out(db.get(jid))
 
 

@@ -150,7 +150,7 @@ Example `result.md`:
 - **Number of people.** `?speakers=3` on upload (web: *People*) - fixes one person being split in two.
 - **Names & terms.** One per line on the web page (`GET/PUT /api/glossary`). Fed to Whisper (spelling) and to the LLM.
   Attendees from the device's Agenda (or `?attendees=San,Komei`) are added for that meeting.
-- **Meeting types.** `?template=` `general`, `standup`, `client`, `one_on_one`, `interview`, `board` (formal minutes with
+- **Meeting types.** `?template=` `general`, `standup`, `client`, `one_on_one`, `interview`, `manco` (management committee: updates by department, approvals, risks and compliance, escalations, carried forward), `board` (formal minutes with
   RESOLVED THAT...), `memo`. Redo with another type: `POST /api/jobs/{id}/summarize {"template": "board", "best": true}`.
 - **Best quality.** `?best=true` uses `OLLAMA_MODEL_BEST`.
 - **Flagged moments.** Notes lines like `[12:03] !! budget` (the device's mark key) make the minutes cover what was

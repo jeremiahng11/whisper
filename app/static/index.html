@@ -101,6 +101,9 @@ button.ts.on{background:var(--warn);color:#fff}
 
 /* meeting */
 .mhead{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;flex-wrap:wrap}
+#mTitle{cursor:text;border-radius:6px;outline-offset:4px}
+#mTitle:hover{background:var(--sunk)}
+#mTitle[contenteditable=true],#mTitle[contenteditable=plaintext-only]{background:var(--surface);outline:2px solid var(--focus)}
 #mTitle{font-size:28px;line-height:1.15;letter-spacing:-.02em;margin:0;max-width:30ch}
 #mMeta{margin-top:6px}
 .mtools{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
@@ -247,7 +250,7 @@ textarea.gl{width:100%;min-height:180px;font:13px/1.55 ui-monospace,Menlo,monosp
       <div class="empty" id="noMeeting"><strong>Pick a recording</strong>Its minutes, speakers and transcript open here.</div>
       <div class="hidden" id="viewCard">
         <div class="mhead">
-          <div><h2 id="mTitle"></h2><div class="mute" id="mMeta"></div></div>
+          <div><h2 id="mTitle" title="Click to rename"></h2><div class="mute" id="mMeta"></div></div>
           <div class="mtools noprint">
             <select id="reTpl" title="Meeting type for the new minutes"></select>
             <label class="mute" id="reBestLabel"><input type="checkbox" id="reBest"> Best</label>
@@ -448,13 +451,34 @@ function decorateMinutes() {
 }
 const shortWhen = t => new Date(t * 1000).toLocaleString([], { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
 function setMeta(j) {
-  $("#mTitle").textContent = j.title || j.filename;
+  if (document.activeElement !== $("#mTitle")) $("#mTitle").textContent = j.title || j.filename;
   const parts = [when(j.created_at)];
   if (j.duration) parts.push(dur(j.duration));
   const n = Object.keys(j.speaker_names || {}).length;
   if (n) parts.push(`${n} named speaker${n > 1 ? "s" : ""}`);
   $("#mMeta").innerHTML = esc(parts.join(", ")) + (j.status === "done" ? "" : " " + status(j)) + (j.voice_work ? voiceWork(j.voice_work) : "");
 }
+// rename the meeting: click the title, type, Enter (Esc cancels; empty = the minutes' own title)
+$("#mTitle").onclick = () => {
+  const h = $("#mTitle");
+  if (h.isContentEditable) return;
+  h.dataset.was = h.textContent; h.contentEditable = "plaintext-only"; h.focus();
+  const r = document.createRange(); r.selectNodeContents(h); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
+};
+$("#mTitle").onkeydown = e => {
+  if (e.key === "Enter") { e.preventDefault(); $("#mTitle").blur(); }
+  if (e.key === "Escape") { $("#mTitle").textContent = $("#mTitle").dataset.was; $("#mTitle").dataset.was = "\u0000"; $("#mTitle").blur(); }
+};
+$("#mTitle").onblur = async () => {
+  const h = $("#mTitle"); h.contentEditable = "false";
+  const t = h.textContent.trim();
+  if (h.dataset.was === "\u0000" || t === h.dataset.was) return;
+  try {
+    const j = await (await api(`/api/jobs/${current}/title`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: t }) })).json();
+    setMeta(j); load();
+    $("#view").innerHTML = md(await (await api(j.results.markdown)).text()); decorateMinutes();
+  } catch (e) { h.textContent = h.dataset.was; }
+};
 // each speaker keeps one colour: in the ribbon, on their lines and in the speaker list
 function spkColor(label) {
   const labs = [...new Set(tagSpk.map(x => x.label))].sort((a, b) => (+(a.split(" ")[1]) || 0) - (+(b.split(" ")[1]) || 0));
@@ -546,7 +570,8 @@ async function show(id) {
   } else {
     const text = await (await api(j.results.markdown)).text();
     $("#view").innerHTML = md(text);
-    $("#dl").innerHTML = [["docx", "Word"], ["markdown", "Minutes .md"], ["text", "Transcript .txt"], ["srt", "Subtitles .srt"]]
+    $("#dl").innerHTML = `<button data-u="${j.results.docx}" title="Minutes and transcript as a Word document">Export to Word</button>` +
+      [["markdown", "Minutes .md"], ["text", "Transcript .txt"], ["srt", "Subtitles .srt"]]
       .map(([k, label]) => `<button class="ghost" data-u="${j.results[k]}">${label}</button>`).join("") +
       '<button class="ghost" id="pdf">Print / PDF</button>';
     document.querySelectorAll("#dl button[data-u]").forEach(b => b.onclick = () => download(b.dataset.u));

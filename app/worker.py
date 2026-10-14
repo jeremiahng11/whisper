@@ -135,6 +135,7 @@ def run_summary(jid: str) -> None:
         _write(jid, "summary.md", body)
         opts = db.get(jid).get("options", {})
         opts["names_at_summary"] = names
+        opts["summary_title"] = title                       # what the minutes called it (your own title wins)
         db.update(jid, title=opts.get("title") or title, summary_error="", options=opts)
         db.update(jid, stage="listing action items")
         acts = summarize.extract_actions(body, meeting_date(job), best)
