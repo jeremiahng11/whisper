@@ -366,6 +366,7 @@ function tagNamed(label) { return !!(tagSpk.find(x => x.label === label) || {}).
 function showReport(st) {
   const r = st && st.report, el = $("#tagReport");
   $("#tagLoose").checked = !!(st && st.loose);
+  if (st && st.diarize_error) { el.textContent = "Speaker separation failed on the server: " + st.diarize_error; return; }
   if (!r) { el.textContent = ""; return; }
   const when = new Date(r.at * 1000).toLocaleString([], { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
   let t = `Voice check ${when}: `;
@@ -445,7 +446,8 @@ async function followAutotag(id, who, known) {
     try { st = await (await api(`/api/jobs/${id}/autotag`)).json(); } catch (e) { return; }
     if (st.state === "running") {
       const whose = known ? "people you've named before" : who ? `${who}'s voice` : "the voices you tagged";
-      $("#tagMsg").textContent = st.step === "listening" && st.total
+      $("#tagMsg").textContent = st.step === "separating speakers" ? "Separating the speakers of this meeting (they were missing)… this takes a few minutes."
+        : st.step === "listening" && st.total
         ? `Finding ${whose} in the meeting… ${st.done}/${st.total} lines` : `Finding ${whose} in the meeting…`;
       continue;
     }
@@ -496,6 +498,11 @@ async function loadSpeakers(id, opening) {
     if (!opening) {}
     else if (st.state === "error") $("#tagMsg").textContent = "Voice check failed: " + st.error;
     else if (st.state === "running") setTimeout(() => followAutotag(id, "", true));
+    else if (st.no_speakers) setTimeout(async () => {      // speaker separation failed when it was transcribed
+      try { await api(`/api/jobs/${id}/speakers/redo`, { method: "POST" }); } catch (e) { $("#tagMsg").textContent = e.message; return; }
+      $("#tagMsg").dataset.moved = 0;
+      followAutotag(id, "", true);
+    });
     else if (st.stale) setTimeout(async () => {
       try { await api(`/api/jobs/${id}/autotag`, { method: "POST" }); } catch (e) { return; }
       $("#tagMsg").dataset.moved = 0;

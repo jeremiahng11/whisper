@@ -212,6 +212,10 @@ Open a recording on the web page:
   CTRIP, "Pricilla" -> Priscilla) in the transcript and minutes; the line keeps what was heard (`heard`). Names of
   remembered voices count as Names & terms, and a name typed for a speaker takes the spelling from there (🔗 on
   the web = a name that's in both).
+* **Meetings with no speakers:** if speaker separation failed when a meeting was transcribed (1.5.3-1.5.6 had a bug
+  that broke it on real servers), the server separates the speakers again in the background when idle, or when
+  you open the meeting (`POST /api/jobs/{id}/speakers/redo`). Lines you tagged keep their names; people with
+  remembered voices are named, and your tags spread to the same voices. `/api/health` shows `speaker_separation`.
 * **Voices lost, tags kept:** if the voices were lost (e.g. `/data` wasn't persistent on an old deploy), the server
   learns them again from the lines you tagged when it starts (`POST /api/voices/relearn` does it on demand).
   `/api/health` shows `voice_prints` - "ok", or why voice prints can't be made.

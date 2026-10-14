@@ -956,3 +956,39 @@ def test_names_and_terms_fix_misheard_words(client):
     tr = {"segments": [{"text": "ask Pricilla about c trip"}]}
     assert terms.fix_transcript(tr, t) == 1 and tr["segments"][0]["heard"] == "ask Pricilla about c trip"
     client.put("/api/glossary", content="", headers=H)
+
+
+def test_meeting_without_speakers_gets_them_again_and_keeps_your_tags(client):
+    import json
+    from app import worker
+    _only_these_voices()
+    j = upload(client, "dev1-nospk", 40, "diarize=true&speakers=2")
+    jid = j["id"]
+    tr = worker.load_transcript(jid)
+    for s in tr["segments"]:                               # speaker separation failed when it was transcribed
+        s["speaker"], s["also"] = "", []
+    worker._write(jid, "transcript.json", json.dumps(tr))
+    worker._write(jid, "speakers.json", "{}")
+    from app import db
+    o = dict(db.get(jid)["options"]); o["speaker_names"] = {}; o.pop("speaker_auto", None)
+    db.update(jid, options=o)
+    client.post(f"/api/jobs/{jid}/segments/0", json={"name": "Priscilla"}, headers=H)
+    _wait_autotag(client, jid)
+    assert client.get(f"/api/jobs/{jid}/autotag", headers=H).json()["no_speakers"]
+    r = client.post(f"/api/jobs/{jid}/speakers/redo", headers=H)
+    assert r.status_code == 200
+    st = _wait_autotag(client, jid)
+    assert st["state"] == "done" and not st["no_speakers"], st
+    segs = client.get(f"/api/jobs/{jid}/transcript.json", headers=H).json()["segments"]
+    names = client.get(f"/api/jobs/{jid}", headers=H).json()["speaker_names"]
+    assert all(s["speaker"] for s in segs)
+    a = [names.get(s["speaker"]) for s in segs if int(s["start"] // 10) % 2 == 0]
+    assert a and all(n == "Priscilla" for n in a), (a, names)
+
+
+def test_no_undefined_names_in_app():
+    import subprocess, sys, pathlib
+    files = [str(p) for p in pathlib.Path(__file__).resolve().parent.parent.joinpath("app").glob("*.py")]
+    out = subprocess.run([sys.executable, "-m", "pyflakes", *files], capture_output=True, text=True).stdout
+    bad = [l for l in out.splitlines() if "undefined name" in l]
+    assert not bad, bad

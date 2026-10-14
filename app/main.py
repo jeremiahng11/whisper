@@ -19,7 +19,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.5.6"
+VERSION = "1.5.7"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -789,6 +789,18 @@ async def restore(request: Request):
     return {"terms_added": len(add), "voices": n}
 
 
+@app.post("/api/jobs/{jid}/speakers/redo", dependencies=[Depends(auth)])
+def redo_speakers(jid: str):
+    """Separate the speakers again (e.g. it failed when the meeting was transcribed). Your tagged lines stay."""
+    j = _job(jid)
+    if j["status"] != "done":
+        raise HTTPException(409, f"job is {j['status']}")
+    if not j["audio_path"] or not os.path.exists(j["audio_path"]):
+        raise HTTPException(410, "the audio of this recording is no longer kept")
+    autotag.start(jid, speakers=True)
+    return autotag.status(jid)
+
+
 @app.post("/api/voices/relearn", dependencies=[Depends(auth)])
 def relearn_voices():
     """Learn voices again from the lines you tagged (for names that have no remembered voice)."""
@@ -1020,6 +1032,7 @@ def health():
         "redact": settings.redact,
         "voices": len(voices.list_voices()),
         "voice_prints": ("error: " + transcribe.embed_error) if transcribe.embed_error else "ok",
+        "speaker_separation": ("error: " + transcribe.diarize_error) if transcribe.diarize_error else "ok",
         "tts": speech.tts_available(),
         "jobs": db.counts(),
         "running": worker.current_job,

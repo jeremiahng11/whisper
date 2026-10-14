@@ -180,6 +180,9 @@ def process(job: dict) -> None:
     _write(jid, "transcript.json", json.dumps(data, ensure_ascii=False, indent=1))
     _write(jid, "speakers.json", json.dumps(spk))
     opts = db.get(jid).get("options", {})
+    if opts.get("diarize", settings.diarize) and not spk and transcribe.diarize_error:
+        opts["diarize_error"] = transcribe.diarize_error          # shown on the web, retried later
+        opts["diarize_failed_at"] = int(time.time())
     auto = {k: v for k, v in voices.match(spk).items() if k not in (opts.get("speaker_names") or {})}
     if auto:
         opts["speaker_names"] = {**auto, **(opts.get("speaker_names") or {})}

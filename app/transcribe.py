@@ -400,6 +400,7 @@ def wav16(a: np.ndarray) -> bytes:
 
 
 _embedder = None
+diarize_error = ""                                       # why speaker separation failed (shown to you)
 embed_error = ""                                         # why voice prints of clips aren't available (shown to you)
 
 
@@ -457,6 +458,10 @@ def embed_clip(a: np.ndarray, t: Optional[float] = None) -> Optional[list[float]
         embed_error = str(e)[:200] or type(e).__name__
         log.warning("voice print of a clip failed: %s", e)
         return None
+
+
+# ---------------------------------------------------------------- speaker labels
+_diar = None
 
 
 def _get_diarizer():
@@ -566,12 +571,51 @@ def split_by_speaker(s: Segment, turns) -> list[Segment]:
     return out
 
 
+def label_lines(audio: np.ndarray, segs: list[dict], num_speakers: Optional[int] = None, first: int = 1):
+    """Speaker separation for a meeting that already has its lines (they're not split, so line numbers stay):
+    -> ([(speaker, also)] per line, {label: {"seconds", "embedding"}}). Labels start at "Speaker <first>"."""
+    global diarize_error
+    try:
+        turns, vecs = _diarize(audio, num_speakers)
+        diarize_error = ""
+    except Exception as e:
+        diarize_error = str(e)[:200] or type(e).__name__
+        raise
+    names: dict[str, str] = {}
+    secs: dict[str, float] = {}
+
+    def label(spk):
+        if spk not in names:
+            names[spk] = f"Speaker {first + len(names)}"
+        return names[spk]
+
+    out = []
+    for s in segs:
+        a, b = float(s["start"]), float(s["end"])
+        overlap = _who(turns, a, b)
+        if not overlap:
+            out.append(("", []))
+            continue
+        ranked = sorted(overlap, key=overlap.get, reverse=True)
+        who = label(ranked[0])
+        secs[who] = secs.get(who, 0) + (b - a)
+        dur = max(0.1, b - a)
+        also = [label(ranked[1])] if (len(ranked) > 1 and overlap[ranked[1]] >= 0.3 * dur
+                                      and overlap[ranked[0]] + overlap[ranked[1]] > 1.15 * dur) else []
+        out.append((who, also))
+    spk = {lab: {"seconds": round(secs.get(lab, 0), 1), "embedding": vecs.get(k)} for k, lab in names.items()}
+    return out, spk
+
+
 def assign_speakers(audio: np.ndarray, tr: Transcript, num_speakers: Optional[int] = None) -> None:
     """Give each line the speaker who talks most during it; split lines where the speaker changes mid-line;
     mark lines where a second person talks at the same time ("also"). Failure only loses the labels."""
+    global diarize_error
     try:
         turns, vecs = _diarize(audio, num_speakers)
+        diarize_error = ""
     except Exception as e:
+        diarize_error = str(e)[:200] or type(e).__name__
         log.warning("speaker labelling failed: %s", e)
         return
     segs = []

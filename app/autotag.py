@@ -57,6 +57,8 @@ def status(jid: str) -> dict:
     st["manual"] = sorted(int(k) for k in (opts.get("manual_lines") or {}))
     st["auto"] = sorted(opts.get("auto_lines") or [])
     st["stale"] = stale(j)
+    st["no_speakers"] = needs_speakers(j) if j else False
+    st["diarize_error"] = opts.get("diarize_error", "")
     st["report"] = opts.get("autotag_report")
     st["loose"] = bool(opts.get("autotag_loose"))
     return st
@@ -92,7 +94,9 @@ def segment_embeddings(jid: str, job: dict, segs: list) -> dict:
         cache = json.loads(path.read_text()) if path.exists() else {}
     except ValueError:
         cache = {}
-    todo = [i for i in range(len(segs)) if str(i) not in cache]
+    # not yet done, or failed before (voice prints weren't working then): long lines get another try
+    todo = [i for i in range(len(segs)) if str(i) not in cache
+            or (cache[str(i)] is None and float(segs[i]["end"]) - float(segs[i]["start"]) >= 1.2)]
     audio = job.get("audio_path")
     if todo and (not audio or not os.path.exists(audio)):
         raise RuntimeError("the audio of this recording is no longer kept")
@@ -291,7 +295,7 @@ def apply(jid: str) -> int:
     return changed
 
 
-def start(jid: str) -> None:
+def start(jid: str, speakers: bool = False) -> None:
     """Run apply() in the background (one at a time per meeting; a new tag during a run re-runs it after)."""
     with _lock:
         if jid in _running:
@@ -302,6 +306,9 @@ def start(jid: str) -> None:
 
     def run():
         try:
+            if speakers:
+                redo_speakers(jid)
+                relearn()                                  # tags in this meeting: their voices are learned now
             while True:
                 n = apply(jid)
                 with _lock:
@@ -367,6 +374,73 @@ def relearn() -> dict:
     return {"learned": sorted(found), "samples": sum(min(len(v), 40) for v in found.values())}
 
 
+def needs_speakers(job: dict) -> bool:
+    """Speaker separation was on but failed (no line has a speaker): worth doing again."""
+    opts = job.get("options") or {}
+    if job.get("status") != "done" or not opts.get("diarize", settings.diarize) or opts.get("speakers_redone"):
+        return False
+    if time.time() - float(opts.get("diarize_failed_at") or 0) < 6 * 3600:   # failed again just now: not every minute
+        return False
+    if not job.get("audio_path") or not os.path.exists(job["audio_path"]):
+        return False
+    if worker.load_json(job["id"], "speakers.json", {}):   # it has the separation's speaker groups
+        return False
+    tr = worker.load_transcript(job["id"]) or {}
+    return bool(tr.get("segments"))
+
+
+def redo_speakers(jid: str) -> int:
+    """Run speaker separation again on a finished meeting. Your tagged lines keep their names; the other lines
+    get speakers, people with remembered voices are named, and your tags then spread to the same voices."""
+    job = db.get(jid)
+    if not job:
+        return 0
+    _set(jid, state="running", step="separating speakers")
+    audio = transcribe.load_audio(job["audio_path"])
+    tr = worker.load_transcript(jid) or {}
+    opts = job.get("options") or {}
+    names = opts.get("speaker_names") or {}
+    used = {s.get("speaker") for s in tr.get("segments", [])} | set(names)
+    nums = [int(x.split()[-1]) for x in used if x and x.startswith("Speaker ") and x.split()[-1].isdigit()]
+    try:
+        labels, spk = transcribe.label_lines(audio, tr.get("segments", []), opts.get("speakers"), max(nums, default=0) + 1)
+    except Exception as e:                                 # noqa: BLE001
+        with job_lock(jid):
+            o = dict((db.get(jid) or {}).get("options") or {})
+            o["diarize_error"] = transcribe.diarize_error or str(e)[:200]
+            o["diarize_failed_at"] = int(time.time())
+            db.update(jid, options=o)
+        raise RuntimeError("speaker separation failed: " + (transcribe.diarize_error or str(e)[:200]))
+    n = 0
+    with job_lock(jid):
+        job = db.get(jid)
+        tr = worker.load_transcript(jid) or {}
+        segs = tr.get("segments", [])
+        opts = dict(job.get("options") or {})
+        manual = {int(k) for k in (opts.get("manual_lines") or {})}
+        for i, s in enumerate(segs):
+            if i in manual or i >= len(labels) or not labels[i][0]:
+                continue
+            s["speaker"], s["also"] = labels[i][0], labels[i][1]
+            s.pop("orig", None)
+            n += 1
+        old = worker.load_json(jid, "speakers.json", {}) or {}
+        worker._write(jid, "transcript.json", json.dumps(tr, ensure_ascii=False, indent=1))
+        worker._write(jid, "speakers.json", json.dumps({**old, **spk}))
+        names2 = dict(opts.get("speaker_names") or {})
+        auto = {k: v for k, v in voices.match(spk).items() if k not in names2}
+        names2.update(auto)
+        opts["speaker_names"] = names2
+        opts["speaker_auto"] = sorted(set(opts.get("speaker_auto") or []) | set(auto))
+        opts["speakers_redone"] = int(time.time())
+        opts.pop("diarize_error", None)
+        opts.pop("diarize_failed_at", None)
+        opts.pop("recognized_voices", None)                # check again with the new groups
+        db.update(jid, options=opts)
+    worker.build_outputs(jid)
+    return n
+
+
 def _sweep() -> None:
     from . import worker as w
     try:
@@ -377,6 +451,11 @@ def _sweep() -> None:
         time.sleep(60)
         try:
             if w.current_job is not None or db.next_queued() is not None or _running:
+                continue
+            redo = next((j for j in db.list_jobs(200, "done") if needs_speakers(j)), None)
+            if redo:                                        # speaker separation failed when it was transcribed
+                log.info("separating speakers again in %s", redo["id"])
+                start(redo["id"], speakers=True)
                 continue
             for j in db.list_jobs(200, "done"):            # newest first, one meeting per minute
                 if stale(j):
