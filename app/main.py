@@ -19,7 +19,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.5.3"
+VERSION = "1.5.4"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -29,6 +29,7 @@ async def lifespan(app: FastAPI):
         raise RuntimeError("Set the API_KEY environment variable (any long random string).")
     db.init()
     worker.start()
+    autotag.start_sweeper()
     if speech.tts_available():                       # load the voices now, not on the first spoken answer
         import threading
         threading.Thread(target=speech.warm_voices, daemon=True).start()
@@ -679,13 +680,14 @@ def _tag(jid: str, idx: int, data: dict) -> dict:
 
 @app.post("/api/jobs/{jid}/autotag", dependencies=[Depends(auth)])
 def run_autotag(jid: str):
-    """Look again for lines that sound like the people you tagged (e.g. a meeting tagged before auto-tag existed)."""
+    """Look again for lines that sound like the people you tagged here or anyone remembered from other meetings."""
     j = _job(jid)
     if j["status"] != "done":
         raise HTTPException(409, f"job is {j['status']}")
     if not j["audio_path"] or not os.path.exists(j["audio_path"]):
         raise HTTPException(410, "the audio of this recording is no longer kept")
-    if not (j.get("options") or {}).get("manual_lines") and not (j.get("options") or {}).get("speaker_names"):
+    if (not (j.get("options") or {}).get("manual_lines") and not (j.get("options") or {}).get("speaker_names")
+            and autotag.voices_signature().startswith("0:")):
         raise HTTPException(400, "tag a line or name a speaker first")
     autotag.start(jid)
     return autotag.status(jid)

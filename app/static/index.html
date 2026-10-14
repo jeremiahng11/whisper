@@ -272,7 +272,7 @@ async function show(id) {
     $("#pdf").onclick = () => window.print();
     $("#reTpl").value = j.template || "general"; $("#reBest").checked = !!j.best;
     $("#askBox").classList.remove("hidden"); $("#ansOne").innerHTML = "";
-    loadSpeakers(id);
+    loadSpeakers(id, true);
   }
   if (j.status !== "done") { $("#askBox").classList.add("hidden"); $("#spkBox").classList.add("hidden"); $("#tagBox").classList.add("hidden"); }
   stopPlay();
@@ -412,14 +412,14 @@ async function tagLine(sel) {
 }
 // lines elsewhere in the meeting that sound like the person you just tagged follow (server works in the background)
 let autoRun = 0;
-async function followAutotag(id, who) {
+async function followAutotag(id, who, known) {
   const run = ++autoRun;
   for (let k = 0; k < 900 && run === autoRun && id === current; k++) {
     await new Promise(r => setTimeout(r, k < 5 ? 600 : 1500));
     let st;
     try { st = await (await api(`/api/jobs/${id}/autotag`)).json(); } catch (e) { return; }
     if (st.state === "running") {
-      const whose = who ? `${who}'s voice` : "the voices you tagged";
+      const whose = known ? "people you've named before" : who ? `${who}'s voice` : "the voices you tagged";
       $("#tagMsg").textContent = st.step === "listening" && st.total
         ? `Finding ${whose} in the meeting… ${st.done}/${st.total} lines` : `Finding ${whose} in the meeting…`;
       continue;
@@ -428,7 +428,7 @@ async function followAutotag(id, who) {
     if (st.state === "done") {
       await refreshAfterTag(-1);
       const prev = $("#tagMsg").dataset.moved | 0;
-      const n = st.changed + prev, them = who || "the people you tagged";
+      const n = st.changed + prev, them = known ? "people you've named before" : who || "the people you tagged";
       $("#tagMsg").textContent = n ? `${n} more line${n > 1 ? "s" : ""} sound like ${them} - tagged (marked "auto"). Fix any that are wrong.`
         : `No other lines clearly sound like ${them}.`;
       return;
@@ -458,7 +458,7 @@ $("#tagFind").onclick = async () => {
 };
 $("#tagMore").onclick = () => { tagShown += 300; renderLines(); };
 
-async function loadSpeakers(id) {
+async function loadSpeakers(id, opening) {
   const sp = (await (await api(`/api/jobs/${id}/speakers`)).json()).speakers;
   let segs = [];
   try { segs = (await (await api(`/api/jobs/${id}/transcript.json`)).json()).segments || []; } catch (e) {}
@@ -466,6 +466,14 @@ async function loadSpeakers(id) {
   try {
     const st = await (await api(`/api/jobs/${id}/autotag`)).json();
     tagManual = new Set(st.manual || []); tagAuto = new Set(st.auto || []);
+    // voices remembered from other meetings that this one hasn't been checked against yet: name their lines now
+    if (!opening) {}
+    else if (st.state === "running") setTimeout(() => followAutotag(id, "", true));
+    else if (st.stale) setTimeout(async () => {
+      try { await api(`/api/jobs/${id}/autotag`, { method: "POST" }); } catch (e) { return; }
+      $("#tagMsg").dataset.moved = 0;
+      followAutotag(id, "", true);
+    });
   } catch (e) { tagManual = new Set(); tagAuto = new Set(); }
   // each speaker's longest line (up to 12 s) to listen to
   const longest = {};

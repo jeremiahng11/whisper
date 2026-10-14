@@ -200,6 +200,13 @@ Open a recording on the web page:
   voice matches someone you tagged becomes theirs (`AUTOTAG_GROUP`, default 0.50), then single lines that sound
   more like them than anyone else follow (`AUTOTAG_MATCH` 0.50, `AUTOTAG_MARGIN` 0.03). *Find their other lines*
   re-runs this for meetings tagged earlier. If voice prints can't be made on the server, the page says why.
+* **People you've named before are found everywhere:** every voice you've named is remembered, and every meeting
+  is checked against them - new meetings right after they're transcribed (`AUTOTAG_NEW`, default on), older ones in
+  the background whenever the server is idle, one a minute, newest first, each time you've named or taught a new
+  voice (`AUTOTAG_SWEEP`, default on). Opening a meeting on the web that hasn't been checked yet runs it there and
+  then. Their lines get the name (marked *auto*) instead of *?*. A remembered voice that sounds like someone you
+  tagged in that meeting never overrides your tag, and two remembered people with near-identical voices are left
+  for you to pick.
 * **Tag once, the voice follows:** tagging a line names its whole speaker group at once (the speaker separation
   already put that voice's lines together - unless you named that group as someone else yourself). Then a voice
   comparison picks up that person's lines that ended up in other groups. Lines you set show ✓, automatic ones

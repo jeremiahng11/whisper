@@ -31,6 +31,22 @@ def job_lock(jid: str) -> threading.Lock:
         return _job_locks.setdefault(jid, threading.Lock())
 
 
+def voices_signature() -> str:
+    """Changes whenever a voice is added, learned more or forgotten."""
+    with db._lock:
+        r = db._conn.execute("SELECT COUNT(*) AS n, COALESCE(MAX(updated_at), 0) AS t FROM voices").fetchone()
+    return f"{r['n']}:{round(float(r['t']), 3)}"
+
+
+def stale(job: dict) -> bool:
+    """Not yet checked against the voices you have now (and it still has its audio)."""
+    if not job or job.get("status") != "done" or not job.get("audio_path") or not os.path.exists(job["audio_path"]):
+        return False
+    if voices_signature().startswith("0:"):
+        return False
+    return (job.get("options") or {}).get("recognized_voices") != voices_signature()
+
+
 def status(jid: str) -> dict:
     with _lock:
         st = dict(_state.get(jid) or {"state": "idle"})
@@ -38,6 +54,7 @@ def status(jid: str) -> dict:
     opts = j.get("options") or {}
     st["manual"] = sorted(int(k) for k in (opts.get("manual_lines") or {}))
     st["auto"] = sorted(opts.get("auto_lines") or [])
+    st["stale"] = stale(j)
     return st
 
 
@@ -129,9 +146,30 @@ def apply(jid: str) -> int:
         c = _mean(vs)
         if c:
             people[lab] = c
+    # people the server already knows from other meetings: they count too, even if nobody was tagged here
+    tagged = dict(people)
+    in_meeting = {names[lab] for lab in people if lab in names}
+    for lab, n in names.items():                           # named here (e.g. recognised), no sample of its own
+        if lab not in people and n in known:
+            if any(_cos(known[n], c) >= settings.autotag_group for c in tagged.values()):
+                continue                                   # you tagged that voice as someone else here
+            people[lab] = _norm(known[n])
+            in_meeting.add(n)
+    for n, v in known.items():
+        if n in in_meeting or n in names.values():
+            continue
+        if any(_cos(v, c) >= settings.autotag_group for c in tagged.values()):
+            continue                                       # sounds like someone you tagged here: yours wins
+        people["voice:" + n] = _norm(v)               # becomes a speaker of this meeting if they're heard
     if not people:
         if embs and not any(embs.values()) and transcribe.embed_error:
             raise RuntimeError("voice comparison isn't working on the server: " + transcribe.embed_error)
+        with job_lock(jid):                                # nothing to compare with: checked, don't repeat
+            j2 = db.get(jid)
+            if j2:
+                o2 = dict(j2.get("options") or {})
+                o2["recognized_voices"] = voices_signature()
+                db.update(jid, options=o2)
         return 0
     thr, margin = settings.autotag_match, settings.autotag_margin
     # 1. whole groups: the speaker separation often splits one person into two or three groups (noisy room,
@@ -184,6 +222,25 @@ def apply(jid: str) -> int:
         opts = dict(job.get("options") or {})
         manual = {int(k) for k in (opts.get("manual_lines") or {})}
         auto = set(opts.get("auto_lines") or [])
+        names2 = dict(opts.get("speaker_names") or {})
+        recog = set(opts.get("speaker_auto") or [])
+
+        def real(lab: str) -> str:
+            if not lab.startswith("voice:"):
+                return lab
+            who = lab[6:]
+            hit = next((k for k, v in names2.items() if v == who), "")
+            if hit:
+                return hit
+            used = {s.get("speaker") for s in segs} | set(names2)
+            nums = [int(x.split()[-1]) for x in used if x and x.startswith("Speaker ") and x.split()[-1].isdigit()]
+            new = f"Speaker {max(nums, default=0) + 1}"
+            names2[new] = who
+            recog.add(new)                                 # shown as "recognised"
+            return new
+
+        decide = {i: real(lab) for i, lab in decide.items()}
+        group_to = {g: real(lab) for g, lab in group_to.items()}
         for i, lab in decide.items():
             if i >= len(segs) or i in manual or segs[i].get("also"):
                 continue
@@ -200,6 +257,9 @@ def apply(jid: str) -> int:
             m = dict(opts.get("merged") or {})
             m.update(group_to)
             opts["merged"] = m
+        opts["speaker_names"] = names2
+        opts["speaker_auto"] = sorted(recog)
+        opts["recognized_voices"] = voices_signature()
         opts["auto_lines"] = sorted(auto - manual)
         db.update(jid, options=opts)
         worker.build_outputs(jid)
@@ -232,3 +292,34 @@ def start(jid: str) -> None:
                 _running.discard(jid)
 
     threading.Thread(target=run, daemon=True).start()
+
+
+# ---------------------------------------------------------------- automatic: new meetings + older ones when idle
+def after_transcription(jid: str) -> None:
+    """A new meeting is done: name lines of people the server already knows (if there are any)."""
+    if not settings.autotag_new or voices_signature().startswith("0:"):
+        return
+    start(jid)
+
+
+def _sweep() -> None:
+    from . import worker as w
+    while True:
+        time.sleep(60)
+        try:
+            if w.current_job is not None or db.next_queued() is not None or _running:
+                continue
+            if voices_signature().startswith("0:"):
+                continue
+            for j in db.list_jobs(200, "done"):            # newest first, one meeting per minute
+                if stale(j):
+                    log.info("recognising known voices in %s", j["id"])
+                    start(j["id"])
+                    break
+        except Exception as e:                             # noqa: BLE001
+            log.warning("voice sweep: %s", e)
+
+
+def start_sweeper() -> None:
+    if settings.autotag_sweep:
+        threading.Thread(target=_sweep, daemon=True).start()

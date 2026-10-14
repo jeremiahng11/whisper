@@ -14,6 +14,8 @@ os.environ["TRANSCRIBER"] = "fake"
 os.environ["SUMMARY_BACKEND"] = "openai"
 os.environ["PRELOAD_MODEL"] = "0"
 os.environ["DIARIZER"] = "fake"
+os.environ["AUTOTAG_NEW"] = "0"          # tested on their own below (they'd change other tests' meetings)
+os.environ["AUTOTAG_SWEEP"] = "0"
 
 import pytest
 from fastapi.testclient import TestClient
@@ -794,6 +796,7 @@ def test_redo_minutes_keeps_names_and_tags(client):
     b = next(i for i, s in enumerate(segs) if s["speaker"] == "Speaker 2")
     client.post(f"/api/jobs/{j['id']}/segments/{a}", json={"name": "Kai Wen"}, headers=H)
     client.post(f"/api/jobs/{j['id']}/segments/{b}", json={"name": "Nurul", "also": "Kai Wen"}, headers=H)
+    _wait_autotag(client, j["id"])                         # tagging looks for the same voices in the background
     before = client.get(f"/api/jobs/{j['id']}/transcript.json", headers=H).json()["segments"]
     st0 = client.get(f"/api/jobs/{j['id']}/autotag", headers=H).json()
     r = client.post(f"/api/jobs/{j['id']}/summarize", json={}, headers=H)
@@ -845,3 +848,70 @@ def test_autotag_takes_over_a_split_group_of_the_same_voice(client):
     for s in segs:
         voice_a = int(s["start"] // 10) % 2 == 0
         assert (s["speaker"] == r["speaker"]) == voice_a, (s["start"], s["speaker"])
+
+
+def _only_these_voices():
+    from app import db
+    with db._lock:                                         # earlier tests remembered the same two fake voices
+        db._conn.execute("DELETE FROM voices")
+        db._conn.commit()
+
+
+def _wait_autotag(client, jid):
+    for _ in range(400):
+        st = client.get(f"/api/jobs/{jid}/autotag", headers=H).json()
+        if st["state"] in ("done", "error"):
+            return st
+        time.sleep(0.05)
+    return st
+
+
+def test_remembered_voices_name_an_untagged_older_meeting(client):
+    import json
+    from app import autotag, db, worker
+    _only_these_voices()
+    # meeting 1: you name both voices (they're remembered for every meeting)
+    a = upload(client, "dev1-known1", 40, "diarize=true&speakers=2")
+    segs = client.get(f"/api/jobs/{a['id']}/transcript.json", headers=H).json()["segments"]
+    client.post(f"/api/jobs/{a['id']}/segments/0", json={"name": "Wen Hui"}, headers=H)
+    other = next(i for i, s in enumerate(segs) if int(s["start"] // 10) % 2 != int(segs[0]["start"] // 10) % 2)
+    client.post(f"/api/jobs/{a['id']}/segments/{other}", json={"name": "Darius"}, headers=H)
+    # meeting 2: recorded earlier, nobody named, the voices are only "Speaker 7/8" ("?" on the web)
+    b = upload(client, "dev1-known2", 40, "diarize=true&speakers=2")
+    jid = b["id"]
+    tr = worker.load_transcript(jid)
+    for s in tr["segments"]:
+        s["speaker"] = "Speaker 7" if int(s["start"] // 10) % 2 == 0 else "Speaker 8"
+    worker._write(jid, "transcript.json", json.dumps(tr))
+    worker._write(jid, "speakers.json", "{}")
+    o = dict(db.get(jid)["options"]); o.pop("speaker_names", None); o.pop("recognized_voices", None)
+    o.pop("speaker_auto", None); o.pop("manual_lines", None); o.pop("auto_lines", None)
+    db.update(jid, options=o)
+    assert client.get(f"/api/jobs/{jid}/autotag", headers=H).json()["stale"]
+    r = client.post(f"/api/jobs/{jid}/autotag", headers=H)
+    assert r.status_code == 200, r.text
+    st = _wait_autotag(client, jid)
+    assert st["state"] == "done" and not st["stale"], st
+    names = client.get(f"/api/jobs/{jid}", headers=H).json()["speaker_names"]
+    for s in client.get(f"/api/jobs/{jid}/transcript.json", headers=H).json()["segments"]:
+        want = "Wen Hui" if int(s["start"] // 10) % 2 == int(segs[0]["start"] // 10) % 2 else "Darius"
+        assert names.get(s["speaker"]) == want, (s["start"], s["speaker"], names)
+    # nothing new remembered since: the background pass leaves it alone
+    assert not autotag.stale(db.get(jid))
+
+
+def test_new_meeting_is_named_from_remembered_voices(client):
+    from app import autotag
+    from app.config import settings
+    _only_these_voices()
+    a = upload(client, "dev1-known3", 20, "diarize=true&speakers=2")
+    client.post(f"/api/jobs/{a['id']}/segments/0", json={"name": "Wen Hui"}, headers=H)
+    _wait_autotag(client, a["id"])
+    settings.autotag_new = True
+    try:
+        b = upload(client, "dev1-known4", 20, "diarize=true&speakers=2")
+        _wait_autotag(client, b["id"])
+        assert not client.get(f"/api/jobs/{b['id']}/autotag", headers=H).json()["stale"]
+        assert "Wen Hui" in client.get(f"/api/jobs/{b['id']}", headers=H).json()["speaker_names"].values()
+    finally:
+        settings.autotag_new = False

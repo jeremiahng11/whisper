@@ -155,6 +155,9 @@ def process(job: dict) -> None:
     run_summary(jid)
     build_outputs(jid)                              # files first, so "done" always means results are ready
     db.update(jid, status="done", stage="done", progress=1, finished_at=time.time())
+    if opts.get("diarize", settings.diarize):
+        from . import autotag
+        autotag.after_transcription(jid)            # people you've named before: their lines get their names
 
 
 # ---------------------------------------------------------------- live uploads (transcribed while recording)
