@@ -105,6 +105,16 @@ def apply(jid: str) -> int:
         if e and lab in names and not (segs[i].get("also") if i < len(segs) else None):   # mixed voices teach nothing
             groups.setdefault(lab, []).append(e)
     known = {n: v for n, v, _ in voices._all()}
+    spk = worker.load_json(jid, "speakers.json", {}) or {}
+    merged = opts.get("merged") or {}
+    for g, lab in merged.items():                          # a whole group you named: its voice print is theirs
+        e = (spk.get(g) or {}).get("embedding")
+        if e and lab in names:
+            groups.setdefault(lab, []).append(e)
+    for lab in names:
+        e = (spk.get(lab) or {}).get("embedding")
+        if e and lab in groups:
+            groups[lab].append(e)
     people = {}
     for lab, vs in groups.items():
         if names.get(lab) in known:
@@ -116,11 +126,10 @@ def apply(jid: str) -> int:
         return 0
     thr, margin = settings.autotag_match, settings.autotag_margin
     # the diarizer's speakers count as "someone else" unless they sound like a tagged person (then they're them)
-    spk = worker.load_json(jid, "speakers.json", {}) or {}
     others = {}
     for lab, info in spk.items():
         e = (info or {}).get("embedding")
-        if not e or lab in people:
+        if not e or lab in people or lab in merged or names.get(lab):
             continue
         if max(_cos(e, c) for c in people.values()) >= thr:
             continue

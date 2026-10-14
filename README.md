@@ -196,6 +196,10 @@ Open a recording on the web page:
 * **Who said what** - every transcript line with ▶ (play just that line) and a speaker menu. Pick who really said it,
   or *Someone else…* to add a person. With *Remember voices* on, that clip is added to the person's voice print, so
   later meetings name them automatically (and better each time you correct one). Filter to one speaker to check them.
+* **Tag once, the voice follows:** tagging a line names its whole speaker group at once (the speaker separation
+  already put that voice's lines together - unless you named that group as someone else yourself). Then a voice
+  comparison picks up that person's lines that ended up in other groups. Lines you set show ✓, automatic ones
+  *auto*. **Me** in the menu tags you (your name is asked once, `GET/PUT /api/me`).
 * **Auto-tag:** after you tag a line, every other line of the meeting that clearly sounds like that person gets
   their name too (marked *auto*; lines you tagged are marked *you* and never changed automatically). The first time
   it listens to the whole meeting (a progress count shows), later tags are quick. Tag a couple of lines per person

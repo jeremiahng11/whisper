@@ -321,13 +321,15 @@ async function playClip(btn, start, end) {
 const mmss = t => { t = Math.floor(t); const h = Math.floor(t / 3600), m = Math.floor(t % 3600 / 60), s = t % 60;
   return (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" + String(s).padStart(2, "0"); };
 
-let tagSegs = [], tagSpk = [], tagShown = 200, tagManual = new Set(), tagAuto = new Set();
+let tagSegs = [], tagSpk = [], tagShown = 200, tagManual = new Set(), tagAuto = new Set(), myName = "";
+async function loadMe() { try { myName = (await (await api("/api/me")).json()).name || ""; } catch (e) {} }
 function spkName(label) { const s = tagSpk.find(x => x.label === label); return s && s.name ? s.name : label; }
 function speakerOptions(cur) {
   const opts = tagSpk.map(s => `<option value="${esc(s.label)}"${s.label === cur ? " selected" : ""}>${esc(s.name || s.label)}${s.name ? "" : ""}</option>`);
   if (cur && !tagSpk.some(s => s.label === cur)) opts.unshift(`<option value="${esc(cur)}" selected>${esc(cur)}</option>`);
   if (!cur) opts.unshift('<option value="" selected>?</option>');
-  return opts.join("") + '<option value="__new">Someone else…</option>';
+  const me = myName ? `<option value="__me">Me (${esc(myName)})</option>` : '<option value="__me">Me…</option>';
+  return opts.join("") + me + '<option value="__new">Someone else…</option>';
 }
 function alsoOptions(s) {
   const cur = (s.also || [])[0] || "";
@@ -357,8 +359,8 @@ function renderLines() {
     <span class="t">${mmss(s.start)}</span>
     <select data-i="${s.i}">${speakerOptions(s.speaker)}</select>
     <select class="also" data-i="${s.i}" title="Someone else talking at the same time">${alsoOptions(s)}</select>
-    <span class="x">${esc(s.text)}${tagManual.has(s.i) ? '<span class="tag me" title="you tagged this line">you</span>'
-      : tagAuto.has(s.i) ? '<span class="tag" title="tagged automatically: sounds like this person">auto</span>' : ""}</span></div>`).join("") || '<p class="mute">No lines.</p>';
+    <span class="x">${esc(s.text)}${tagManual.has(s.i) ? '<span class="tag me" title="You set this line - it is never changed automatically">✓</span>'
+      : tagAuto.has(s.i) ? '<span class="tag" title="Tagged automatically (same voice). Pick another name if it is wrong.">auto</span>' : ""}</span></div>`).join("") || '<p class="mute">No lines.</p>';
   $("#tagMore").classList.toggle("hidden", rows.length <= tagShown);
   document.querySelectorAll("#tagLines .play").forEach(b => b.onclick = () => playClip(b, +b.dataset.s, Math.max(+b.dataset.e, +b.dataset.s + 1.5)));
   document.querySelectorAll("#tagLines select:not(.also)").forEach(sel => sel.onchange = () => tagLine(sel));
@@ -367,7 +369,15 @@ function renderLines() {
 async function tagLine(sel) {
   const i = +sel.dataset.i;
   let body;
-  if (sel.value === "__new") {
+  if (sel.value === "__me") {
+    if (!myName) {
+      const n = (prompt("Your name (used for \"Me\" from now on)") || "").trim();
+      if (!n) { renderLines(); return; }
+      await api("/api/me", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: n }) });
+      myName = n;
+    }
+    body = { name: myName };
+  } else if (sel.value === "__new") {
     const n = (prompt("Who is speaking in this line?") || "").trim();
     if (!n) { renderLines(); return; }
     body = { name: n };
@@ -382,9 +392,10 @@ async function tagLine(sel) {
     tagSegs[i].speaker = r.speaker;
     if (r.name && !tagSpk.some(x => x.label === r.speaker)) tagSpk.push({ label: r.speaker, name: r.name });
     else if (r.name) tagSpk.find(x => x.label === r.speaker).name = r.name;
-    $("#tagMsg").textContent = `${mmss(tagSegs[i].start)} → ${r.name || r.speaker}` + (r.learned ? " · voice learned" : "");
+    $("#tagMsg").textContent = `${mmss(tagSegs[i].start)} → ${r.name || r.speaker}` + (r.moved ? ` · ${r.moved} more line${r.moved > 1 ? "s" : ""} in the same voice tagged` : "") + (r.learned ? " · voice learned" : "");
     tagManual.add(i); tagAuto.delete(i);
     renderLines();
+    $("#tagMsg").dataset.moved = r.moved || 0;
     if (r.autotag === "started") followAutotag(current, r.name);
     const line = document.querySelector(`#tagLines .line[data-i="${i}"]`); if (line) line.classList.add("done");
     loadVoices();
@@ -407,8 +418,9 @@ async function followAutotag(id, who) {
     if (st.state === "error") { $("#tagMsg").textContent = "Auto-tag: " + st.error; return; }
     if (st.state === "done") {
       await refreshAfterTag(-1);
-      $("#tagMsg").textContent = st.changed ? `${st.changed} more line${st.changed > 1 ? "s" : ""} sound like ${who} - tagged (marked "auto"). Fix any that are wrong.`
-        : `No other lines clearly sound like ${who}.`;
+      const prev = $("#tagMsg").dataset.moved | 0;
+      $("#tagMsg").textContent = st.changed ? `${st.changed + prev} more line${st.changed + prev > 1 ? "s" : ""} sound like ${who} - tagged (marked "auto"). Fix any that are wrong.`
+        : prev ? `${prev} more line${prev > 1 ? "s" : ""} in ${who}'s voice tagged (marked "auto"). Fix any that are wrong.` : `No other lines clearly sound like ${who}.`;
       return;
     }
   }
@@ -530,7 +542,7 @@ $("#bkFile").onchange = async () => {
   } catch (e) { $("#bkMsg").textContent = "Restore failed: " + e.message; }
   $("#bkFile").value = "";
 };
-loadTemplates(); loadGlossary(); loadVoices();
+loadTemplates(); loadGlossary(); loadVoices(); loadMe();
 $("#refresh").onclick = load;
 
 function upload(file) {

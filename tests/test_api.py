@@ -767,3 +767,21 @@ def test_backup_and_restore_names_terms_voices(client):
     assert {"Coolify", "Aleta Planet", "Shenzhen"} <= set(terms)
     assert any(v["name"] == "Backup Person" for v in client.get("/api/voices", headers=H).json()["voices"])
     assert client.post("/api/backup", json={"kind": "x"}, headers=H).status_code == 400
+
+
+def test_tagging_a_line_names_its_whole_speaker_group_at_once(client):
+    j = upload(client, "dev1-group", 40, "diarize=true&speakers=2")
+    segs = client.get(f"/api/jobs/{j['id']}/transcript.json", headers=H).json()["segments"]
+    s2 = [i for i, s in enumerate(segs) if s["speaker"] == "Speaker 2"]
+    r = client.post(f"/api/jobs/{j['id']}/segments/{s2[0]}", json={"name": "Ahmad"}, headers=H).json()
+    assert r["moved"] == len(s2) - 1                                     # straight away, no waiting
+    segs2 = client.get(f"/api/jobs/{j['id']}/transcript.json", headers=H).json()["segments"]
+    assert all(segs2[i]["speaker"] == r["speaker"] for i in s2)
+    assert all(segs2[i]["speaker"] == "Speaker 1" for i, s in enumerate(segs) if s["speaker"] == "Speaker 1")
+    labels = [s["label"] for s in client.get(f"/api/jobs/{j['id']}/speakers", headers=H).json()["speakers"]]
+    assert "Speaker 2" not in labels and r["speaker"] in labels           # the empty old group isn't listed
+    st = client.get(f"/api/jobs/{j['id']}/autotag", headers=H).json()
+    assert set(s2[1:]) <= set(st["auto"]) and s2[0] in st["manual"]
+    # "Me"
+    assert client.put("/api/me", json={"name": "Jeremiah Ng"}, headers=H).json()["name"] == "Jeremiah Ng"
+    assert client.get("/api/me", headers=H).json()["name"] == "Jeremiah Ng"

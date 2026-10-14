@@ -19,7 +19,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.5.0"
+VERSION = "1.5.1"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -599,6 +599,7 @@ async def tag_segment(jid: str, idx: int, request: Request):
                 labels.add(label)
         return label
 
+    group = segs[idx].get("orig") or segs[idx].get("speaker", "")   # the speaker-separation group of this line
     label = segs[idx].get("speaker", "")
     if data.get("name") or data.get("speaker"):
         label = resolve(data.get("name"), str(data.get("speaker") or "").strip())
@@ -606,7 +607,31 @@ async def tag_segment(jid: str, idx: int, request: Request):
             raise HTTPException(400, "send {'name': 'Alan'} or {'speaker': 'Speaker 2'}")
     elif "also" not in data:
         raise HTTPException(400, "send {'name': 'Alan'}, {'speaker': 'Speaker 2'} or {'also': 'Wei Ling'}")
+    if segs[idx].get("speaker") and segs[idx].get("speaker") != label:
+        segs[idx].setdefault("orig", segs[idx]["speaker"])
     segs[idx]["speaker"] = label
+    manual = dict(opts.get("manual_lines") or {})
+    auto_lines = set(opts.get("auto_lines") or [])
+    moved = 0
+    # the rest of this line's group goes with it: the speaker separation already put the same voice together.
+    # Not when you already named that group as someone else, or tagged a line of it as someone else
+    # (a name the server guessed from a remembered voice doesn't count: you're correcting it).
+    if (data.get("name") or data.get("speaker")) and data.get("spread", True) and group and group != label \
+            and re.match(r"^Speaker \d+$", group) and (not names.get(group) or group in (opts.get("speaker_auto") or [])):
+        conflict = any(i != str(idx) and lab != label and (segs[int(i)].get("orig") or "") == group
+                       for i, lab in manual.items() if int(i) < len(segs))
+        if not conflict:
+            for k, s in enumerate(segs):
+                if k == idx or str(k) in manual or s.get("also"):
+                    continue
+                if (s.get("orig") or s.get("speaker")) == group and s.get("speaker") == group:
+                    s["orig"] = group
+                    s["speaker"] = label
+                    auto_lines.add(k)
+                    moved += 1
+            merged = dict(opts.get("merged") or {})
+            merged[group] = label
+            opts["merged"] = merged
     if "also" in data:
         other = resolve(data.get("also")) if data.get("also") else ""
         segs[idx]["also"] = [other] if other and other != label else []
@@ -622,16 +647,15 @@ async def tag_segment(jid: str, idx: int, request: Request):
             learned = True
     opts["speaker_names"] = names
     opts["speaker_auto"] = sorted(set(opts.get("speaker_auto") or []) - {label})
-    manual = dict(opts.get("manual_lines") or {})
     manual[str(idx)] = label                         # you said so: auto-tagging never changes this line
     opts["manual_lines"] = manual
-    opts["auto_lines"] = sorted(set(opts.get("auto_lines") or []) - {idx})
+    opts["auto_lines"] = sorted(auto_lines - {idx})
     db.update(jid, options=opts)
     worker.build_outputs(jid)
     spread = bool(data.get("spread", True)) and bool(who) and bool(j["audio_path"]) and os.path.exists(j["audio_path"])
     if spread:                                       # lines elsewhere that sound like them follow (background)
         autotag.start(jid)
-    return {"index": idx, "speaker": label, "name": who, "learned": learned, "also": segs[idx].get("also") or [],
+    return {"index": idx, "speaker": label, "name": who, "learned": learned, "moved": moved, "also": segs[idx].get("also") or [],
             "also_names": [names.get(a, a) for a in segs[idx].get("also") or []], "autotag": "started" if spread else "off"}
 
 
@@ -649,6 +673,9 @@ def get_speakers(jid: str):
     labels = sorted(set(spk) | {s.get("speaker") for s in tr.get("segments", []) if s.get("speaker")}
                     | {a for s in tr.get("segments", []) for a in (s.get("also") or []) if a},
                     key=lambda x: int(x.split()[-1]) if x.split()[-1].isdigit() else 99)
+    used = {s.get("speaker") for s in tr.get("segments", [])} | {a for s in tr.get("segments", []) for a in (s.get("also") or [])}
+    merged = (j.get("options") or {}).get("merged") or {}
+    labels = [lab for lab in labels if lab in used or (lab not in merged and lab in names)]
     return {"speakers": [{"label": lab, "name": names.get(lab, ""), "auto": lab in auto,
                           "seconds": (spk.get(lab) or {}).get("seconds", 0), "has_voice": bool((spk.get(lab) or {}).get("embedding")),
                           "sample": sample.get(lab, "")} for lab in labels]}
@@ -664,6 +691,24 @@ def delete_voice(name: str):
     if not voices.forget(name):
         raise HTTPException(404, "unknown voice")
     return {"deleted": name}
+
+
+@app.get("/api/me", dependencies=[Depends(auth)])
+def get_me():
+    """Your own name, for "Me" when tagging speakers."""
+    p = settings.data_dir / "me.json"
+    try:
+        return json.loads(p.read_text()) if p.exists() else {"name": os.getenv("ME_NAME", "")}
+    except ValueError:
+        return {"name": ""}
+
+
+@app.put("/api/me", dependencies=[Depends(auth)])
+async def set_me(request: Request):
+    data = await body_extra(request)
+    name = re.sub(r"\s+", " ", str(data.get("name") or "")).strip()[:60]
+    (settings.data_dir / "me.json").write_text(json.dumps({"name": name}))
+    return {"name": name}
 
 
 @app.get("/api/backup", dependencies=[Depends(auth)])
