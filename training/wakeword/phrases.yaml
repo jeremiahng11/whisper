@@ -1,0 +1,49 @@
+# What the watch listens for. "wake" is the wake word; the others are the offline commands it listens for during the
+# 5 seconds after it (the ids are what the watch firmware knows - keep them).
+#
+#   say:      how people say it (several spellings help the speech generator say it in different ways)
+#   not:      things that sound close but must NOT trigger it (the model learns to ignore them)
+#   samples:  how many spoken examples to generate (more = better, slower)
+#   steps:    training steps
+#   max_faph: false wakes per hour you accept when the cut-off is picked (lower = fewer false wakes, more misses)
+models:
+  - id: wake
+    label: Hey Oracle
+    say: ["hey oracle", "hey, oracle", "hey orakle", "hey oracle!", "hey or-a-cle"]
+    not: ["hey", "oracle", "hey laura", "hey coral", "hey dora", "hey ora", "hey orange", "a miracle", "hey oral",
+          "hey order", "or a call", "hey america", "hey siri", "okay google", "hey carol", "hey oracles", "they're oracle",
+          "hey or call", "ok oracle", "hello", "hey alexa", "hey jarvis", "the oracle said", "hey mortal"]
+    samples: 20000
+    steps: 12000
+    max_faph: 0.5
+  - id: start_meeting
+    label: Start meeting
+    say: ["start meeting", "start the meeting", "start a meeting", "start recording the meeting"]
+    not: ["start", "meeting", "stop meeting", "stop recording", "voice memo", "mark this", "smart meeting", "start eating",
+          "start greeting", "last meeting", "next meeting"]
+    samples: 8000
+    steps: 8000
+    max_faph: 2.0
+  - id: voice_memo
+    label: Voice memo
+    say: ["voice memo", "take a memo", "new voice memo", "record a memo"]
+    not: ["voice", "memo", "voice mail", "nice memo", "start meeting", "stop recording", "mark this", "memory"]
+    samples: 8000
+    steps: 8000
+    max_faph: 2.0
+  - id: stop_recording
+    label: Stop recording
+    say: ["stop recording", "stop the recording", "stop recording now", "end recording"]
+    not: ["stop", "recording", "start recording", "start meeting", "voice memo", "mark this", "top recording",
+          "keep recording", "still recording"]
+    samples: 8000
+    steps: 8000
+    max_faph: 2.0
+  - id: mark_this
+    label: Mark this
+    say: ["mark this", "mark that", "mark this moment", "flag this"]
+    not: ["mark", "this", "mike this", "park this", "start meeting", "stop recording", "voice memo", "market",
+          "mark said", "marks"]
+    samples: 8000
+    steps: 8000
+    max_faph: 2.0

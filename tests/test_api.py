@@ -1338,3 +1338,41 @@ def test_samples_also_from_people_only_recognised_by_voice(client):
         after = db._conn.execute("SELECT COUNT(*) FROM voice_samples WHERE job_id=?", (b["id"],)).fetchone()[0]
     assert n >= 1 and after > before
     assert client.get("/api/people/wendy", headers=H).json()["samples"] == people.sample_count("Wendy") >= 2
+
+
+def test_wakeword_models_for_the_watch(client):
+    import io
+    import json
+    import zipfile
+    m = client.get("/api/wakeword", headers=H).json()
+    assert m["source"] == "starter" and m["models"][0]["id"] == "wake" and m["version"]
+    f = m["models"][0]["file"]
+    b = client.get(f"/api/wakeword/files/{f}", headers=H)
+    assert b.status_code == 200 and b.content[4:8] == b"TFL3" and len(b.content) == m["models"][0]["size"]
+    assert client.get("/api/wakeword/files/..%2Fwake.json", headers=H).status_code == 404
+    assert client.get("/api/wakeword").status_code == 401
+    # a trained set: "Hey Oracle" + a command
+    fake = b"\x1c\x00\x00\x00TFL3" + b"\x00" * 200
+    z = io.BytesIO()
+    with zipfile.ZipFile(z, "w") as zf:
+        zf.writestr("out/wake.json", json.dumps({"models": [
+            {"id": "wake", "label": "Hey Oracle", "file": "hey_oracle.tflite", "cutoff": 0.96},
+            {"id": "start_meeting", "file": "start_meeting.tflite"}]}))
+        zf.writestr("out/hey_oracle.tflite", fake)
+        zf.writestr("out/start_meeting.tflite", fake)
+    r = client.post("/api/wakeword", files={"file": ("models.zip", z.getvalue(), "application/zip")}, headers=H)
+    assert r.status_code == 200, r.text
+    m2 = r.json()
+    assert m2["source"] == "yours" and m2["version"] != m["version"]
+    assert [e["label"] for e in m2["models"]] == ["Hey Oracle", "Start meeting"]
+    assert client.get("/api/wakeword/files/hey_oracle.tflite", headers=H).content == fake
+    assert client.get(f"/api/wakeword/files/{f}", headers=H).status_code == 404      # the old set is gone
+    # broken sets are refused and the installed one stays
+    bad = io.BytesIO()
+    with zipfile.ZipFile(bad, "w") as zf:
+        zf.writestr("wake.json", json.dumps({"models": [{"id": "start_meeting", "file": "a.tflite"}]}))
+        zf.writestr("a.tflite", fake)
+    r = client.post("/api/wakeword", content=bad.getvalue(), headers={**H, "Content-Type": "application/zip"})
+    assert r.status_code == 400 and "no wake word" in r.json()["detail"]
+    assert client.get("/api/wakeword", headers=H).json()["version"] == m2["version"]
+    assert client.delete("/api/wakeword", headers=H).json()["source"] == "starter"

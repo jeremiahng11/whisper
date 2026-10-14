@@ -15,12 +15,12 @@ from typing import Optional
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse, FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
 
-from . import agenda, autotag, chat, db, dynamics, login, people, vocab, redact, render, search, speech, summarize, terms, transcribe, voices, worker
+from . import agenda, autotag, chat, db, dynamics, login, people, vocab, redact, render, search, speech, summarize, terms, transcribe, voices, wakeword, worker
 from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.10.8"
+VERSION = "1.11.0"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -776,6 +776,50 @@ async def edit_line(jid: str, idx: int, request: Request):
     if learned:
         worker.refresh_terms_everywhere()            # the same mistake in your other meetings
     return {"index": idx, "text": text, "learned": [{"heard": h, "right": r} for h, r in learned]}
+
+
+@app.get("/api/wakeword", dependencies=[Depends(auth)])
+def get_wakeword():
+    """The watch's wake word set ("Hey Oracle" + offline commands): manifest with a version the watch compares."""
+    return wakeword.manifest()
+
+
+@app.get("/api/wakeword/files/{name}", dependencies=[Depends(auth)])
+def get_wakeword_file(name: str):
+    p = wakeword.file_path(name)
+    if not p:
+        raise HTTPException(404, "no such model file")
+    return FileResponse(p, media_type="application/octet-stream")
+
+
+@app.post("/api/wakeword", dependencies=[Depends(auth)])
+async def put_wakeword(request: Request):
+    """Install a trained set: a zip (or several files) with wake.json and the .tflite files it names, as multipart
+    form fields, or the zip as the raw body. The watch picks it up at its next check (within a few hours, or
+    Settings > Hey Oracle)."""
+    uploads: dict[str, bytes] = {}
+    ctype = request.headers.get("content-type", "")
+    if ctype.startswith("multipart/"):
+        form = await request.form()
+        for _, v in form.multi_items():
+            if hasattr(v, "read"):
+                uploads[v.filename or "upload.zip"] = await v.read()
+    else:
+        uploads["upload.zip"] = await request.body()
+    if not uploads or sum(len(b) for b in uploads.values()) > 20 * 1024 * 1024:
+        raise HTTPException(400, "send the wake word zip (max 20 MB)")
+    try:
+        return wakeword.install(uploads)
+    except (ValueError, KeyError) as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:                       # noqa: BLE001  (a broken zip)
+        raise HTTPException(400, f"could not read the upload: {e}")
+
+
+@app.delete("/api/wakeword", dependencies=[Depends(auth)])
+def reset_wakeword():
+    """Back to the starter wake word."""
+    return wakeword.reset()
 
 
 @app.get("/api/vocab", dependencies=[Depends(auth)])
