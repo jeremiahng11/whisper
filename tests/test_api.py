@@ -72,7 +72,7 @@ def wait(client, jid, timeout=20):
         if j["status"] in ("done", "error"):
             return j
         time.sleep(0.1)
-    raise AssertionError("job did not finish")
+    raise AssertionError(f"job did not finish: {j}")
 
 
 def test_health_and_auth(client):
@@ -605,7 +605,7 @@ def test_clip_and_tag_a_line(client):
     assert client.post(f"/api/jobs/{j['id']}/segments/{i}", json={}, headers=H).status_code == 400
 
 
-def test_storage_kind_detects_temporary_volume():
+def test_storage_kind_detects_temporary_volume(client):
     from app import main as m
     d = os.path.realpath(str(settings.data_dir))
     root = "1 0 0:1 / / rw - overlay overlay rw\n"
@@ -616,14 +616,7 @@ def test_storage_kind_detects_temporary_volume():
     assert m.storage_kind(anon) == "temporary"
     assert m.storage_kind(named) == "persistent"
     assert m.storage_kind(bind) == "persistent"
-    assert client_health_has_storage()
-
-
-def client_health_has_storage():
-    from fastapi.testclient import TestClient
-    from app import main as m
-    with TestClient(m.app) as c:
-        return c.get("/api/health").json()["storage"] in ("temporary", "persistent", "unknown")
+    assert client.get("/api/health").json()["storage"] in ("temporary", "persistent", "unknown")
 
 
 def test_tts_adpcm_is_smaller_and_decodes():
@@ -693,3 +686,34 @@ def test_level_audio_lifts_quiet_voices_not_silence():
     assert abs(rms(b[sr * 5:sr * 7]) / rms(a[sr * 5:sr * 7]) - 1) < 0.2   # near voice ~unchanged
     assert rms(b[sr:sr * 3]) < 2 * rms(a[sr:sr * 3])                 # silence not pumped
     assert np.max(np.abs(b)) <= 1.0
+
+
+def test_tagging_one_line_tags_the_same_voice_everywhere(client):
+    j = upload(client, "dev1-autotag", 40, "diarize=true&speakers=2")
+    segs = client.get(f"/api/jobs/{j['id']}/transcript.json", headers=H).json()["segments"]
+    first = next(i for i, s in enumerate(segs) if s["start"] < 10)                  # voice A (0-10 s, 20-30 s)
+    r = client.post(f"/api/jobs/{j['id']}/segments/{first}", json={"name": "Wei Ling"}, headers=H).json()
+    assert r["autotag"] == "started"
+    for _ in range(100):
+        st = client.get(f"/api/jobs/{j['id']}/autotag", headers=H).json()
+        if st["state"] in ("done", "error"):
+            break
+        time.sleep(0.05)
+    assert st["state"] == "done", st
+    segs2 = client.get(f"/api/jobs/{j['id']}/transcript.json", headers=H).json()["segments"]
+    lab = r["speaker"]
+    for i, s in enumerate(segs2):
+        voice_a = int(s["start"] // 10) % 2 == 0
+        assert (s["speaker"] == lab) == voice_a, (i, s["start"], s["speaker"])         # A everywhere, B untouched
+    assert first in st["manual"] and len(st["auto"]) >= 1 and first not in st["auto"]
+    md = client.get(f"/api/jobs/{j['id']}/result.md", headers=H).text
+    assert md.count("**Wei Ling:**") >= 2
+    # a line you tag yourself is never overridden by auto-tagging
+    b = next(i for i, s in enumerate(segs2) if int(s["start"] // 10) % 2 == 1)
+    client.post(f"/api/jobs/{j['id']}/segments/{b}", json={"name": "Wei Ling", "spread": False}, headers=H)
+    client.post(f"/api/jobs/{j['id']}/segments/{first}", json={"name": "Wei Ling"}, headers=H)
+    for _ in range(100):
+        if client.get(f"/api/jobs/{j['id']}/autotag", headers=H).json()["state"] == "done":
+            break
+        time.sleep(0.05)
+    assert client.get(f"/api/jobs/{j['id']}/transcript.json", headers=H).json()["segments"][b]["speaker"] == lab

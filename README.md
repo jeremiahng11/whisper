@@ -196,6 +196,11 @@ Open a recording on the web page:
 * **Who said what** - every transcript line with ▶ (play just that line) and a speaker menu. Pick who really said it,
   or *Someone else…* to add a person. With *Remember voices* on, that clip is added to the person's voice print, so
   later meetings name them automatically (and better each time you correct one). Filter to one speaker to check them.
+* **Auto-tag:** after you tag a line, every other line of the meeting that clearly sounds like that person gets
+  their name too (marked *auto*; lines you tagged are marked *you* and never changed automatically). The first time
+  it listens to the whole meeting (a progress count shows), later tags are quick. Tag a couple of lines per person
+  for best results; fix a wrong *auto* line by picking the right name, and it re-checks. Tuning: `AUTOTAG_MATCH`
+  (default 0.60, higher = stricter), `AUTOTAG_MARGIN` (0.05). `"spread": false` in the API skips it.
 * Names change in the minutes right away; *Redo minutes* rewrites the wording with the corrected speakers.
 * **Clearer audio** (on by default) plays lines with noise reduction, a rumble filter and steady volume, plus 0.3 s
   either side so words aren't cut off; untick it for the original. The speed menu slows playback (0.85x / 0.7x)

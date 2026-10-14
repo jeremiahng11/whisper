@@ -14,12 +14,12 @@ from typing import Optional
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
 
-from . import agenda, chat, db, redact, render, search, speech, summarize, transcribe, voices, worker
+from . import agenda, autotag, chat, db, redact, render, search, speech, summarize, transcribe, voices, worker
 from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.4.2"
+VERSION = "1.4.3"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -375,6 +375,9 @@ def job_result(jid: str, name: str, start: float = Query(0.0, ge=0), end: float 
         return get_speakers(jid)
     if name == "clip":
         return job_clip(jid, start, end, enhance)
+    if name == "autotag":
+        _job(jid)
+        return autotag.status(jid)
     return _result(_job(jid), name)
 
 
@@ -598,15 +601,22 @@ async def tag_segment(jid: str, idx: int, request: Request):
     if data.get("learn", True) and who and j["audio_path"] and os.path.exists(j["audio_path"]):
         from starlette.concurrency import run_in_threadpool
         clip = await run_in_threadpool(transcribe.load_range, j["audio_path"], float(segs[idx]["start"]), float(segs[idx]["end"]))
-        emb = await run_in_threadpool(transcribe.embed_clip, clip)
+        emb = await run_in_threadpool(transcribe.embed_clip, clip, float(segs[idx]["start"]))
         if emb:
             voices.remember(who, emb)
             learned = True
     opts["speaker_names"] = names
     opts["speaker_auto"] = sorted(set(opts.get("speaker_auto") or []) - {label})
+    manual = dict(opts.get("manual_lines") or {})
+    manual[str(idx)] = label                         # you said so: auto-tagging never changes this line
+    opts["manual_lines"] = manual
+    opts["auto_lines"] = sorted(set(opts.get("auto_lines") or []) - {idx})
     db.update(jid, options=opts)
     worker.build_outputs(jid)
-    return {"index": idx, "speaker": label, "name": who, "learned": learned}
+    spread = bool(data.get("spread", True)) and bool(who) and bool(j["audio_path"]) and os.path.exists(j["audio_path"])
+    if spread:                                       # lines elsewhere that sound like them follow (background)
+        autotag.start(jid)
+    return {"index": idx, "speaker": label, "name": who, "learned": learned, "autotag": "started" if spread else "off"}
 
 
 @app.get("/api/jobs/{jid}/speakers", dependencies=[Depends(auth)])

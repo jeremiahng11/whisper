@@ -390,12 +390,14 @@ def wav16(a: np.ndarray) -> bytes:
             + b"data" + struct.pack("<I", len(pcm)) + pcm)
 
 
-def embed_clip(a: np.ndarray) -> Optional[list[float]]:
-    """Voice print of one clip, in the same space as the diarizer's speaker embeddings (None if not available)."""
-    if len(a) < SR * 1.5:
+def embed_clip(a: np.ndarray, t: Optional[float] = None) -> Optional[list[float]]:
+    """Voice print of one clip, in the same space as the diarizer's speaker embeddings (None if not available).
+    t = where the clip starts in the recording (only the test diarizer uses it)."""
+    if len(a) < SR * 1.2:
         return None
-    if settings.diarizer == "fake":
-        return [1.0, 0.0, 0.0, 0.0]
+    if settings.diarizer == "fake":                      # tests: two people taking turns every 10 s
+        k = int((t or 0) // 10) % 2
+        return [1.0 if j == k else 0.0 for j in range(4)]
     try:
         import torch
         pipe = _get_diarizer()

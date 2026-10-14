@@ -57,6 +57,8 @@ tr.job:hover td{background:var(--chip)}
 #tagBox .line .x{padding-top:5px}
 #tagBox .line.done select{border-color:var(--accent)}
 #tagLines{max-height:520px;overflow:auto}
+#tagBox .line .tag{font-size:11px;padding:1px 6px;border-radius:8px;margin-left:6px;background:var(--chip);color:var(--mute)}
+#tagBox .line .tag.me{background:var(--accent);color:var(--accent-ink)}
 .badge{font-size:11px;padding:0 6px;border-radius:8px;background:var(--accent);color:var(--accent-ink);margin-left:4px}
 .answer{white-space:pre-wrap;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;margin-top:8px;font-size:14px}
 input[type=number]{width:64px;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px;font:inherit}
@@ -316,7 +318,7 @@ async function playClip(btn, start, end) {
 const mmss = t => { t = Math.floor(t); const h = Math.floor(t / 3600), m = Math.floor(t % 3600 / 60), s = t % 60;
   return (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" + String(s).padStart(2, "0"); };
 
-let tagSegs = [], tagSpk = [], tagShown = 200;
+let tagSegs = [], tagSpk = [], tagShown = 200, tagManual = new Set(), tagAuto = new Set();
 function spkName(label) { const s = tagSpk.find(x => x.label === label); return s && s.name ? s.name : label; }
 function speakerOptions(cur) {
   const opts = tagSpk.map(s => `<option value="${esc(s.label)}"${s.label === cur ? " selected" : ""}>${esc(s.name || s.label)}${s.name ? "" : ""}</option>`);
@@ -331,7 +333,8 @@ function renderLines() {
     <button class="ghost play" data-s="${s.start}" data-e="${s.end}" title="Play this line">▶</button>
     <span class="t">${mmss(s.start)}</span>
     <select data-i="${s.i}">${speakerOptions(s.speaker)}</select>
-    <span class="x">${esc(s.text)}</span></div>`).join("") || '<p class="mute">No lines.</p>';
+    <span class="x">${esc(s.text)}${tagManual.has(s.i) ? '<span class="tag me" title="you tagged this line">you</span>'
+      : tagAuto.has(s.i) ? '<span class="tag" title="tagged automatically: sounds like this person">auto</span>' : ""}</span></div>`).join("") || '<p class="mute">No lines.</p>';
   $("#tagMore").classList.toggle("hidden", rows.length <= tagShown);
   document.querySelectorAll("#tagLines .play").forEach(b => b.onclick = () => playClip(b, +b.dataset.s, Math.max(+b.dataset.e, +b.dataset.s + 1.5)));
   document.querySelectorAll("#tagLines select").forEach(sel => sel.onchange = () => tagLine(sel));
@@ -355,12 +358,37 @@ async function tagLine(sel) {
     if (r.name && !tagSpk.some(x => x.label === r.speaker)) tagSpk.push({ label: r.speaker, name: r.name });
     else if (r.name) tagSpk.find(x => x.label === r.speaker).name = r.name;
     $("#tagMsg").textContent = `${mmss(tagSegs[i].start)} → ${r.name || r.speaker}` + (r.learned ? " · voice learned" : "");
+    tagManual.add(i); tagAuto.delete(i);
     renderLines();
+    if (r.autotag === "started") followAutotag(current, r.name);
     const line = document.querySelector(`#tagLines .line[data-i="${i}"]`); if (line) line.classList.add("done");
     loadVoices();
     refreshAfterTag(i);
   } catch (e) { $("#tagMsg").textContent = "Couldn't save: " + e.message; renderLines(); }
 }
+// lines elsewhere in the meeting that sound like the person you just tagged follow (server works in the background)
+let autoRun = 0;
+async function followAutotag(id, who) {
+  const run = ++autoRun;
+  for (let k = 0; k < 900 && run === autoRun && id === current; k++) {
+    await new Promise(r => setTimeout(r, k < 5 ? 600 : 1500));
+    let st;
+    try { st = await (await api(`/api/jobs/${id}/autotag`)).json(); } catch (e) { return; }
+    if (st.state === "running") {
+      $("#tagMsg").textContent = st.step === "listening" && st.total
+        ? `Finding ${who}'s voice in the meeting… ${st.done}/${st.total} lines` : `Finding ${who}'s voice in the meeting…`;
+      continue;
+    }
+    if (st.state === "error") { $("#tagMsg").textContent = "Auto-tag: " + st.error; return; }
+    if (st.state === "done") {
+      await refreshAfterTag(-1);
+      $("#tagMsg").textContent = st.changed ? `${st.changed} more line${st.changed > 1 ? "s" : ""} sound like ${who} - tagged (marked "auto"). Fix any that are wrong.`
+        : `No other lines clearly sound like ${who}.`;
+      return;
+    }
+  }
+}
+
 // minutes + speaker list show the new name, without losing your place in the lines
 async function refreshAfterTag(i) {
   const id = current, top = $("#tagLines").scrollTop, f = $("#tagFilter").value, shown = tagShown;
@@ -383,6 +411,10 @@ async function loadSpeakers(id) {
   let segs = [];
   try { segs = (await (await api(`/api/jobs/${id}/transcript.json`)).json()).segments || []; } catch (e) {}
   tagSegs = segs; tagSpk = sp.map(s => ({ label: s.label, name: s.name })); tagShown = 200;
+  try {
+    const st = await (await api(`/api/jobs/${id}/autotag`)).json();
+    tagManual = new Set(st.manual || []); tagAuto = new Set(st.auto || []);
+  } catch (e) { tagManual = new Set(); tagAuto = new Set(); }
   // each speaker's longest line (up to 12 s) to listen to
   const longest = {};
   segs.forEach(s => { if (s.speaker && (!longest[s.speaker] || s.end - s.start > longest[s.speaker].end - longest[s.speaker].start)) longest[s.speaker] = s; });
