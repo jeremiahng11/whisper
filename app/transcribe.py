@@ -4,6 +4,7 @@ Audio is decoded once to 16 kHz mono float32. Recordings that are still being up
 transcribed in parts: `partial()` handles the audio received so far, and the final `transcribe()` only
 does the rest.
 """
+import os
 import logging
 import struct
 import threading
@@ -419,10 +420,7 @@ def _get_embedder():
     from pyannote.audio import Inference, Model
     name = getattr(pipe, "embedding", None)
     name = name if isinstance(name, str) and "/" in name else "pyannote/wespeaker-voxceleb-resnet34-LM"
-    try:
-        m = Model.from_pretrained(name, use_auth_token=settings.hf_token)
-    except TypeError:
-        m = Model.from_pretrained(name, token=settings.hf_token)
+    m = _hf_load(Model, name)
     if m is None:
         raise RuntimeError(f"could not load {name} - accept its terms on huggingface.co")
     inf = Inference(m, window="whole")
@@ -464,6 +462,29 @@ def embed_clip(a: np.ndarray, t: Optional[float] = None) -> Optional[list[float]
 _diar = None
 
 
+def _hf_load(cls, name: str):
+    """from_pretrained across pyannote / huggingface_hub versions: pyannote 3 takes use_auth_token, pyannote 4
+    takes token, and huggingface_hub >= 1.0 rejects use_auth_token deep inside pyannote 3. The token is also put in
+    HF_TOKEN, which huggingface_hub reads by itself, so the last try passes none."""
+    os.environ.setdefault("HF_TOKEN", settings.hf_token)
+    # torch >= 2.6 loads checkpoints "weights only" by default, which pyannote 3.x model files don't pass
+    os.environ.setdefault("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", "1")
+    try:
+        import pyannote.audio as pa
+        major = int(str(getattr(pa, "__version__", "3")).split(".")[0])
+    except Exception:                                       # noqa: BLE001
+        major = 3
+    tries = (["token", "use_auth_token"] if major >= 4 else ["use_auth_token", "token"]) + [None]
+    last = None
+    for kw in tries:
+        try:
+            return cls.from_pretrained(name, **({kw: settings.hf_token} if kw else {}))
+        except TypeError as e:                              # this version doesn't take that argument
+            last = e
+            log.info("from_pretrained(%s) with %s: %s", name, kw, e)
+    raise last
+
+
 def _get_diarizer():
     global _diar
     if _diar is None:
@@ -473,10 +494,7 @@ def _get_diarizer():
             from pyannote.audio import Pipeline
         except ImportError as e:
             raise RuntimeError("speaker labels need the image built with INSTALL_DIARIZE=1") from e
-        try:
-            _diar = Pipeline.from_pretrained(settings.diarize_model, use_auth_token=settings.hf_token)
-        except TypeError:                                   # pyannote >= 4 renamed the argument
-            _diar = Pipeline.from_pretrained(settings.diarize_model, token=settings.hf_token)
+        _diar = _hf_load(Pipeline, settings.diarize_model)
         if _diar is None:
             raise RuntimeError(f"could not load {settings.diarize_model} - accept its terms on huggingface.co")
         try:

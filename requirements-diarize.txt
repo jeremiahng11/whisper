@@ -3,3 +3,7 @@ pyannote.audio>=3.3,<4
 # pyannote.audio 3.x uses torchaudio.AudioMetaData, which torchaudio 2.9+ removed: keep torch/torchaudio at 2.8
 torch==2.8.0
 torchaudio==2.8.0
+# huggingface_hub 1.0 dropped use_auth_token, which pyannote.audio 3.x still passes
+huggingface_hub>=0.23,<1.0
+# lightning 2.5 loads pyannote 3.x checkpoints as they are
+lightning>=2.0.1,<2.6
