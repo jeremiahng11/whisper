@@ -1171,3 +1171,35 @@ def test_meeting_dynamics(client):
     assert d["turns"] >= 4 and d["replies"] and not d["external"]
     d = client.post(f"/api/jobs/{j['id']}/dynamics", json={"external": True}, headers=H).json()
     assert d["external"]
+
+
+def test_web_sign_in_protects_the_page(client):
+    from app import login
+    from app.config import settings
+    old = (settings.admin_id, settings.admin_pass)
+    settings.admin_id, settings.admin_pass = "admin", "s3cret-pass"
+    try:
+        c = client
+        c.cookies.clear()
+        r = c.get("/", follow_redirects=False)
+        assert r.status_code == 303 and r.headers["location"] == "/login"
+        assert "Oracle Minutes" in c.get("/login").text
+        assert c.get("/api/jobs").status_code == 401
+        assert c.post("/api/login", json={"id": "admin", "password": "nope"}).status_code == 401
+        r = c.post("/api/login", json={"id": "ADMIN", "password": "s3cret-pass"})
+        assert r.status_code == 200 and login.COOKIE in r.cookies
+        assert c.get("/", follow_redirects=False).status_code == 200
+        assert c.get("/api/jobs").status_code == 200                     # the page works with the cookie
+        assert c.get("/api/session").json()["user"] == "admin"
+        # another site can't post with your cookie
+        assert c.put("/api/glossary", content="x", headers={"Origin": "https://evil.example"}).status_code == 403
+        o = c.post("/api/passkey/register/options").json()
+        assert o["options"]["rp"]["name"] == "Oracle Minutes" and o["options"]["authenticatorSelection"]["userVerification"] == "required"
+        assert c.get("/api/jobs", headers=H).status_code == 200            # the watch's API key still works
+        c.post("/api/logout")
+        c.cookies.clear()
+        assert c.get("/api/jobs").status_code == 401
+        settings.admin_pass = "changed"                                    # a new password signs everyone out
+    finally:
+        settings.admin_id, settings.admin_pass = old
+        client.cookies.clear()

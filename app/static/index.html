@@ -253,7 +253,7 @@ ul.replies{margin:4px 0;padding-left:20px;font-size:13.5px}
       <button data-go="people">People</button>
       <button data-go="names">Names</button>
       <button data-go="notes">Notes</button>
-      <button data-go="key" title="API key">Key</button>
+      <button data-go="key" title="Sign-in, Face ID / Touch ID, API key">Account</button>
     </nav>
     <div id="drop"><strong>Add a recording</strong>Drop audio here or click to choose</div>
     <input id="file" type="file" accept="audio/*,video/*" class="hidden">
@@ -407,9 +407,19 @@ ul.replies{margin:4px 0;padding-left:20px;font-size:13.5px}
     </section>
 
     <section class="panel hidden" data-panel="key">
-      <h2>API key</h2>
-      <p class="mute">The key this server was set up with. It's kept in this browser only.</p>
-      <div class="row"><input id="key" type="password" placeholder="API key" autocomplete="off" style="flex:1;max-width:420px"><button id="saveKey">Save key</button></div>
+      <h2>Account</h2>
+      <div class="block" id="acctBox">
+        <div class="sub2">Signed in</div>
+        <p class="mute" id="acctWho" style="margin:0 0 10px"></p>
+        <div class="sub2" style="margin-top:14px">Face ID / Touch ID</div>
+        <p class="mute" style="margin:0 0 8px">Devices that can sign in with one touch. On a Mac the passkey is kept in iCloud Keychain, so your iPhone can use it too; a password manager that stores passkeys (KeePassXC, 1Password) works as well.</p>
+        <div id="pkList" class="mute">None yet.</div>
+        <div class="row" style="margin-top:10px"><button class="ghost" id="pkAdd">Add this device</button><button class="danger" id="logout">Sign out</button><span class="mute" id="pkMsg"></span></div>
+      </div>
+      <details class="block"><summary class="sub2" style="cursor:pointer;margin:0">API key (scripts, or this server without sign-in)</summary>
+        <p class="mute">The key this server was set up with (API_KEY). Kept in this browser only. Not needed when you're signed in.</p>
+        <div class="row"><input id="key" type="password" placeholder="API key" autocomplete="off" style="flex:1;max-width:420px"><button id="saveKey">Save key</button></div>
+      </details>
     </section>
   </main>
 </div>
@@ -419,9 +429,11 @@ let KEY = ""; try { KEY = localStorage.getItem("whisperKey") || ""; } catch (e) 
 $("#key").value = KEY;
 let current = null;
 
-function hdr() { return { "Authorization": "Bearer " + KEY }; }
+let SESSION = { login: false, user: null };
+function hdr() { return KEY ? { "Authorization": "Bearer " + KEY } : {}; }
 async function api(path, opt = {}) {
   const r = await fetch(path, { ...opt, headers: { ...hdr(), ...(opt.headers || {}) } });
+  if (r.status === 401 && SESSION.login && !KEY) { location.href = "/login"; throw new Error("signed out"); }
   if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.status);
   return r;
 }
@@ -736,7 +748,7 @@ function drawRibbon() {
 }
 
 async function load() {
-  if (!KEY) { $("#jobs").innerHTML = `<tr><td class="mute">Add your API key first (Key, above).</td></tr>`; go("key"); return; }
+  if (!KEY && !SESSION.user) { $("#jobs").innerHTML = `<tr><td class="mute">Sign in, or add the API key (Account, above).</td></tr>`; go("key"); return; }
   try {
     const all = await (await api("/api/jobs?limit=100")).json();
     const qf = ($("#jobFind").value || "").trim().toLowerCase();
@@ -1149,11 +1161,48 @@ $("#bkFile").onchange = async () => {
   } catch (e) { $("#bkMsg").textContent = "Restore failed: " + e.message; }
   $("#bkFile").value = "";
 };
-loadTemplates(); loadGlossary(); loadVoices(); loadMe();
+loadTemplates(); loadMe();
+// ---------------------------------------------------------------- account: sign-in and passkeys
+const pb64 = buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const punb64 = s => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((s.length + 3) % 4)), c => c.charCodeAt(0));
+async function loadAccount() {
+  $("#acctBox").classList.toggle("hidden", !SESSION.login);
+  if (!SESSION.login) return;
+  $("#acctWho").textContent = SESSION.user ? `As ${SESSION.user}.` : "Not signed in (using the API key).";
+  try {
+    const k = (await (await api("/api/passkeys")).json()).passkeys;
+    $("#pkList").innerHTML = k.length ? k.map(x => `<div class="row" style="justify-content:space-between;border-bottom:1px solid var(--rule);padding:6px 0"><span><b>${esc(x.name || "Device")}</b> <span class="mute">added ${when(x.created)}${x.last_used ? ", last used " + when(x.last_used) : ""}</span></span><button class="danger" data-k="${esc(x.id)}" style="padding:3px 10px;font-size:12.5px">Remove</button></div>`).join("") : "None yet.";
+    document.querySelectorAll("#pkList button[data-k]").forEach(b => b.onclick = async () => {
+      if (!confirm("Remove this device's Face ID / Touch ID sign-in?")) return;
+      await api(`/api/passkeys/${encodeURIComponent(b.dataset.k)}`, { method: "DELETE" }); loadAccount();
+    });
+  } catch (e) {}
+}
+$("#pkAdd").onclick = async () => {
+  $("#pkMsg").textContent = "Follow the Touch ID prompt…";
+  try {
+    const { token, options: o } = await (await api("/api/passkey/register/options", { method: "POST" })).json();
+    o.challenge = punb64(o.challenge); o.user.id = punb64(o.user.id);
+    (o.excludeCredentials || []).forEach(c => c.id = punb64(c.id));
+    const c = await navigator.credentials.create({ publicKey: o });
+    const name = /iPhone|iPad/.test(navigator.userAgent) ? "iPhone" : /Mac/.test(navigator.userAgent) ? "Mac" : "This device";
+    await api("/api/passkey/register", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, name, credential: {
+      id: c.id, rawId: pb64(c.rawId), type: c.type,
+      response: { clientDataJSON: pb64(c.response.clientDataJSON), attestationObject: pb64(c.response.attestationObject), transports: c.response.getTransports ? c.response.getTransports() : [] },
+      clientExtensionResults: c.getClientExtensionResults ? c.getClientExtensionResults() : {} } }) });
+    try { localStorage.setItem("omPasskey", "1"); } catch (x) {}
+    $("#pkMsg").textContent = "Added."; loadAccount();
+  } catch (e) { $("#pkMsg").textContent = e.name === "InvalidStateError" ? "This device is already added." : e.name === "NotAllowedError" ? "Cancelled." : "Couldn't add it: " + e.message; }
+};
+$("#logout").onclick = async () => { await fetch("/api/logout", { method: "POST" }); location.href = "/login"; };
+(async () => {
+  try { SESSION = await (await fetch("/api/session")).json(); } catch (e) {}
+  loadAccount(); loadGlossary(); loadVoices(); load(); loadDevices();
+})();
 $("#refresh").onclick = load;
 
 function upload(file) {
-  if (!KEY) { alertBox("Enter the API key first."); return; }
+  if (!KEY && !SESSION.user) { alertBox("Sign in first."); return; }
   const q = new URLSearchParams({ summarize: $("#sum").checked, diarize: $("#diar").checked });
   if ($("#lang").value) q.set("language", $("#lang").value);
   if ($("#title").value.trim()) q.set("title", $("#title").value.trim());
@@ -1163,7 +1212,7 @@ function upload(file) {
   if ($("#best").checked) q.set("best", "true");
   const x = new XMLHttpRequest();
   x.open("POST", "/api/jobs?" + q);
-  x.setRequestHeader("Authorization", "Bearer " + KEY);
+  if (KEY) x.setRequestHeader("Authorization", "Bearer " + KEY);
   x.setRequestHeader("X-Filename", file.name);
   x.setRequestHeader("Content-Type", file.type || "application/octet-stream");
   $("#up").classList.remove("hidden");
@@ -1235,9 +1284,9 @@ $("#fdel").onclick = async () => {
   await fetch(`/api/files/${FILE.path.split("/").map(encodeURIComponent).join("/")}?device=${encodeURIComponent(DEV)}&base_rev=${FILE.rev}&by=web`, { method: "DELETE", headers: hdr() });
   FILE = null; $("#fview").innerHTML = ""; $("#fname").textContent = "Pick a file"; fmode(false); $("#fedbtn").classList.add("hidden"); loadFiles();
 };
-loadDevices();
 
-health(); load();
+
+health();
 setInterval(() => { load(); health(); }, 4000);
 </script>
 </body>

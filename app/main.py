@@ -13,14 +13,14 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
+from fastapi.responses import RedirectResponse, FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
 
-from . import agenda, autotag, chat, db, dynamics, people, redact, render, search, speech, summarize, terms, transcribe, voices, worker
+from . import agenda, autotag, chat, db, dynamics, login, people, redact, render, search, speech, summarize, terms, transcribe, voices, worker
 from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.8.0"
+VERSION = "1.9.0"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -44,12 +44,18 @@ app = FastAPI(title="Oracle Minutes", version=VERSION, lifespan=lifespan)
 
 
 # ---------------------------------------------------------------- auth
-def auth(authorization: Optional[str] = Header(None), x_api_key: Optional[str] = Header(None)) -> None:
+def auth(request: Request, authorization: Optional[str] = Header(None), x_api_key: Optional[str] = Header(None)) -> None:
+    """The API key (watch, scripts) or a signed-in web page."""
     key = x_api_key or ""
     if authorization and authorization.lower().startswith("bearer "):
         key = authorization[7:].strip()
-    if not key or not secrets.compare_digest(key, settings.api_key):
-        raise HTTPException(401, "missing or wrong API key")
+    if key and secrets.compare_digest(key, settings.api_key):
+        return
+    if login.session_user(request):
+        if request.method in ("GET", "HEAD") or login.same_origin(request):
+            return
+        raise HTTPException(403, "request from another site")
+    raise HTTPException(401, "sign in, or send the API key")
 
 
 # ---------------------------------------------------------------- helpers
@@ -1243,9 +1249,14 @@ def health():
     }
 
 
+app.include_router(login.router)
+
+
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
-def index():
-    return (STATIC / "index.html").read_text(encoding="utf-8")
+def index(request: Request):
+    if login.enabled() and not login.session_user(request):
+        return RedirectResponse("/login", 303)
+    return HTMLResponse((STATIC / "index.html").read_text(encoding="utf-8"))
 
 
 @app.get("/favicon.ico", include_in_schema=False)

@@ -224,6 +224,12 @@ Open a recording on the web page:
 * **✓ Confirm auto lines:** once you've checked the *auto* lines, one click marks them ✓ (yours - never changed
   automatically again) and adds them to those people's voice prints. Pick a speaker in the filter first to confirm
   only theirs (`POST /api/jobs/{id}/autotag/accept`, `{"name": "..."}` optional).
+* **Sign-in:** set `ADMIN_ID` and `ADMIN_PASS` and the web page asks for them (signed 30-day cookie; 8 wrong tries
+  = 15 minutes' wait; changing `ADMIN_PASS` signs everyone out). After a password sign-in on a device with Face ID /
+  Touch ID / Windows Hello, it offers a passkey for one-touch sign-in next time (Mac: kept in iCloud Keychain, so the
+  iPhone can use it; KeePassXC / 1Password can hold it too). Manage devices and sign out under *Account*. The API key
+  keeps working for the watch and scripts. Behind a proxy the site address is taken from `X-Forwarded-*`; set
+  `PUBLIC_URL=https://whisper.example.com` if passkeys complain about the address.
 * **People:** everyone you've named gets a profile, built from their lines across all meetings and updated in the
   background when the server is idle (`PEOPLE_SWEEP`): up to 100 voice samples, spread over meetings (recognition
   uses their closest samples, not only an average - it gets better with every meeting), typical pitch and range,

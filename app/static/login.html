@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in - Oracle Minutes</title>
+<style>
+:root{--paper:#eef1f4;--surface:#fff;--ink:#18212b;--mute:#5d6b7a;--rule:#d7dee6;--action:#2147b8;--action-ink:#fff;--warn:#b42318;--focus:#2147b8;
+  --s1:#2f6fd6;--s2:#e07a2e;--s3:#23935f;--s4:#b23f78;--s5:#7354cc}
+@media (prefers-color-scheme:dark){:root{--paper:#0f1419;--surface:#161d24;--ink:#e6ebf0;--mute:#93a1b0;--rule:#283340;--action:#7d9bf0;--action-ink:#0c1530;--warn:#ff8a7a;--focus:#9db4f5;
+  --s1:#6a9cf0;--s2:#f09a5c;--s3:#4fc08a;--s4:#e070a8;--s5:#a08af0}}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--paper);color:var(--ink);font:15px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:16px}
+:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.card{width:100%;max-width:360px;background:var(--surface);border:1px solid var(--rule);border-radius:14px;padding:28px 26px}
+h1{font-size:19px;margin:0 0 2px;display:flex;align-items:center;gap:10px;letter-spacing:-.01em}
+p.sub{color:var(--mute);font-size:13.5px;margin:0 0 22px}
+label{display:block;font-size:13px;color:var(--mute);margin:12px 0 4px}
+input{width:100%;font:inherit;color:inherit;background:var(--paper);border:1px solid var(--rule);border-radius:8px;padding:9px 11px}
+button{width:100%;font:inherit;font-weight:600;border-radius:8px;padding:10px 14px;cursor:pointer;margin-top:18px;border:1px solid transparent;background:var(--action);color:var(--action-ink)}
+button.alt{background:var(--surface);color:var(--ink);border-color:var(--rule);font-weight:500;margin-top:10px;display:flex;align-items:center;justify-content:center;gap:8px}
+button:disabled{opacity:.55;cursor:default}
+.or{display:flex;align-items:center;gap:10px;color:var(--mute);font-size:12.5px;margin:18px 0 0}
+.or::before,.or::after{content:"";flex:1;height:1px;background:var(--rule)}
+#msg{min-height:20px;font-size:13.5px;margin-top:12px;color:var(--warn)}
+#msg.ok{color:var(--mute)}
+.hidden{display:none!important}
+</style>
+</head>
+<body>
+<main class="card">
+  <h1><svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><g fill="none" stroke-linecap="round" stroke-width="2.4"><path d="M3 9v4" stroke="var(--s1)"/><path d="M7.5 5v12" stroke="var(--s2)"/><path d="M12 8v6" stroke="var(--s3)"/><path d="M16.5 3v16" stroke="var(--s4)"/><path d="M21 9v4" stroke="var(--s5)"/></g></svg>Oracle Minutes</h1>
+  <p class="sub">Sign in to your meetings.</p>
+
+  <div id="step1">
+    <button class="alt hidden" id="pkBtn" type="button"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M7 3H5a2 2 0 0 0-2 2v2M17 3h2a2 2 0 0 1 2 2v2M7 21H5a2 2 0 0 1-2-2v-2M17 21h2a2 2 0 0 0 2-2v-2"/><path d="M9 9v1M15 9v1M12 9v4h-1M9.5 16a4 4 0 0 0 5 0"/></svg>Sign in with Face ID / Touch ID</button>
+    <div class="or hidden" id="orLine">or with your password</div>
+    <form id="pwForm">
+      <label for="uid">Admin ID</label><input id="uid" autocomplete="username" required>
+      <label for="pw">Password</label><input id="pw" type="password" autocomplete="current-password" required>
+      <button type="submit" id="pwBtn">Sign in</button>
+    </form>
+  </div>
+
+  <div id="step2" class="hidden">
+    <p style="margin:0 0 4px;font-weight:600">Use Face ID / Touch ID next time?</p>
+    <p class="sub" style="margin:0">Sign in with one touch on this device. Your fingerprint or face never leaves the device; the server only keeps a public key.</p>
+    <label for="dev">Name this device</label><input id="dev" placeholder="e.g. MacBook, iPhone">
+    <button id="addPk" type="button">Turn on Face ID / Touch ID</button>
+    <button class="alt" id="skip" type="button">Not now</button>
+  </div>
+  <div id="msg" role="status"></div>
+</main>
+<script>
+const $ = s => document.querySelector(s);
+const b64 = buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const unb64 = s => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((s.length + 3) % 4)), c => c.charCodeAt(0));
+const say = (t, ok) => { $("#msg").textContent = t; $("#msg").className = ok ? "ok" : ""; };
+async function post(u, body) {
+  const r = await fetch(u, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.detail || r.status);
+  return j;
+}
+const canPasskey = !!window.PublicKeyCredential;
+let platform = false;
+(async () => {
+  try { platform = canPasskey && await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable(); } catch (e) {}
+  try {
+    const s = await (await fetch("/api/session")).json();
+    if (s.user) { location.href = "/"; return; }
+    if (canPasskey && s.passkeys) { $("#pkBtn").classList.remove("hidden"); $("#orLine").classList.remove("hidden"); }
+  } catch (e) {}
+  $("#dev").value = /iPhone|iPad/.test(navigator.userAgent) ? "iPhone" : /Mac/.test(navigator.userAgent) ? "Mac" : /Android/.test(navigator.userAgent) ? "Android phone" : /Windows/.test(navigator.userAgent) ? "Windows PC" : "This device";
+})();
+
+$("#pkBtn").onclick = async () => {
+  say("Waiting for Face ID / Touch ID…", true);
+  try {
+    const { token, options: o } = await post("/api/passkey/login/options");
+    o.challenge = unb64(o.challenge);
+    (o.allowCredentials || []).forEach(c => c.id = unb64(c.id));
+    const c = await navigator.credentials.get({ publicKey: o });
+    await post("/api/passkey/login", { token, credential: {
+      id: c.id, rawId: b64(c.rawId), type: c.type,
+      response: { clientDataJSON: b64(c.response.clientDataJSON), authenticatorData: b64(c.response.authenticatorData),
+                  signature: b64(c.response.signature), userHandle: c.response.userHandle ? b64(c.response.userHandle) : null },
+      clientExtensionResults: c.getClientExtensionResults ? c.getClientExtensionResults() : {} } });
+    location.href = "/";
+  } catch (e) { say(e.name === "NotAllowedError" ? "Cancelled. Use your password, or try again." : "Couldn't sign in: " + e.message); }
+};
+
+$("#pwForm").onsubmit = async e => {
+  e.preventDefault();
+  $("#pwBtn").disabled = true; say("");
+  try {
+    const r = await post("/api/login", { id: $("#uid").value.trim(), password: $("#pw").value });
+    let mine = false; try { mine = localStorage.getItem("omPasskey") === "1"; } catch (x) {}
+    if (platform && !mine) { $("#step1").classList.add("hidden"); $("#step2").classList.remove("hidden"); }
+    else location.href = "/";
+  } catch (x) { say(x.message === "401" ? "Wrong ID or password." : x.message); }
+  $("#pwBtn").disabled = false;
+};
+
+$("#addPk").onclick = async () => {
+  say("Follow the Face ID / Touch ID prompt…", true);
+  try {
+    const { token, options: o } = await post("/api/passkey/register/options");
+    o.challenge = unb64(o.challenge); o.user.id = unb64(o.user.id);
+    (o.excludeCredentials || []).forEach(c => c.id = unb64(c.id));
+    const c = await navigator.credentials.create({ publicKey: o });
+    await post("/api/passkey/register", { token, name: $("#dev").value.trim(), credential: {
+      id: c.id, rawId: b64(c.rawId), type: c.type,
+      response: { clientDataJSON: b64(c.response.clientDataJSON), attestationObject: b64(c.response.attestationObject),
+                  transports: c.response.getTransports ? c.response.getTransports() : [] },
+      clientExtensionResults: c.getClientExtensionResults ? c.getClientExtensionResults() : {} } });
+    try { localStorage.setItem("omPasskey", "1"); } catch (x) {}
+    say("Done. Next time, sign in with one touch.", true);
+    setTimeout(() => location.href = "/", 900);
+  } catch (e) { say(e.name === "InvalidStateError" ? "This device already has a passkey here." : e.name === "NotAllowedError" ? "Cancelled." : "Couldn't turn it on: " + e.message); }
+};
+$("#skip").onclick = () => { location.href = "/"; };
+</script>
+</body>
+</html>

@@ -13,6 +13,9 @@ services:
     environment:
       - SERVICE_FQDN_WHISPER_8000                # Coolify routes your domain to port 8000
       - API_KEY=${API_KEY}
+      - ADMIN_ID=${ADMIN_ID:-}
+      - ADMIN_PASS=${ADMIN_PASS:-}
+      - PUBLIC_URL=${PUBLIC_URL:-}
       - WHISPER_MODEL=${WHISPER_MODEL:-large-v3-turbo}
       - WHISPER_DEVICE=${WHISPER_DEVICE:-auto}
       - WHISPER_THREADS=${WHISPER_THREADS:-0}

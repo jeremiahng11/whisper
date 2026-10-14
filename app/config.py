@@ -51,7 +51,11 @@ class Settings:
     autotag_group: float = float(os.getenv("AUTOTAG_GROUP", "0.50") or 0.50)    # a whole speaker group sounds like X
     autotag_new: bool = _bool("AUTOTAG_NEW", True)       # new meetings: name lines of voices already remembered
     autotag_sweep: bool = _bool("AUTOTAG_SWEEP", True)
-    people_sweep: bool = _bool("PEOPLE_SWEEP", True)     # idle server: update each person's profile   # idle server: go through older meetings with new voices   # cosine similarity to recognise a known voice
+    people_sweep: bool = _bool("PEOPLE_SWEEP", True)
+    admin_id: str = os.getenv("ADMIN_ID", "").strip()        # web page sign-in (both set = sign-in required)
+    admin_pass: str = os.getenv("ADMIN_PASS", "")
+    session_secret: str = os.getenv("SESSION_SECRET", "")    # optional; otherwise a random key kept in /data
+    public_url: str = os.getenv("PUBLIC_URL", "").strip()    # e.g. https://whisper.example.com (passkeys), optional     # idle server: update each person's profile   # idle server: go through older meetings with new voices   # cosine similarity to recognise a known voice
 
     # --- summary ---
     summary_backend: str = os.getenv("SUMMARY_BACKEND", "ollama")   # ollama | openai | none
