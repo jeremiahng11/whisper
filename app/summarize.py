@@ -76,6 +76,122 @@ Title: MANCO - <main topic or date, max 8 words>
 
 Keep it factual and neutral; group updates under the department that gave them. Never invent figures, approvals or
 deadlines."""),
+    "external": ("External meeting", """Write the result in Markdown in exactly this layout:
+
+Title: <a short title, max 8 words, include the other organisation's name if said>
+
+### Attendees
+- **Our side:** <names, roles if said>
+- **Their side:** <names and organisation, roles if said>
+
+### Summary
+<3-5 sentences>
+
+### What they raised or asked for
+- ...
+
+### What we committed to
+- ...
+
+### Commercials (pricing, scope, timelines, contracts)
+- ...
+
+### Risks and concerns
+- ...
+
+### Action items
+- [ ] <who> - <what> (<due date if mentioned>)
+
+### Next steps / next meeting
+- ...
+
+Keep what each side said apart. Never invent commitments, prices or dates."""),
+    "partner": ("Partner meeting", """Write the result in Markdown in exactly this layout:
+
+Title: <partner name - topic, max 8 words>
+
+### Attendees
+- **Our side:** <names>
+- **Partner side:** <names and organisation>
+
+### Summary
+<3-5 sentences>
+
+### Partnership status
+- <where the partnership stands: live, onboarding, pilot, renewal - only if said>
+
+### Joint initiatives and progress
+- **<initiative>:** <status, numbers mentioned>
+
+### Integration and technical points
+- <APIs, environments (UAT / production), certifications, incidents - only if discussed>
+
+### Commercials and contract
+- <fees, revenue share, volumes, SLAs, renewals>
+
+### Issues and escalations
+- <issue> - <owner, which side>
+
+### Action items
+- [ ] <owner (our side / partner)> - <what> (<due date if mentioned>)
+
+### Next meeting
+<date if mentioned>"""),
+    "collaboration": ("Collaboration meeting", """Write the result in Markdown in exactly this layout:
+
+Title: <a short title, max 8 words>
+
+### Summary
+<2-4 sentences: what the group set out to work on and where it landed>
+
+### Goals
+- ...
+
+### Ideas and options discussed
+- **<idea or option>:** <for / against, who raised it>
+
+### Who is working on what
+- **<name>:** <their part>
+
+### Dependencies and blockers
+- ...
+
+### Decisions
+- ...
+
+### Action items
+- [ ] <who> - <what> (<due date if mentioned>)
+
+### Open questions / to explore
+- ..."""),
+    "emergency": ("Emergency meeting", """Write emergency / incident meeting minutes in Markdown in exactly this layout:
+
+Title: Emergency - <what happened, max 8 words>
+
+### Situation
+<2-4 sentences: what happened, when it started, what is affected - only as stated>
+
+### Impact
+- <customers, transactions, systems, money, partners affected - with numbers if said>
+
+### Immediate actions
+- [ ] <owner> - <action> (<by when, if said>) - <status if said: done / in progress>
+
+### Communications
+- **Customers:** <what will be told, by whom, when>
+- **Partners / vendors:** ...
+- **Regulator (e.g. MAS) / management / board:** <notification needed, deadline, who - only if discussed>
+
+### Decisions
+- ...
+
+### Root cause (so far)
+- <only what is known; write "Not yet known" if not established>
+
+### Follow-up
+- <next check-in time, post-incident review, preventive actions>
+
+Use clear, factual, time-ordered language. Never guess causes, numbers or deadlines."""),
     "standup": ("Stand-up", """Write the result in Markdown in exactly this layout:
 
 Title: <a short title, max 8 words>

@@ -198,7 +198,7 @@ def their_lines(name: str) -> list[dict]:
             if s.get("speaker") in labs and not s.get("also"):
                 out.append({"job": j["id"], "title": j.get("title") or j["filename"], "when": j["created_at"],
                             "external": bool((j.get("options") or {}).get("external",
-                                             (j.get("options") or {}).get("template") == "client")),
+                                             (j.get("options") or {}).get("template") in ("client", "external", "partner"))),
                             "i": i, "start": s["start"], "end": s["end"], "text": s.get("text", ""),
                             "words": len(s.get("words") or []) or len((s.get("text") or "").split()),
                             "audio": j.get("audio_path")})

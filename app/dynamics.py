@@ -15,7 +15,7 @@ def is_external(job: dict) -> bool:
     o = job.get("options") or {}
     if o.get("external") is not None:
         return bool(o["external"])
-    return o.get("template") == "client"
+    return o.get("template") in ("client", "external", "partner")
 
 
 def stats(job: dict, tr: dict) -> dict:
