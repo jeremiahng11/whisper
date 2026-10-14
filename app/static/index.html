@@ -116,6 +116,7 @@ button.ts.on{background:var(--warn);color:#fff}
 .ribbon .strip{display:flex;height:26px;border-radius:6px;overflow:hidden;background:var(--chip)}
 .ribbon .strip i{display:block;height:100%;min-width:1px;cursor:pointer}
 .ribbon .strip i:hover{filter:brightness(1.12)}
+.ribbon .strip i.gap{background:transparent}
 .ribbon .strip i.q{background:repeating-linear-gradient(135deg,var(--unknown) 0 3px,transparent 3px 6px)}
 .ribbon .axis{display:flex;justify-content:space-between;font-size:11.5px;color:var(--mute);font-variant-numeric:tabular-nums;margin-top:3px}
 .ribbon .who{display:flex;flex-wrap:wrap;gap:4px 14px;margin-top:8px;font-size:13px}
@@ -507,7 +508,7 @@ function drawRibbon() {
   });
   let html = "", t = 0;
   for (const r of runs) {
-    if (r.start > t + 0.5) html += `<i style="flex:${r.start - t};background:transparent"></i>`;
+    if (r.start > t + 0.5) html += `<i class="gap" data-a="${t}" data-b="${r.start}" title="No speech written down ${mmss(t)}-${mmss(r.start)}. Click to listen" style="flex:${r.start - t}"></i>`;
     const name = r.who ? ((tagSpk.find(x => x.label === r.who) || {}).name || r.who) : "Unnamed";
     html += `<i class="${r.who ? "" : "q"}" data-i="${r.i}" title="${esc(name)}, ${mmss(r.start)}" style="flex:${Math.max(0.2, r.end - r.start)}${r.who ? ";background:" + spkColor(r.who) : ""}"></i>`;
     t = r.end;
@@ -520,8 +521,13 @@ function drawRibbon() {
   }).join("");
   const q = tagSegs.filter(s => !tagNamed(s.speaker) && !(s.also || []).length).length;
   $("#qCount").textContent = q ? `${q} unnamed` : "";
-  el.innerHTML = `<div class="strip">${html}</div><div class="axis"><span>0:00</span><span>${mmss(end / 2)}</span><span>${mmss(end)}</span></div><div class="who">${who}</div>`;
+  const gaps = runs.reduce((g, r, i) => g + (i && r.start - runs[i - 1].end > 30 ? 1 : 0), 0) + (runs[0] && runs[0].start > 30 ? 1 : 0);
+  el.innerHTML = `<div class="strip">${html}</div><div class="axis"><span>0:00</span><span>${mmss(end / 2)}</span><span>${mmss(end)}</span></div><div class="who">${who}${gaps ? '<span class="mute"><i class="dot" style="background:var(--chip);outline:1px solid var(--rule)"></i>No speech written down</span>' : ""}</div>`;
   el.classList.remove("hidden");
+  el.querySelectorAll("i.gap").forEach(g => g.onclick = () => {    // hear a silent stretch: is something missing?
+    const a = +g.dataset.a, z = +g.dataset.b, mid = a + Math.max(0, (z - a) / 2 - 10);
+    const btn = document.createElement("button"); playClip(btn, mid, Math.min(z, mid + 20));
+  });
   el.querySelectorAll("i[data-i]").forEach(b => b.onclick = () => {
     tab("speakersTab");
     $("#tagFilter").value = ""; tagShown = Math.max(tagShown, +b.dataset.i + 50); renderLines();
