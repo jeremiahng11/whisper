@@ -92,12 +92,19 @@ def _site(request: Request) -> tuple[str, str]:
         u = settings.public_url.rstrip("/")
         return u.split("://", 1)[-1].split("/")[0].split(":")[0], u
     host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or "localhost").split(",")[0].strip()
-    proto = (request.headers.get("x-forwarded-proto") or request.url.scheme).split(",")[0].strip()
+    # the browser's own address (Origin) is the truth: behind Cloudflare / Coolify the request often arrives as
+    # plain http while the page is https. Only an Origin for this same host is believed.
+    o = (request.headers.get("origin") or "").rstrip("/")
+    if o.split("://", 1)[-1] == host and o.split("://", 1)[0] in ("http", "https"):
+        return host.split(":")[0], o
+    proto = (request.headers.get("cf-visitor") and "https" in request.headers.get("cf-visitor", "") and "https") or \
+        (request.headers.get("x-forwarded-proto") or request.url.scheme).split(",")[0].strip()
     return host.split(":")[0], f"{proto}://{host}"
 
 
 def _set_cookie(resp: Response, request: Request, user: str) -> None:
-    secure = _site(request)[1].startswith("https")
+    ref = request.headers.get("origin") or request.headers.get("referer") or ""
+    secure = ref.startswith("https://") or _site(request)[1].startswith("https")
     resp.set_cookie(COOKIE, make_session(user), max_age=DAYS * 86400, httponly=True, samesite="lax", secure=secure, path="/")
 
 

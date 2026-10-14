@@ -1216,3 +1216,15 @@ def test_export_with_oracle_ai_analysis(client):
         assert t.index("## Oracle AI Analysis") < t.index("## Transcript")
     d = client.get(f"/api/jobs/{j['id']}/result.docx?analysis=true", headers=H)
     assert d.status_code == 200 and "_with_Analysis.docx" in d.headers["content-disposition"]
+
+
+def test_passkey_site_follows_the_browser_behind_a_proxy():
+    from starlette.requests import Request
+    from app import login
+    def req(h):
+        return Request({"type": "http", "method": "POST", "path": "/", "scheme": "http", "query_string": b"",
+                        "headers": [(k.lower().encode(), v.encode()) for k, v in h.items()], "server": ("x", 80)})
+    assert login._site(req({"host": "whisper.jeremiah.sg", "origin": "https://whisper.jeremiah.sg"})) == \
+        ("whisper.jeremiah.sg", "https://whisper.jeremiah.sg")
+    assert login._site(req({"host": "whisper.jeremiah.sg", "origin": "https://evil.example"}))[1] == "http://whisper.jeremiah.sg"
+    assert login._site(req({"host": "whisper.jeremiah.sg", "x-forwarded-proto": "https"}))[1] == "https://whisper.jeremiah.sg"
