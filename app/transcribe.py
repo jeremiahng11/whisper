@@ -331,6 +331,58 @@ def load_range(path: str, start: float, end: float) -> np.ndarray:
     return a[int(start * SR):int(end * SR)]
 
 
+def enhance_clip(a: np.ndarray, noise_ref: Optional[np.ndarray] = None) -> np.ndarray:
+    """Make a clip easier to listen to (for telling voices apart): rumble filter, spectral noise reduction (noise
+    profile from the quietest moments of `noise_ref`, i.e. the clip with some seconds around it), steady loudness and
+    a peak limit. Not used for transcription - Whisper gets the original audio."""
+    if len(a) < 512:
+        return a
+    a = a.astype(np.float32)
+    # 1. high-pass ~100 Hz (aircon / table / handling rumble)
+    k = 0.9615
+    y = np.empty_like(a)
+    prev_x = prev_y = 0.0
+    for i in range(len(a)):                                   # 1st order: y = k * (y + x - x_prev)
+        prev_y = k * (prev_y + a[i] - prev_x)
+        prev_x = a[i]
+        y[i] = prev_y
+    a = y
+    # 2. spectral gating
+    n_fft, hop = 512, 128
+    win = np.hanning(n_fft).astype(np.float32)
+
+    def stft(x):
+        pad = np.concatenate([np.zeros(n_fft, np.float32), x, np.zeros(n_fft, np.float32)])
+        frames = np.lib.stride_tricks.sliding_window_view(pad, n_fft)[::hop] * win
+        return np.fft.rfft(frames, axis=1)
+
+    spec = stft(a)
+    ref = stft(noise_ref.astype(np.float32)) if noise_ref is not None and len(noise_ref) > n_fft * 4 else spec
+    mag_ref = np.abs(ref)
+    energy = mag_ref.sum(axis=1)
+    quiet = mag_ref[energy <= np.percentile(energy, 20)] if len(energy) > 10 else mag_ref
+    noise = np.mean(quiet, axis=0) + 1e-9                    # noise level per frequency
+    mag = np.abs(spec)
+    gain = np.clip(1.0 - (1.6 * noise / (mag + 1e-9)) ** 2, 0.18, 1.0)   # at most ~15 dB less noise
+    for t in range(1, len(gain)):                            # smooth over time (less "musical" noise)
+        gain[t] = np.maximum(gain[t], 0.6 * gain[t - 1])
+    spec = spec * gain
+    frames = np.fft.irfft(spec, n=n_fft, axis=1) * win
+    out = np.zeros(len(a) + 2 * n_fft + n_fft, np.float32)
+    norm = np.zeros_like(out)
+    for t in range(len(frames)):
+        out[t * hop:t * hop + n_fft] += frames[t]
+        norm[t * hop:t * hop + n_fft] += win ** 2
+    out = (out / np.maximum(norm, 1e-6))[n_fft:n_fft + len(a)]
+    # 3. loudness: speech to about -20 dBFS, peaks limited
+    rms = float(np.sqrt(np.mean(out ** 2)) + 1e-9)
+    out = out * min(20.0, 0.1 / rms)
+    peak = float(np.max(np.abs(out)) or 1.0)
+    if peak > 0.95:
+        out = np.tanh(out / peak * 1.4) / np.tanh(1.4) * 0.95  # soft limit
+    return out.astype(np.float32)
+
+
 def wav16(a: np.ndarray) -> bytes:
     """float32 16 kHz mono -> a small PCM16 WAV the browser can play."""
     pcm = (np.clip(a, -1, 1) * 32767).astype("<i2").tobytes()

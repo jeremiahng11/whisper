@@ -582,9 +582,11 @@ def test_region_sg_hints(monkeypatch):
 def test_clip_and_tag_a_line(client):
     j = upload(client, "dev1-tag", 40, "diarize=true&speakers=2")
     assert j["status"] == "done"
-    r = client.get(f"/api/jobs/{j['id']}/clip?start=10&end=14", headers=H)
+    r = client.get(f"/api/jobs/{j['id']}/clip?start=10&end=14&enhance=false", headers=H)
     assert r.status_code == 200 and r.headers["content-type"] == "audio/wav"
     assert abs((len(r.content) - 44) / 32000 - 4) < 0.05                  # 4 s of 16 kHz PCM16
+    r = client.get(f"/api/jobs/{j['id']}/clip?start=10&end=14", headers=H)   # clearer: + 0.3 s each side
+    assert r.status_code == 200 and abs((len(r.content) - 44) / 32000 - 4.6) < 0.05
     segs = client.get(f"/api/jobs/{j['id']}/transcript.json", headers=H).json()["segments"]
     i = next(k for k, s in enumerate(segs) if s.get("speaker") == "Speaker 1")
     # a new name -> a new speaker in this meeting, and the voice is learned

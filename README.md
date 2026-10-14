@@ -197,6 +197,9 @@ Open a recording on the web page:
   or *Someone else…* to add a person. With *Remember voices* on, that clip is added to the person's voice print, so
   later meetings name them automatically (and better each time you correct one). Filter to one speaker to check them.
 * Names change in the minutes right away; *Redo minutes* rewrites the wording with the corrected speakers.
+* **Clearer audio** (on by default) plays lines with noise reduction, a rumble filter and steady volume, plus 0.3 s
+  either side so words aren't cut off; untick it for the original. The speed menu slows playback (0.85x / 0.7x)
+  without changing the pitch. The transcript is always made from the original recording.
 
 API: `GET /api/jobs/{id}/clip?start=12.5&end=20` (WAV, at most 60 s) and
 `POST /api/jobs/{id}/segments/{line}` with `{"name": "Alan", "learn": true}` or `{"speaker": "Speaker 2"}`.

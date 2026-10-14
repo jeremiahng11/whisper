@@ -134,7 +134,10 @@ textarea.gl{width:100%;min-height:120px;background:var(--bg);color:var(--ink);bo
     </div>
     <div id="tagBox" class="hidden noprint">
       <div class="sub2">Who said what <span class="mute" style="font-weight:400">Play a line, then pick who it really was. With "Remember voices" on, that clip also teaches the server their voice.</span></div>
-      <div class="row"><select id="tagFilter"></select><span class="mute" id="tagMsg"></span></div>
+      <div class="row"><select id="tagFilter"></select>
+        <select id="playRate" title="Playback speed"><option value="1">1x</option><option value="0.85">0.85x</option><option value="0.7">0.7x</option></select>
+        <label class="mute" title="Noise reduction and steady volume for listening (the transcript always uses the original)"><input type="checkbox" id="clearAudio" checked> Clearer audio</label>
+        <span class="mute" id="tagMsg"></span></div>
       <div id="tagLines"></div>
       <div class="row"><button class="ghost hidden" id="tagMore">Show more lines</button><span class="mute">The minutes' wording changes only with "Redo minutes"; names update right away.</span></div>
     </div>
@@ -300,10 +303,13 @@ async function playClip(btn, start, end) {
   stopPlay();
   playingBtn = btn; btn.classList.add("on"); btn.textContent = "■";
   try {
-    const blob = await (await api(`/api/jobs/${current}/clip?start=${start.toFixed(2)}&end=${end.toFixed(2)}`)).blob();
+    const enh = $("#clearAudio") && !$("#clearAudio").checked ? "&enhance=false" : "";
+    const blob = await (await api(`/api/jobs/${current}/clip?start=${start.toFixed(2)}&end=${end.toFixed(2)}${enh}`)).blob();
     if (playingBtn !== btn) return;
     if (player.src) URL.revokeObjectURL(player.src);
     player.src = URL.createObjectURL(blob);
+    player.playbackRate = +($("#playRate") ? $("#playRate").value : 1);
+    player.preservesPitch = true;
     await player.play();
   } catch (e) { stopPlay(); $("#tagMsg").textContent = "Can't play: " + e.message; }
 }

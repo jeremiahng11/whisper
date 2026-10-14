@@ -19,7 +19,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.4.1"
+VERSION = "1.4.2"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -369,23 +369,32 @@ def _result(j: dict, name: str):
 
 
 @app.get("/api/jobs/{jid}/{name}", dependencies=[Depends(auth)])
-def job_result(jid: str, name: str, start: float = Query(0.0, ge=0), end: float = Query(0.0, ge=0)):
+def job_result(jid: str, name: str, start: float = Query(0.0, ge=0), end: float = Query(0.0, ge=0),
+               enhance: bool = Query(True)):
     if name == "speakers":
         return get_speakers(jid)
     if name == "clip":
-        return job_clip(jid, start, end)
+        return job_clip(jid, start, end, enhance)
     return _result(_job(jid), name)
 
 
-def job_clip(jid: str, start: float, end: float):
-    """GET /api/jobs/{id}/clip?start=12.5&end=20 -> that stretch of the meeting as a WAV (at most 60 s)."""
+def job_clip(jid: str, start: float, end: float, enhance: bool = True):
+    """GET /api/jobs/{id}/clip?start=12.5&end=20 -> that stretch of the meeting as a WAV (at most 60 s).
+    enhance (default): noise reduction + steady volume, and 0.3 s more on each side so words aren't cut."""
     j = _job(jid)
     if not j["audio_path"] or not os.path.exists(j["audio_path"]):
         raise HTTPException(410, "the audio of this recording is no longer kept")
     if end <= start:
         end = start + 8
     end = min(end, start + 60)
-    a = transcribe.load_range(j["audio_path"], start, end)
+    if not enhance:
+        a = transcribe.load_range(j["audio_path"], start, end)
+        return Response(transcribe.wav16(a), media_type="audio/wav", headers={"Cache-Control": "private, max-age=3600"})
+    s, e = max(0.0, start - 0.3), end + 0.3
+    ctx = transcribe.load_range(j["audio_path"], max(0.0, s - 4), e + 4)      # some seconds around: noise profile
+    off = int((s - max(0.0, s - 4)) * transcribe.SR)
+    a = ctx[off:off + int((e - s) * transcribe.SR)]
+    a = transcribe.enhance_clip(a, ctx)
     return Response(transcribe.wav16(a), media_type="audio/wav", headers={"Cache-Control": "private, max-age=3600"})
 
 
