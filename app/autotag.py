@@ -374,7 +374,7 @@ def merge_same_names(jid: str) -> list[str]:
         merged = dict(opts.get("merged") or {})
         joined = []
         for labs in dup.values():
-            keep = max(labs, key=lambda l: (lines.get(l, 0), l not in auto, -int(l.split()[-1]) if l.split()[-1].isdigit() else 0))
+            keep = min(labs, key=lambda l: int(l.split()[-1]) if l.split()[-1].isdigit() else 10 ** 6)   # Speaker 5 stays, 12 goes
             gone = [l for l in labs if l != keep]
             for s in segs:
                 if s.get("speaker") in gone:

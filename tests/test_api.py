@@ -1024,6 +1024,7 @@ def test_same_name_on_two_speakers_joins_them(client):
     assert r["joined"] == ["Priscilla"]
     segs = client.get(f"/api/jobs/{jid}/transcript.json", headers=H).json()["segments"]
     assert "Speaker 3" not in {s["speaker"] for s in segs}
+    assert a in {s["speaker"] for s in segs if 20 <= s["start"] < 30}   # the lower number stays
     names = client.get(f"/api/jobs/{jid}", headers=H).json()["speaker_names"]
     assert list(names.values()).count("Priscilla") == 1 and "Speaker 3" not in names
     sp = [s["label"] for s in client.get(f"/api/jobs/{jid}/speakers", headers=H).json()["speakers"]]
