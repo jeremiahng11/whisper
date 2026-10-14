@@ -286,9 +286,17 @@ def apply(jid: str) -> int:
                 segs[i]["speaker"] = lab
                 changed += 1
             auto.add(i)
+        merged_now = dict(opts.get("merged") or {})
+        merged_now.update(group_to)
         for i in unsure:
             if i in auto and i < len(segs) and segs[i].get("speaker") in people:
-                auto.discard(i)                            # no longer sure: leave it, but not marked as auto
+                auto.discard(i)                            # no longer sure: not marked as auto
+                o, cur = segs[i].get("orig"), segs[i].get("speaker")
+                # it was given to someone by voice earlier, and after your correction it no longer clearly sounds
+                # like them: back to the speaker separation's guess (unless you named that whole group as them)
+                if o and o != cur and merged_now.get(o) != cur and not segs[i].get("also"):
+                    segs[i]["speaker"] = o
+                    changed += 1
         worker._write(jid, "transcript.json", json.dumps(tr, ensure_ascii=False, indent=1))
         if group_to:
             m = dict(opts.get("merged") or {})

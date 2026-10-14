@@ -1311,5 +1311,10 @@ def test_correcting_a_name_unlearns_the_wrong_voice(client):
     _wait_autotag(client, jid)
     assert not people.samples("James").get("James")
     assert "James" not in [v["name"] for v in voices.list_voices()]
+    assert people.samples("Jeremiah").get("Jeremiah")               # the corrected line now teaches Jeremiah's voice
+    segs = client.get(f"/api/jobs/{jid}/transcript.json", headers=H).json()["segments"]
+    nm = client.get(f"/api/jobs/{jid}", headers=H).json()["speaker_names"]
+    same = [nm.get(s["speaker"]) for s in segs if int(s["start"] // 10) % 2 == 0]
+    assert same and all(n == "Jeremiah" for n in same), same        # and the same voice elsewhere follows
     r = client.post("/api/people/Jeremiah/relearn", headers=H).json()
     assert r["samples"] >= 1
