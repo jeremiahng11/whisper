@@ -1,4 +1,5 @@
-Starter wake word for the watch until your own "Hey Oracle" is trained (see `training/wakeword/`).
+Starter wake word set: "Hey Oracle" + start meeting, voice memo, stop recording, mark this.
 
-`hey_jarvis.tflite` is from the ESPHome micro_wake_word model collection
-(https://github.com/esphome/micro-wake-word-models, Apache License 2.0, see NOTICE), unchanged.
+Trained with microWakeWord on Piper LibriTTS voices, ESC-50 background sounds (CC BY-NC) and simulated rooms - for
+personal use. Test (new voices, normal room): Hey Oracle heard 72% at ~1.5 false wakes/hour; commands 67-81%.
+Train better ones with training/wakeword/run.sh. The same set is built into the watch firmware (R1.4.6+).
