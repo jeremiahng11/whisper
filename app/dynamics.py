@@ -147,3 +147,44 @@ def get(jid: str) -> dict:
     st["writing"] = jid in _writing
     st["llm"] = summarize.enabled()
     return st
+
+
+def _m(sec: float) -> str:
+    sec = int(sec or 0)
+    return f"{sec // 60} min {sec % 60:02d} s" if sec >= 60 else f"{sec} s"
+
+
+def markdown(jid: str) -> str:
+    """The Oracle AI analysis as a Markdown section, for exports below the minutes."""
+    d = get(jid)
+    if not d["people"]:
+        return ""
+    kind = "with a vendor, partner or client" if d["external"] else "with the team only"
+    out = ["## Oracle AI Analysis", "",
+           f"*{d['minutes']} min meeting {kind}; {len(d['people'])} people talking, {d['turns']} turns "
+           f"({d['turns_per_min']} a minute), {d['silence_pct']}% quiet. Opened by {d['opened_by'] or '-'}, "
+           f"closed by {d['closed_by'] or '-'}.*", "", "### Who took part", ""]
+    for p in d["people"]:
+        bits = [f"{p['share']}% of the talking", f"{p['turns']} turns (average {p['avg_turn']} s, longest {_m(p['longest'])})"]
+        if p["questions"]:
+            bits.append(f"{p['questions']} question{'s' if p['questions'] > 1 else ''}")
+        if p["interrupts"]:
+            bits.append(f"cut in {p['interrupts']} time{'s' if p['interrupts'] > 1 else ''}")
+        out.append(f"- **{p['name']}:** " + ", ".join(bits))
+    if d["replies"]:
+        out += ["", "### Who answered whom", ""]
+        out += [f"- {r['from']} answered {r['to']} {r['times']} time{'s' if r['times'] > 1 else ''}" for r in d["replies"]]
+    if d.get("note"):
+        note = re.sub(r"^###\s+", "### ", d["note"].strip(), flags=re.M)
+        out += ["", note]
+    out.append("")
+    return "\n".join(out)
+
+
+def with_analysis(md: str, jid: str) -> str:
+    """Minutes + the analysis section, placed below the minutes and above the transcript."""
+    a = markdown(jid)
+    if not a:
+        return md
+    i = md.find("\n## Transcript")
+    return (md[:i] + "\n" + a + md[i:]) if i >= 0 else (md.rstrip() + "\n\n" + a)

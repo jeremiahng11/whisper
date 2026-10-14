@@ -1203,3 +1203,16 @@ def test_web_sign_in_protects_the_page(client):
     finally:
         settings.admin_id, settings.admin_pass = old
         client.cookies.clear()
+
+
+def test_export_with_oracle_ai_analysis(client):
+    j = upload(client, "dev1-ana", 40, "diarize=true&speakers=2")
+    plain = client.get(f"/api/jobs/{j['id']}/result.md", headers=H).text
+    md = client.get(f"/api/jobs/{j['id']}/result.md?analysis=true", headers=H)
+    assert "Oracle AI Analysis" not in plain
+    t = md.text
+    assert "## Oracle AI Analysis" in t and "Who took part" in t and "_with_Analysis.md" in md.headers["content-disposition"]
+    if "## Transcript" in t:
+        assert t.index("## Oracle AI Analysis") < t.index("## Transcript")
+    d = client.get(f"/api/jobs/{j['id']}/result.docx?analysis=true", headers=H)
+    assert d.status_code == 200 and "_with_Analysis.docx" in d.headers["content-disposition"]

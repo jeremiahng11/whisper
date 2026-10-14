@@ -226,7 +226,10 @@ ul.replies{margin:4px 0;padding-left:20px;font-size:13.5px}
   #tagBox .line{grid-template-columns:34px 1fr 1fr}#tagBox .line .t{display:none}#tagBox .line .x{grid-column:1/-1}
   .files{grid-template-columns:1fr}.flist{border-right:0;max-height:200px}
 }
+.printonly{display:none}
 @media print{
+  .printonly{display:block;max-width:none}
+  #view .ana h2{border-top:1px solid #ccc;padding-top:14px}
   /* keep the speaker colours and the voice ribbon on paper / PDF */
   *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
   body{background:#fff;color:#000}
@@ -493,6 +496,7 @@ function tab(id) {
 }
 document.querySelectorAll("#mTabs button").forEach(b => b.onclick = () => tab(b.dataset.tab));
 let autoOpened = false;
+let withAnalysis = false; try { withAnalysis = localStorage.getItem("omWithAnalysis") === "1"; } catch (e) {}
 const timeOnly = t => new Date(t * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 function dayLabel(t) {
   const d = new Date(t * 1000), now = new Date(), day = 864e5;
@@ -795,12 +799,28 @@ async function show(id) {
   } else {
     const text = await (await api(j.results.markdown)).text();
     $("#view").innerHTML = md(text);
-    $("#dl").innerHTML = `<button data-u="${j.results.docx}" title="Minutes and transcript as a Word document">Export to Word</button>` +
-      [["markdown", "Minutes .md"], ["text", "Transcript .txt"], ["srt", "Subtitles .srt"]]
-      .map(([k, label]) => `<button class="ghost" data-u="${j.results[k]}">${label}</button>`).join("") +
-      '<button class="ghost" id="pdf">Print / PDF</button>';
-    document.querySelectorAll("#dl button[data-u]").forEach(b => b.onclick = () => download(b.dataset.u));
-    $("#pdf").onclick = () => window.print();
+    $("#dl").innerHTML = `<button data-u="${j.results.docx}" data-a="1" title="Minutes and transcript as a Word document">Export to Word</button>` +
+      [["markdown", "Minutes .md", 1], ["text", "Transcript .txt"], ["srt", "Subtitles .srt"]]
+      .map(([k, label, a]) => `<button class="ghost" data-u="${j.results[k]}"${a ? ' data-a="1"' : ""}>${label}</button>`).join("") +
+      '<button class="ghost" id="pdf">Print / PDF</button>' +
+      `<label class="mute" title="Adds how the meeting ran below the minutes: talk share, turns, who answered whom, and the AI read (Dynamics tab)"><input type="checkbox" id="withAna"${withAnalysis ? " checked" : ""}> Include Oracle AI analysis</label>`;
+    document.querySelectorAll("#dl button[data-u]").forEach(b => b.onclick = () => download(b.dataset.u + (b.dataset.a && $("#withAna").checked ? "?analysis=true" : "")));
+    $("#withAna").onchange = () => { withAnalysis = $("#withAna").checked; try { localStorage.setItem("omWithAnalysis", withAnalysis ? "1" : ""); } catch (e) {} };
+    $("#pdf").onclick = async () => {
+      document.querySelectorAll("#view .ana").forEach(x => x.remove());
+      if ($("#withAna").checked) {                   // below the minutes, above the transcript
+        try {
+          const t = await (await api(`/api/jobs/${current}/result.md?analysis=true`)).text();
+          const i = t.indexOf("## Oracle AI Analysis"), k = t.indexOf("\n## Transcript", i);
+          if (i >= 0) {
+            const box = document.createElement("div"); box.className = "ana printonly"; box.innerHTML = md(t.slice(i, k > i ? k : undefined));
+            const tr = [...document.querySelectorAll("#view h2")].find(h => /^Transcript/.test(h.textContent));
+            tr ? tr.before(box) : $("#view").append(box);
+          }
+        } catch (e) {}
+      }
+      window.print();
+    };
     $("#reTpl").value = j.template || "general"; $("#reBest").checked = !!j.best;
     $("#askBox").classList.remove("hidden"); $("#ansOne").innerHTML = "";
     loadSpeakers(id, true);

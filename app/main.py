@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.9.0"
+VERSION = "1.9.1"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -366,15 +366,18 @@ def export_name(j: dict, kind: str = "") -> str:
     return t + (f"_{kind}" if kind else "")
 
 
-def _result(j: dict, name: str):
+def _result(j: dict, name: str, analysis: bool = False):
     if name == "result.docx":
         if j["status"] != "done":
             raise HTTPException(409, f"job is {j['status']}")
         p = worker.result_dir(j["id"]) / "result.md"
         if not p.exists():
             raise HTTPException(404, "result not available")
-        data = render.docx(p.read_text(encoding="utf-8"), speaker_colours(j))
-        stem = export_name(j)
+        md = p.read_text(encoding="utf-8")
+        if analysis:                                 # Oracle AI analysis below the minutes
+            md = dynamics.with_analysis(md, j["id"])
+        data = render.docx(md, speaker_colours(j))
+        stem = export_name(j) + ("_with_Analysis" if analysis else "")
         return Response(data, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                         headers={"Content-Disposition": f'attachment; filename="{stem}.docx"'})
     if name not in RESULT_FILES:
@@ -388,13 +391,17 @@ def _result(j: dict, name: str):
     kinds = {"result.md": ("", ".md"), "transcript.txt": ("transcript", ".txt"), "transcript.srt": ("subtitles", ".srt"),
              "transcript.json": ("transcript", ".json"), "summary.md": ("summary", ".md"), "actions.json": ("actions", ".json")}
     kind, ext = kinds.get(name, (Path(name).stem, Path(name).suffix))
+    if analysis and name == "result.md":             # minutes + Oracle AI analysis
+        md = dynamics.with_analysis(p.read_text(encoding="utf-8"), j["id"])
+        return Response(md, media_type=ctype, headers={
+            "Content-Disposition": f'inline; filename="{export_name(j)}_with_Analysis.md"'})
     dl = export_name(j, kind) + ext
     return FileResponse(p, media_type=ctype, filename=dl, content_disposition_type="inline")
 
 
 @app.get("/api/jobs/{jid}/{name}", dependencies=[Depends(auth)])
 def job_result(jid: str, name: str, start: float = Query(0.0, ge=0), end: float = Query(0.0, ge=0),
-               enhance: bool = Query(True)):
+               enhance: bool = Query(True), analysis: bool = Query(False)):
     if name == "speakers":
         return get_speakers(jid)
     if name == "clip":
@@ -406,7 +413,7 @@ def job_result(jid: str, name: str, start: float = Query(0.0, ge=0), end: float 
         if _job(jid)["status"] != "done":
             raise HTTPException(409, "not finished yet")
         return dynamics.get(jid)
-    return _result(_job(jid), name)
+    return _result(_job(jid), name, analysis)
 
 
 def job_clip(jid: str, start: float, end: float, enhance: bool = True):

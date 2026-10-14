@@ -261,7 +261,10 @@ def docx(md: str, speakers: Optional[list] = None) -> bytes:
             continue
         m = re.match(r"^\s*[-*]\s+(.*)$", s)
         if m:
-            _runs(d.add_paragraph(style="List Bullet"), m.group(1))
+            p = d.add_paragraph(style="List Bullet")
+            _runs(p, m.group(1))
+            if colours:
+                _colour_names(p, colours)                  # "- **Priscilla:** 51% of the talking"
             continue
         m = re.match(r"^\s*\d+[.)]\s+(.*)$", s)
         if m:
