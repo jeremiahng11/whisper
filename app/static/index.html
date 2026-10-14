@@ -165,6 +165,9 @@ button.ts.on{background:var(--warn);color:#fff}
 #tagBox .line .t{font-variant-numeric:tabular-nums;color:var(--mute);font-size:12.5px;padding-top:6px}
 #tagBox .line select{width:100%;padding:5px 8px}
 #tagBox .line .x{padding-top:4px;line-height:1.5}
+#tagBox .line .w{cursor:text;border-radius:4px}
+#tagBox .line .w:hover{background:var(--sunk)}
+#tagBox .line .w[contenteditable=plaintext-only],#tagBox .line .w[contenteditable=true]{background:var(--surface);outline:2px solid var(--focus);padding:1px 3px}
 #tagBox .line.done select{border-color:var(--ok)}
 #tagBox .line .tag{font-size:11px;padding:0 6px;border-radius:8px;margin-left:6px;background:var(--chip);color:var(--mute);white-space:nowrap}
 #tagBox .line .tag.me{background:var(--ok);color:#fff}
@@ -301,7 +304,7 @@ textarea.gl{width:100%;min-height:180px;font:13px/1.55 ui-monospace,Menlo,monosp
             <div id="tagReport"></div>
             <div id="tagLines"></div>
             <div class="row" style="margin-top:10px"><button class="ghost hidden" id="tagMore">Show more lines</button></div>
-            <div class="legend"><span class="tag me">✓</span> you picked this name &nbsp; <span class="tag">auto</span> filled in from the same voice, check these &nbsp; no mark: the speaker separation's guess. The colour on the left is the speaker; striped is unnamed.</div>
+            <div class="legend">Click a line's words to fix them; the fix is learned for every meeting. &nbsp; <span class="tag me">✓</span> you picked this name &nbsp; <span class="tag">auto</span> filled in from the same voice, check these &nbsp; no mark: the speaker separation's guess. The colour on the left is the speaker; striped is unnamed.</div>
           </div>
         </div>
         <div id="askTab" role="tabpanel" class="hidden">
@@ -327,6 +330,11 @@ textarea.gl{width:100%;min-height:180px;font:13px/1.55 ui-monospace,Menlo,monosp
         <div class="sub2">Names &amp; terms</div>
         <textarea class="gl" id="gloss" placeholder="Aleta Planet&#10;SkenPay&#10;San Tan&#10;Coolify"></textarea>
         <div class="row" style="margin-top:8px"><button id="glossSave">Save</button><span class="mute" id="glossMsg"></span></div>
+      </div>
+      <div class="block">
+        <div class="sub2">Learned corrections</div>
+        <p class="mute" style="margin:0 0 8px">Words the speech model mis-heard and you fixed. They're corrected in every meeting, and new meetings get them right as they're transcribed.</p>
+        <div id="corr" class="mute">None yet.</div>
       </div>
       <div class="block">
         <div class="sub2">Known voices</div>
@@ -511,6 +519,46 @@ $("#gapFill").onclick = async () => {
   $("#tagMsg").dataset.moved = 0;
   followAutotag(current, "", true);
 };
+// fix the words of a line: click, type, Enter (Esc cancels). The changed words are learned for every meeting.
+function editWords(w) {
+  if (w.isContentEditable) return;
+  w.dataset.was = w.textContent; w.contentEditable = "plaintext-only"; w.focus();
+  w.onkeydown = e => {
+    if (e.key === "Enter") { e.preventDefault(); w.blur(); }
+    if (e.key === "Escape") { w.textContent = w.dataset.was; w.dataset.cancel = "1"; w.blur(); }
+  };
+  w.onblur = async () => {
+    w.contentEditable = "false";
+    const t = w.textContent.replace(/\s+/g, " ").trim(), i = +w.dataset.i;
+    if (w.dataset.cancel) { delete w.dataset.cancel; return; }
+    if (!t || t === w.dataset.was) { w.textContent = w.dataset.was; return; }
+    try {
+      const r = await (await api(`/api/jobs/${current}/segments/${i}/text`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: t }) })).json();
+      tagSegs[i].text = r.text; tagSegs[i].edited = true; tagSegs[i].heard = tagSegs[i].heard || w.dataset.was;
+      $("#tagMsg").innerHTML = r.learned.length
+        ? `Saved. Learned: ${esc(r.learned.map(x => `"${x.heard}" → "${x.right}"`).join(", "))} - fixed in all your meetings and new ones. <a href="#" id="unlearn">Only this line</a>`
+        : "Saved.";
+      const ul = $("#unlearn");
+      if (ul) ul.onclick = async e => {              // a one-off edit, not a word the model keeps mis-hearing
+        e.preventDefault();
+        for (const x of r.learned) await api(`/api/corrections/${encodeURIComponent(x.heard.toLowerCase())}`, { method: "DELETE" }).catch(() => {});
+        $("#tagMsg").textContent = "Saved for this line only."; loadCorrections();
+      };
+      renderLines();
+      $("#view").innerHTML = md(await (await api(`/api/jobs/${current}/result.md`)).text()); decorateMinutes();
+      if (r.learned.length) loadCorrections();
+    } catch (e) { w.textContent = w.dataset.was; $("#tagMsg").textContent = "Couldn't save: " + e.message; }
+  };
+}
+async function loadCorrections() {
+  try {
+    const c = (await (await api("/api/corrections")).json()).corrections;
+    const k = Object.keys(c);
+    $("#corr").innerHTML = k.length ? k.map(h => `<span class="chip" style="margin:2px">${esc(h)} → <b>${esc(c[h])}</b> <a href="#" data-h="${esc(h)}" title="Forget this correction" style="color:var(--warn);text-decoration:none">×</a></span>`).join("")
+      : "None yet. Click any line in Who said what to fix its words; the fix is learned here.";
+    document.querySelectorAll("#corr a").forEach(a => a.onclick = async e => { e.preventDefault(); await api(`/api/corrections/${encodeURIComponent(a.dataset.h)}`, { method: "DELETE" }); loadCorrections(); });
+  } catch (e) {}
+}
 // each speaker keeps one colour: in the ribbon, on their lines and in the speaker list
 function spkColor(label) {
   const labs = [...new Set(tagSpk.map(x => x.label))].sort((a, b) => (+(a.split(" ")[1]) || 0) - (+(b.split(" ")[1]) || 0));
@@ -736,13 +784,14 @@ function renderLines() {
     <span class="t">${mmss(s.start)}</span>
     <select data-i="${s.i}">${speakerOptions(s.speaker)}</select>
     <select class="also${(s.also || []).length ? " set" : ""}" data-i="${s.i}" title="Someone else talking at the same time">${alsoOptions(s)}</select>
-    <span class="x">${esc(s.text)}${tagManual.has(s.i) ? '<span class="tag me" title="You set this line - it is never changed automatically">✓</span>'
+    <span class="x"><span class="w" data-i="${s.i}" title="${s.heard && s.heard !== s.text ? "Heard: " + esc(s.heard) + " - click" : "Click"} to fix the words">${esc(s.text)}</span>${s.edited ? '<span class="tag" title="You fixed the words of this line">edited</span>' : ""}${tagManual.has(s.i) ? '<span class="tag me" title="You set this line - it is never changed automatically">✓</span>'
       : tagAuto.has(s.i) ? '<span class="tag" title="Tagged automatically (same voice). Pick another name if it is wrong.">auto</span>' : ""}</span></div>`).join("") || '<p class="mute">No lines.</p>';
   $("#tagMore").classList.toggle("hidden", rows.length <= tagShown);
   $("#tagAccept").classList.toggle("hidden", !tagAuto.size);
   document.querySelectorAll("#tagLines .play").forEach(b => b.onclick = () => playClip(b, +b.dataset.s, Math.max(+b.dataset.e, +b.dataset.s + 1.5)));
   document.querySelectorAll("#tagLines select:not(.also)").forEach(sel => sel.onchange = () => tagLine(sel));
   document.querySelectorAll("#tagLines select.also").forEach(sel => sel.onchange = () => tagAlso(sel));
+  document.querySelectorAll("#tagLines .w").forEach(w => w.onclick = () => editWords(w));
 }
 async function tagLine(sel) {
   const i = +sel.dataset.i;
@@ -933,7 +982,7 @@ $("#findAll").onclick = async () => {
 let glossLinks = { voices_linked: [] };
 async function loadGlossary() {
   try { const g = await (await api("/api/glossary")).json(); $("#gloss").value = g.text.trim(); glossLinks = g; } catch (e) {}
-  loadVoices();
+  loadVoices(); loadCorrections();
 }
 $("#glossSave").onclick = async () => {
   const r = await (await api("/api/glossary", { method: "PUT", body: $("#gloss").value })).json();

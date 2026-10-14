@@ -1073,3 +1073,24 @@ def test_minutes_title_carries_the_date():
     assert render.titled("MANCO - 14 Oct 2026", d) == "MANCO - 14 Oct 2026"
     assert [render.nice_date(datetime.date(2026, 10, n)) for n in (1, 2, 3, 11, 22)] == \
         ["1st Oct 2026", "2nd Oct 2026", "3rd Oct 2026", "11th Oct 2026", "22nd Oct 2026"]
+
+
+def test_fixing_words_is_learned_for_every_meeting(client):
+    from app import terms
+    terms.save_corrections({})
+    j = upload(client, "dev1-words", 20)
+    r = client.post(f"/api/jobs/{j['id']}/segments/0/text", json={"text": "This is TAPIN sentence number 1."}, headers=H).json()
+    r = client.post(f"/api/jobs/{j['id']}/segments/0/text", json={"text": "This is DABIN sentence number 1."}, headers=H).json()
+    assert {"heard": "TAPIN", "right": "DABIN"} in r["learned"]
+    seg = client.get(f"/api/jobs/{j['id']}/transcript.json", headers=H).json()["segments"][0]
+    assert seg["text"] == "This is DABIN sentence number 1." and seg["edited"]
+    assert terms.corrections()["tapin"] == "DABIN"
+    assert terms.apply_corrections("we went to tapin today, TAPIN-2 stays") == "we went to DABIN today, TAPIN-2 stays"
+    assert "DABIN" in terms.known_terms()
+    tr = {"segments": [{"text": "send it to tapin"}, {"text": "tapin again", "edited": True}]}
+    terms.fix_transcript(tr)
+    assert tr["segments"][0]["text"] == "send it to DABIN" and tr["segments"][1]["text"] == "tapin again"
+    assert "DABIN" in client.get(f"/api/jobs/{j['id']}/result.md", headers=H).text
+    assert client.get("/api/corrections", headers=H).json()["corrections"]["tapin"] == "DABIN"
+    assert client.delete("/api/corrections/TAPIN", headers=H).status_code == 200
+    terms.save_corrections({})

@@ -224,6 +224,12 @@ Open a recording on the web page:
 * **✓ Confirm auto lines:** once you've checked the *auto* lines, one click marks them ✓ (yours - never changed
   automatically again) and adds them to those people's voice prints. Pick a speaker in the filter first to confirm
   only theirs (`POST /api/jobs/{id}/autotag/accept`, `{"name": "..."}` optional).
+* **Fix the words, the server learns:** click a line's words in *Who said what*, correct them, press Enter. The
+  words you replaced are remembered (`TAPIN` -> `DABIN`, `B to B` -> `B2B`, `see trip` -> `CTRIP`) and fixed in every
+  meeting, new ones as they're transcribed, and the right words are given to Whisper as hints. Everyday English
+  words and grammar changes aren't learned; *Only this line* in the message undoes the learning of one edit. The list
+  is under *Names & voices > Learned corrections* (`GET /api/corrections`, `DELETE /api/corrections/{heard}`), and
+  it's in the backup. `POST /api/jobs/{id}/segments/{n}/text {"text": "...", "learn": true}`.
 * **Voice check line:** under *Who said what* the page shows the last check of that meeting - who it compared
   with, how many lines it named, how many are still unnamed and why (close call between two voices, sounds like
   nobody you've named, too short). *Match more* accepts closer calls for that meeting (`POST /api/jobs/{id}/autotag?loose=true`);

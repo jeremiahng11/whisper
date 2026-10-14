@@ -381,7 +381,7 @@ def fill_gap(jid: str, a: float, b: float) -> int:
             overlap = sum(max(0.0, min(en, y) - max(st, x)) for x, y in busy)
             if overlap > 0.5 * max(0.1, en - st):          # already written down
                 continue
-            new.append({"start": st, "end": en, "text": terms.fix_text(s.text, known), "speaker": "", "also": [],
+            new.append({"start": st, "end": en, "text": terms.fix_text(terms.apply_corrections(s.text), known), "speaker": "", "also": [],
                         "words": s.words, "added": True})
         if not new:
             return 0

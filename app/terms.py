@@ -10,6 +10,7 @@ import difflib
 import json
 import os
 import re
+from typing import Optional
 
 from . import voices
 from .config import settings
@@ -25,10 +26,71 @@ year yeah okay ok price pricing update refund refunds dashboard team plan meetin
 sea see c cee seat street tree""".split())
 
 
+# ---------------------------------------------------------------- corrections you made (heard -> right)
+def _corr_path():
+    return settings.data_dir / "corrections.json"
+
+
+def corrections() -> dict:
+    """{"tapin": "DABIN", ...}: words the speech model keeps mis-hearing, learned from lines you fixed."""
+    try:
+        return json.loads(_corr_path().read_text(encoding="utf-8")) if _corr_path().exists() else {}
+    except (ValueError, OSError):
+        return {}
+
+
+def save_corrections(c: dict) -> None:
+    _corr_path().parent.mkdir(parents=True, exist_ok=True)
+    _corr_path().write_text(json.dumps(dict(sorted(c.items())), ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+def learn(before: str, after: str) -> list[tuple[str, str]]:
+    """You changed a line from `before` to `after`: remember each replaced word or short phrase (1-4 words each side),
+    e.g. "TAPIN" -> "DABIN", "B to B" -> "B2B". Pure deletions / additions aren't learned (that's editing, not
+    mis-hearing)."""
+    a = _WORD.findall(before or "")
+    b = _WORD.findall(after or "")
+    out = []
+    sm = difflib.SequenceMatcher(None, [w.lower() for w in a], [w.lower() for w in b], autojunk=False)
+    for op, i1, i2, j1, j2 in sm.get_opcodes():
+        if op != "replace" or not (1 <= i2 - i1 <= 4 and 1 <= j2 - j1 <= 4):
+            continue
+        heard, right = " ".join(a[i1:i2]), " ".join(b[j1:j2])
+        if heard.lower() == right.lower() and heard == right:
+            continue
+        hl, rl = heard.lower(), right.lower()
+        if len(heard.split()) == 1 and hl in COMMON:
+            continue                                        # an everyday word: it would change in every sentence
+        if (hl.startswith(rl) or rl.startswith(hl)) and abs(len(hl) - len(rl)) <= 3:
+            continue                                        # grammar ("rate" -> "rates"), not a mis-hearing
+        out.append((heard, right))
+    if out:
+        c = corrections()
+        for heard, right in out:
+            for k, v in list(c.items()):                   # you fixed your own earlier fix: that one changes too
+                if v.lower() == heard.lower():
+                    c[k] = right
+            c[heard.lower()] = right
+        save_corrections(c)
+    return out
+
+
+def apply_corrections(text: str, c: Optional[dict] = None) -> str:
+    """Exact, whole-word replacements of what you corrected before (any capitals)."""
+    c = corrections() if c is None else c
+    if not text or not c:
+        return text
+    for heard in sorted(c, key=len, reverse=True):          # longer phrases first
+        text = re.sub(r"(?<![\w-])" + r"\s+".join(map(re.escape, heard.split())) + r"(?![\w-])", lambda m, r=c[heard]: r,
+                      text, flags=re.I)
+    return text
+
+
 def known_terms() -> list[str]:
-    """Names & terms, plus everyone with a remembered voice (they're spelled the same way everywhere)."""
+    """Names & terms, plus everyone with a remembered voice (they're spelled the same way everywhere), plus the right
+    words of your corrections."""
     out, seen = [], set()
-    for t in voices.glossary() + [v["name"] for v in voices.list_voices()] + [me_name()]:
+    for t in voices.glossary() + [v["name"] for v in voices.list_voices()] + [me_name()] + list(corrections().values()):
         t = (t or "").strip()
         if t and t.lower() not in seen:
             seen.add(t.lower())
@@ -141,10 +203,13 @@ def fix_transcript(tr: dict, terms: list[str] | None = None) -> int:
     """Fix every line in place (keeps what was heard in "heard"). Returns how many lines changed."""
     terms = known_terms() if terms is None else terms
     prepped = _prep(terms)
+    corr = corrections()
     n = 0
     for s in tr.get("segments", []):
+        if s.get("edited"):                                 # you wrote this line yourself: leave it
+            continue
         orig = s.get("heard") or s.get("text", "")
-        new = fix_text(orig, terms, prepped)
+        new = fix_text(apply_corrections(orig, corr), terms, prepped)
         if new != s.get("text", ""):
             n += 1
         if new != orig:

@@ -19,7 +19,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.6.10"
+VERSION = "1.7.0"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -718,6 +718,48 @@ def _tag(jid: str, idx: int, data: dict) -> dict:
             "_who": who if named_now else "", "_seg": dict(segs[idx]), "_spread": spread}
 
 
+@app.post("/api/jobs/{jid}/segments/{idx}/text", dependencies=[Depends(auth)])
+async def edit_line(jid: str, idx: int, request: Request):
+    """Fix the words of one line: {"text": "...", "learn": true}. learn = remember the words you changed (heard ->
+    right) and fix the same mistake in every meeting, and in new ones as they're transcribed."""
+    j = _job(jid)
+    if j["status"] != "done":
+        raise HTTPException(409, f"job is {j['status']}")
+    data = await body_extra(request)
+    text = re.sub(r"\s+", " ", str(data.get("text") or "")).strip()[:2000]
+    if not text:
+        raise HTTPException(400, "send {'text': '...'}")
+    with autotag.job_lock(jid):
+        tr = worker.load_transcript(jid) or {}
+        segs = tr.get("segments", [])
+        if not 0 <= idx < len(segs):
+            raise HTTPException(404, "no such line")
+        before = segs[idx].get("text", "")
+        segs[idx].setdefault("heard", before)
+        segs[idx]["text"], segs[idx]["edited"] = text, True
+        worker._write(jid, "transcript.json", json.dumps(tr, ensure_ascii=False, indent=1))
+    learned = terms.learn(before, text) if data.get("learn", True) else []
+    worker.build_outputs(jid)
+    if learned:
+        worker.refresh_terms_everywhere()            # the same mistake in your other meetings
+    return {"index": idx, "text": text, "learned": [{"heard": h, "right": r} for h, r in learned]}
+
+
+@app.get("/api/corrections", dependencies=[Depends(auth)])
+def get_corrections():
+    """Words you corrected: {"tapin": "DABIN"} - fixed in every meeting."""
+    return {"corrections": terms.corrections()}
+
+
+@app.delete("/api/corrections/{heard}", dependencies=[Depends(auth)])
+def delete_correction(heard: str):
+    c = terms.corrections()
+    if c.pop(heard.lower(), None) is None:
+        raise HTTPException(404, "no such correction")
+    terms.save_corrections(c)
+    return {"corrections": c}
+
+
 @app.post("/api/jobs/{jid}/fill", dependencies=[Depends(auth)])
 async def fill_gap(jid: str, request: Request):
     """Nothing was written down between start and end: {"start": 242, "end": 511} transcribes that stretch again
@@ -852,6 +894,7 @@ def backup():
     p = settings.glossary_path
     data = {"kind": "whisper-minutes-backup", "version": VERSION, "made_at": int(time.time()),
             "glossary": p.read_text(encoding="utf-8") if p.exists() else "",
+            "corrections": terms.corrections(),
             "voices": [{"name": r["name"], "embedding": json.loads(r["embedding"]), "samples": r["samples"],
                         "updated_at": r["updated_at"]} for r in rows]}
     return JSONResponse(data, headers={"Content-Disposition": 'attachment; filename="whisper-minutes-backup.json"'})
@@ -880,7 +923,12 @@ async def restore(request: Request):
                              (name, json.dumps(emb), int(v.get("samples") or 1), float(v.get("updated_at") or time.time())))
             db._conn.commit()
         n += 1
-    return {"terms_added": len(add), "voices": n}
+    corr = data.get("corrections") or {}
+    if isinstance(corr, dict) and corr:
+        c = terms.corrections()
+        c.update({str(k).lower(): str(v) for k, v in corr.items() if k and v})
+        terms.save_corrections(c)
+    return {"terms_added": len(add), "voices": n, "corrections": len(corr) if isinstance(corr, dict) else 0}
 
 
 @app.post("/api/jobs/{jid}/speakers/redo", dependencies=[Depends(auth)])
