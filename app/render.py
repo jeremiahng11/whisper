@@ -49,10 +49,17 @@ def names_of(job: dict) -> dict:
 
 
 def apply_names(tr: dict, names: dict) -> dict:
-    if not names:
+    """Labels -> names; a line with two people talking at once reads "Alan + Wei Ling"."""
+    if not names and not any(s.get("also") for s in tr.get("segments", [])):
         return tr
     out = dict(tr)
-    out["segments"] = [{**s, "speaker": names.get(s.get("speaker", ""), s.get("speaker", ""))} for s in tr.get("segments", [])]
+
+    def who(s):
+        main = names.get(s.get("speaker", ""), s.get("speaker", ""))
+        also = [names.get(a, a) for a in (s.get("also") or []) if a and a != s.get("speaker")]
+        return " + ".join([main] + also) if main and also else main
+
+    out["segments"] = [{**s, "speaker": who(s)} for s in tr.get("segments", [])]
     return out
 
 

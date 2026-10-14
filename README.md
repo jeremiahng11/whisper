@@ -201,6 +201,14 @@ Open a recording on the web page:
   it listens to the whole meeting (a progress count shows), later tags are quick. Tag a couple of lines per person
   for best results; fix a wrong *auto* line by picking the right name, and it re-checks. Tuning: `AUTOTAG_MATCH`
   (default 0.60, higher = stricter), `AUTOTAG_MARGIN` (0.05). `"spread": false` in the API skips it.
+* **Two people at once:** lines are split at the word where the speaker changes ("Ship Friday?" / "Yes, if QA
+  passes" become two lines), and lines where someone talks over someone else get both names ("Alan + Wei Ling").
+  The **+** menu on each line adds or removes a second person yourself. Such lines don't teach voice prints and
+  auto-tag leaves them alone (a mixed voice isn't a fair sample of either person). Needs a new transcription
+  (*Redo* on old recordings keeps their old lines).
+* **Keep what you taught it:** remembered voices and Names & terms live in the database in `/data` - use
+  Persistent Storage for `/data` (see Deploy). *Download backup* / *Restore backup* (Names & terms box) saves them to
+  one file (`GET`/`POST /api/backup`) so they survive anything.
 * Names change in the minutes right away; *Redo minutes* rewrites the wording with the corrected speakers.
 * **Clearer audio** (on by default) plays lines with noise reduction, a rumble filter and steady volume, plus 0.3 s
   either side so words aren't cut off; untick it for the original. The speed menu slows playback (0.85x / 0.7x)

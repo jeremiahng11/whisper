@@ -51,7 +51,7 @@ tr.job:hover td{background:var(--chip)}
 .spk{grid-template-columns:34px 110px 170px 1fr}
 .play{width:30px;height:30px;padding:0;border-radius:50%;font-size:12px;line-height:30px}
 .play.on{background:var(--warn);color:#fff}
-#tagBox .line{display:grid;grid-template-columns:34px 54px 160px 1fr;gap:8px;align-items:start;padding:5px 0;border-top:1px solid var(--line)}
+#tagBox .line{display:grid;grid-template-columns:34px 54px 160px 120px 1fr;gap:8px;align-items:start;padding:5px 0;border-top:1px solid var(--line)}
 #tagBox .line .t{font-variant-numeric:tabular-nums;color:var(--mute);font-size:13px;padding-top:6px}
 #tagBox .line select{width:100%}
 #tagBox .line .x{padding-top:5px}
@@ -64,7 +64,7 @@ tr.job:hover td{background:var(--chip)}
 input[type=number]{width:64px;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px;font:inherit}
 textarea.gl{width:100%;min-height:120px;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px;font:13px/1.5 ui-monospace,Menlo,monospace}
 .sub2{font-size:13px;font-weight:600;margin:14px 0 6px}
-@media (max-width:640px){.spk{grid-template-columns:34px 1fr 1fr}.spk .mute{grid-column:1/-1}#tagBox .line{grid-template-columns:34px 1fr}#tagBox .line .t{display:none}#tagBox .line .x{grid-column:1/-1}}
+@media (max-width:640px){.spk{grid-template-columns:34px 1fr 1fr}.spk .mute{grid-column:1/-1}#tagBox .line{grid-template-columns:34px 1fr 1fr}#tagBox .line .t{display:none}#tagBox .line .x{grid-column:1/-1}}
 @media print{body{background:#fff;color:#000}main>*:not(#viewCard){display:none}#viewCard .row,#viewCard .noprint{display:none}#viewCard{border:0}}
 .hidden{display:none}
 @media (max-width:640px){.hide-sm{display:none}}
@@ -158,6 +158,9 @@ textarea.gl{width:100%;min-height:120px;background:var(--bg);color:var(--ink);bo
     <div class="row" style="margin-top:6px"><button id="glossSave">Save</button><span class="mute" id="glossMsg"></span></div>
     <div class="sub2">Known voices</div>
     <div id="voices" class="mute">None yet - name the speakers of a recording to add them.</div>
+    <div class="row" style="margin-top:8px"><button class="ghost" id="bkDown">Download backup</button>
+      <button class="ghost" id="bkUp">Restore backup…</button><input type="file" id="bkFile" accept=".json" class="hidden">
+      <span class="mute" id="bkMsg">Names &amp; terms and remembered voices, in one file.</span></div>
   </div>
   <div class="card" id="notesCard">
     <div class="row" style="justify-content:space-between">
@@ -326,6 +329,26 @@ function speakerOptions(cur) {
   if (!cur) opts.unshift('<option value="" selected>?</option>');
   return opts.join("") + '<option value="__new">Someone else…</option>';
 }
+function alsoOptions(s) {
+  const cur = (s.also || [])[0] || "";
+  const opts = tagSpk.filter(x => x.label !== s.speaker).map(x => `<option value="${esc(x.label)}"${x.label === cur ? " selected" : ""}>+ ${esc(x.name || x.label)}</option>`);
+  if (cur && !tagSpk.some(x => x.label === cur)) opts.unshift(`<option value="${esc(cur)}" selected>+ ${esc(cur)}</option>`);
+  return `<option value=""${cur ? "" : " selected"}>+ nobody</option>` + opts.join("") + '<option value="__new">+ someone else…</option>';
+}
+async function tagAlso(sel) {
+  const i = +sel.dataset.i;
+  let v = sel.value;
+  if (v === "__new") { v = (prompt("Who else is talking in this line?") || "").trim(); if (!v) { renderLines(); return; } }
+  else if (v) { const s = tagSpk.find(x => x.label === v); v = s && s.name ? s.name : v; }
+  try {
+    const r = await (await api(`/api/jobs/${current}/segments/${i}`, { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ also: v, spread: false }) })).json();
+    tagSegs[i].also = r.also;
+    (r.also || []).forEach((lab, k) => { if (!tagSpk.some(x => x.label === lab)) tagSpk.push({ label: lab, name: (r.also_names || [])[k] || "" }); });
+    $("#tagMsg").textContent = r.also.length ? `${mmss(tagSegs[i].start)}: ${r.name || r.speaker} + ${r.also_names.join(", ")} talking at once` : `${mmss(tagSegs[i].start)}: one speaker`;
+    refreshAfterTag(i);
+  } catch (e) { $("#tagMsg").textContent = "Couldn't save: " + e.message; renderLines(); }
+}
 function renderLines() {
   const f = $("#tagFilter").value;
   const rows = tagSegs.map((s, i) => ({ ...s, i })).filter(s => !f || s.speaker === f);
@@ -333,11 +356,13 @@ function renderLines() {
     <button class="ghost play" data-s="${s.start}" data-e="${s.end}" title="Play this line">▶</button>
     <span class="t">${mmss(s.start)}</span>
     <select data-i="${s.i}">${speakerOptions(s.speaker)}</select>
+    <select class="also" data-i="${s.i}" title="Someone else talking at the same time">${alsoOptions(s)}</select>
     <span class="x">${esc(s.text)}${tagManual.has(s.i) ? '<span class="tag me" title="you tagged this line">you</span>'
       : tagAuto.has(s.i) ? '<span class="tag" title="tagged automatically: sounds like this person">auto</span>' : ""}</span></div>`).join("") || '<p class="mute">No lines.</p>';
   $("#tagMore").classList.toggle("hidden", rows.length <= tagShown);
   document.querySelectorAll("#tagLines .play").forEach(b => b.onclick = () => playClip(b, +b.dataset.s, Math.max(+b.dataset.e, +b.dataset.s + 1.5)));
-  document.querySelectorAll("#tagLines select").forEach(sel => sel.onchange = () => tagLine(sel));
+  document.querySelectorAll("#tagLines select:not(.also)").forEach(sel => sel.onchange = () => tagLine(sel));
+  document.querySelectorAll("#tagLines select.also").forEach(sel => sel.onchange = () => tagAlso(sel));
 }
 async function tagLine(sel) {
   const i = +sel.dataset.i;
@@ -494,6 +519,17 @@ async function loadTemplates() {
   $("#tpl").innerHTML = opts; $("#reTpl").innerHTML = opts;
   if (!t.best_available) for (const id of ["#best", "#reBest"]) { $(id).disabled = true; $(id).parentElement.title = "Set OLLAMA_MODEL_BEST on the server to enable"; }
 }
+$("#bkDown").onclick = () => download("/api/backup");
+$("#bkUp").onclick = () => $("#bkFile").click();
+$("#bkFile").onchange = async () => {
+  const f = $("#bkFile").files[0]; if (!f) return;
+  try {
+    const r = await (await api("/api/backup", { method: "POST", headers: { "Content-Type": "application/json" }, body: await f.text() })).json();
+    $("#bkMsg").textContent = `Restored: ${r.voices} voice${r.voices === 1 ? "" : "s"}, ${r.terms_added} new term${r.terms_added === 1 ? "" : "s"}.`;
+    loadGlossary(); loadVoices();
+  } catch (e) { $("#bkMsg").textContent = "Restore failed: " + e.message; }
+  $("#bkFile").value = "";
+};
 loadTemplates(); loadGlossary(); loadVoices();
 $("#refresh").onclick = load;
 

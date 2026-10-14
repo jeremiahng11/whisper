@@ -717,3 +717,53 @@ def test_tagging_one_line_tags_the_same_voice_everywhere(client):
             break
         time.sleep(0.05)
     assert client.get(f"/api/jobs/{j['id']}/transcript.json", headers=H).json()["segments"][b]["speaker"] == lab
+
+
+def test_split_line_at_speaker_change_and_mark_overlap(client):
+    from app import transcribe as t
+    words = [[0.0, 0.4, " Can"], [0.4, 0.8, " we"], [0.8, 1.2, " ship"], [1.2, 1.6, " Friday?"],
+             [1.8, 2.2, " Yes,"], [2.2, 2.6, " if"], [2.6, 3.0, " QA"], [3.0, 3.6, " passes."]]
+    seg = t.Segment(0.0, 3.6, "Can we ship Friday? Yes, if QA passes.", words=words)
+    turns = [(0.0, 1.7, "A"), (1.7, 4.0, "B")]
+    parts = t.split_by_speaker(seg, turns)
+    assert [p.text for p in parts] == ["Can we ship Friday?", "Yes, if QA passes."]
+    tr = t.Transcript("en", 1, 4, "fake", [seg])
+    import numpy as np
+    orig = t._diarize
+    try:
+        t._diarize = lambda a, n: ([(0.0, 1.7, "A"), (1.7, 4.0, "B"), (5.0, 9.0, "A"), (5.5, 8.5, "B")], {})
+        tr.segments = [seg, t.Segment(5.0, 9.0, "talking over each other", words=[])]
+        t.assign_speakers(np.zeros(16000 * 10, np.float32), tr, 2)
+    finally:
+        t._diarize = orig
+    assert [s.speaker for s in tr.segments] == ["Speaker 1", "Speaker 2", "Speaker 1"]
+    assert tr.segments[2].also == ["Speaker 2"] and not tr.segments[0].also
+    from app import render
+    named = render.apply_names({"segments": [s.__dict__ for s in tr.segments]}, {"Speaker 1": "Alan", "Speaker 2": "Wei Ling"})
+    assert named["segments"][2]["speaker"] == "Alan + Wei Ling"
+    # API: add / clear a second person on a line
+    j = upload(client, "dev1-also", 20, "diarize=true&speakers=2")
+    r = client.post(f"/api/jobs/{j['id']}/segments/1", json={"also": "Rahul", "spread": False}, headers=H).json()
+    assert r["also_names"] == ["Rahul"] and r["learned"] is False
+    md = client.get(f"/api/jobs/{j['id']}/result.md", headers=H).text
+    assert "+ Rahul:**" in md
+    r = client.post(f"/api/jobs/{j['id']}/segments/1", json={"also": ""}, headers=H).json()
+    assert r["also"] == []
+
+
+def test_backup_and_restore_names_terms_voices(client):
+    from app import voices
+    client.put("/api/glossary", content="Aleta Planet\nShenzhen", headers=H)
+    voices.remember("Backup Person", [0.1, 0.2, 0.3, 0.4])
+    b = client.get("/api/backup", headers=H).json()
+    assert b["kind"] == "whisper-minutes-backup" and "Shenzhen" in b["glossary"]
+    assert any(v["name"] == "Backup Person" for v in b["voices"])
+    # wipe (like a redeploy without persistent storage), then restore
+    voices.forget("Backup Person")
+    client.put("/api/glossary", content="Coolify", headers=H)
+    r = client.post("/api/backup", json=b, headers=H).json()
+    assert r["voices"] >= 1 and r["terms_added"] == 2
+    terms = client.get("/api/glossary", headers=H).json()["terms"]
+    assert {"Coolify", "Aleta Planet", "Shenzhen"} <= set(terms)
+    assert any(v["name"] == "Backup Person" for v in client.get("/api/voices", headers=H).json()["voices"])
+    assert client.post("/api/backup", json={"kind": "x"}, headers=H).status_code == 400

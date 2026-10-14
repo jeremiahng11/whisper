@@ -19,7 +19,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.4.3"
+VERSION = "1.5.0"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -572,7 +572,8 @@ async def name_speakers(jid: str, request: Request):
 async def tag_segment(jid: str, idx: int, request: Request):
     """Say who really spoke one transcript line: {"name": "Alan", "learn": true} or {"speaker": "Speaker 2"}.
     A name used in this meeting goes to that speaker; a new name becomes a new speaker. learn = also add this
-    clip to that person's voice print, so later meetings recognise them better."""
+    clip to that person's voice print, so later meetings recognise them better.
+    {"also": "Wei Ling"} = a second person talking at the same time ("" = nobody); can be sent with or without a name."""
     j = _job(jid)
     if j["status"] != "done":
         raise HTTPException(409, f"job is {j['status']}")
@@ -584,21 +585,35 @@ async def tag_segment(jid: str, idx: int, request: Request):
     opts = dict(j["options"])
     names = dict(opts.get("speaker_names") or {})
     labels = {s.get("speaker") for s in segs if s.get("speaker")} | set(names)
-    name = re.sub(r"\s+", " ", str(data.get("name") or "")).strip()[:60]
-    label = str(data.get("speaker") or "").strip()
-    if name:
-        label = next((lab for lab, n in names.items() if n.lower() == name.lower()), "")
-        if not label:                                    # someone new in this meeting
-            nums = [int(x.split()[-1]) for x in labels if re.match(r"^Speaker \d+$", x or "")]
-            label = f"Speaker {max(nums, default=0) + 1}"
-            names[label] = name
-    if not re.match(r"^Speaker \d+$", label):
-        raise HTTPException(400, "send {'name': 'Alan'} or {'speaker': 'Speaker 2'}")
+
+    def resolve(name: str, label: str = "") -> str:
+        name = re.sub(r"\s+", " ", str(name or "")).strip()[:60]
+        if name:
+            label = next((lab for lab, n in names.items() if n.lower() == name.lower()), "")
+            if not label and re.match(r"^Speaker \d+$", name):
+                label = name
+            if not label:                                # someone new in this meeting
+                nums = [int(x.split()[-1]) for x in labels | set(names) if re.match(r"^Speaker \d+$", x or "")]
+                label = f"Speaker {max(nums, default=0) + 1}"
+                names[label] = name
+                labels.add(label)
+        return label
+
+    label = segs[idx].get("speaker", "")
+    if data.get("name") or data.get("speaker"):
+        label = resolve(data.get("name"), str(data.get("speaker") or "").strip())
+        if not re.match(r"^Speaker \d+$", label):
+            raise HTTPException(400, "send {'name': 'Alan'} or {'speaker': 'Speaker 2'}")
+    elif "also" not in data:
+        raise HTTPException(400, "send {'name': 'Alan'}, {'speaker': 'Speaker 2'} or {'also': 'Wei Ling'}")
     segs[idx]["speaker"] = label
+    if "also" in data:
+        other = resolve(data.get("also")) if data.get("also") else ""
+        segs[idx]["also"] = [other] if other and other != label else []
     worker._write(jid, "transcript.json", json.dumps(tr, ensure_ascii=False, indent=1))
     learned = False
     who = names.get(label, "")
-    if data.get("learn", True) and who and j["audio_path"] and os.path.exists(j["audio_path"]):
+    if data.get("learn", True) and who and not segs[idx].get("also") and j["audio_path"] and os.path.exists(j["audio_path"]):
         from starlette.concurrency import run_in_threadpool
         clip = await run_in_threadpool(transcribe.load_range, j["audio_path"], float(segs[idx]["start"]), float(segs[idx]["end"]))
         emb = await run_in_threadpool(transcribe.embed_clip, clip, float(segs[idx]["start"]))
@@ -616,7 +631,8 @@ async def tag_segment(jid: str, idx: int, request: Request):
     spread = bool(data.get("spread", True)) and bool(who) and bool(j["audio_path"]) and os.path.exists(j["audio_path"])
     if spread:                                       # lines elsewhere that sound like them follow (background)
         autotag.start(jid)
-    return {"index": idx, "speaker": label, "name": who, "learned": learned, "autotag": "started" if spread else "off"}
+    return {"index": idx, "speaker": label, "name": who, "learned": learned, "also": segs[idx].get("also") or [],
+            "also_names": [names.get(a, a) for a in segs[idx].get("also") or []], "autotag": "started" if spread else "off"}
 
 
 @app.get("/api/jobs/{jid}/speakers", dependencies=[Depends(auth)])
@@ -630,7 +646,8 @@ def get_speakers(jid: str):
     for s in tr.get("segments", []):               # a line each person said, to help tell them apart
         if s.get("speaker") and len(s["text"]) > len(sample.get(s["speaker"], "")) and len(s["text"]) < 200:
             sample[s["speaker"]] = s["text"]
-    labels = sorted(set(spk) | {s.get("speaker") for s in tr.get("segments", []) if s.get("speaker")},
+    labels = sorted(set(spk) | {s.get("speaker") for s in tr.get("segments", []) if s.get("speaker")}
+                    | {a for s in tr.get("segments", []) for a in (s.get("also") or []) if a},
                     key=lambda x: int(x.split()[-1]) if x.split()[-1].isdigit() else 99)
     return {"speakers": [{"label": lab, "name": names.get(lab, ""), "auto": lab in auto,
                           "seconds": (spk.get(lab) or {}).get("seconds", 0), "has_voice": bool((spk.get(lab) or {}).get("embedding")),
@@ -647,6 +664,45 @@ def delete_voice(name: str):
     if not voices.forget(name):
         raise HTTPException(404, "unknown voice")
     return {"deleted": name}
+
+
+@app.get("/api/backup", dependencies=[Depends(auth)])
+def backup():
+    """Everything you taught the server, in one file: Names & terms and the remembered voices."""
+    with db._lock:
+        rows = db._conn.execute("SELECT name, embedding, samples, updated_at FROM voices ORDER BY name").fetchall()
+    p = settings.glossary_path
+    data = {"kind": "whisper-minutes-backup", "version": VERSION, "made_at": int(time.time()),
+            "glossary": p.read_text(encoding="utf-8") if p.exists() else "",
+            "voices": [{"name": r["name"], "embedding": json.loads(r["embedding"]), "samples": r["samples"],
+                        "updated_at": r["updated_at"]} for r in rows]}
+    return JSONResponse(data, headers={"Content-Disposition": 'attachment; filename="whisper-minutes-backup.json"'})
+
+
+@app.post("/api/backup", dependencies=[Depends(auth)])
+async def restore(request: Request):
+    """Load a backup: Names & terms are merged (new lines added), voices added or replaced by name."""
+    data = await body_extra(request)
+    if data.get("kind") != "whisper-minutes-backup":
+        raise HTTPException(400, "not a Whisper Minutes backup file")
+    old = voices.glossary()
+    new = [t for t in str(data.get("glossary", "")).splitlines() if t.strip() and not t.strip().startswith("#")]
+    p = settings.glossary_path
+    have = p.read_text(encoding="utf-8") if p.exists() else ""
+    add = [t for t in new if t.strip() not in old]
+    if add:
+        voices.set_glossary((have.rstrip() + "\n" if have.strip() else "") + "\n".join(add))
+    n = 0
+    for v in data.get("voices") or []:
+        name, emb = str(v.get("name", "")).strip()[:60], v.get("embedding")
+        if not name or not isinstance(emb, list) or not emb:
+            continue
+        with db._lock:
+            db._conn.execute("INSERT OR REPLACE INTO voices (name, embedding, samples, updated_at) VALUES (?,?,?,?)",
+                             (name, json.dumps(emb), int(v.get("samples") or 1), float(v.get("updated_at") or time.time())))
+            db._conn.commit()
+        n += 1
+    return {"terms_added": len(add), "voices": n}
 
 
 @app.get("/api/glossary", dependencies=[Depends(auth)])

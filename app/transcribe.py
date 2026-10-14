@@ -26,6 +26,8 @@ class Segment:
     end: float
     text: str
     speaker: str = ""
+    also: list = field(default_factory=list)            # others talking at the same time (overlapping speech)
+    words: list = field(default_factory=list)           # [[start, end, "word"], ...] when known
 
 
 @dataclass
@@ -191,7 +193,11 @@ def _run(audio: np.ndarray, offset: float, language: Optional[str], prompt: str,
         while t < dur - 0.01:
             end = min(dur, t + 5)
             i = int(round((offset + t) / 5)) + 1
-            segs.append(Segment(round(offset + t, 2), round(offset + end, 2), f"This is test sentence number {i}."))
+            text = f"This is test sentence number {i}."
+            ws = text.split()
+            step = (end - t) / len(ws)
+            words = [[round(offset + t + k * step, 2), round(offset + t + (k + 1) * step, 2), w] for k, w in enumerate(ws)]
+            segs.append(Segment(round(offset + t, 2), round(offset + end, 2), text, words=words))
             progress(min(1.0, (offset + end) / total) if total else 1.0, "transcribing")
             t = end
         return segs, language or settings.default_language or "en", 1.0
@@ -202,6 +208,7 @@ def _run(audio: np.ndarray, offset: float, language: Optional[str], prompt: str,
         vad_filter=settings.vad,
         vad_parameters=dict(min_silence_duration_ms=500, threshold=settings.vad_threshold, speech_pad_ms=400),
         condition_on_previous_text=False,     # avoids Whisper getting stuck repeating a phrase
+        word_timestamps=True,                 # lets speaker changes inside a line be split at the right word
     )
     if prompt:
         kwargs["initial_prompt"] = prompt
@@ -212,7 +219,9 @@ def _run(audio: np.ndarray, offset: float, language: Optional[str], prompt: str,
     for s in segs:                                   # generator: decoding happens while we iterate
         text = s.text.strip()
         if text:
-            out.append(Segment(round(offset + float(s.start), 2), round(offset + float(s.end), 2), text))
+            words = [[round(offset + float(w.start), 2), round(offset + float(w.end), 2), w.word]
+                     for w in (getattr(s, "words", None) or []) if (w.word or "").strip()]
+            out.append(Segment(round(offset + float(s.start), 2), round(offset + float(s.end), 2), text, words=words))
         if total > 0:
             progress(min(1.0, (offset + s.end) / total), "transcribing")
     return out, info.language, float(info.language_probability or 0)
@@ -477,26 +486,84 @@ def _diarize(audio: np.ndarray, num_speakers: Optional[int]) -> tuple[list[tuple
     return turns, vecs
 
 
+def _who(turns, a: float, b: float) -> dict:
+    """Seconds each speaker talks between a and b."""
+    out: dict[str, float] = {}
+    for x, y, spk in turns:
+        o = min(y, b) - max(x, a)
+        if o > 0:
+            out[spk] = out.get(spk, 0) + o
+    return out
+
+
+def split_by_speaker(s: Segment, turns) -> list[Segment]:
+    """One Whisper line spoken by two people in turn ("Ship Friday?" "Yes, if QA passes") -> one line each,
+    cut at the word where the speaker changes. Needs word timestamps; tiny pieces stay with their neighbour."""
+    if len(s.words) < 4:
+        return [s]
+    tags = []
+    for ws, we, w in s.words:
+        who = _who(turns, ws, max(we, ws + 0.05))
+        tags.append(max(who, key=who.get) if who else None)
+    for i in range(len(tags)):                                 # words in a gap: same as the word before
+        if tags[i] is None:
+            tags[i] = tags[i - 1] if i else next((t for t in tags if t), None)
+    runs = []                                                  # [speaker, first word, last word]
+    for i, t in enumerate(tags):
+        if runs and runs[-1][0] == t:
+            runs[-1][2] = i
+        else:
+            runs.append([t, i, i])
+    changed = True                                             # pieces under 2 words / 0.7 s join a neighbour
+    while changed and len(runs) > 1:
+        changed = False
+        for k, (t, a, b) in enumerate(runs):
+            if b - a + 1 < 2 or s.words[b][1] - s.words[a][0] < 0.7:
+                j = k - 1 if k > 0 else k + 1
+                lo, hi = min(runs[j][1], a), max(runs[j][2], b)
+                runs[j] = [runs[j][0], lo, hi]
+                del runs[k]
+                changed = True
+                break
+    if len(runs) < 2:
+        return [s]
+    out = []
+    for t, a, b in runs:
+        ws = s.words[a:b + 1]
+        text = "".join(w[2] for w in ws).strip() if any(w[2].startswith(" ") for w in ws) else " ".join(w[2].strip() for w in ws)
+        out.append(Segment(ws[0][0], ws[-1][1], text, words=ws))
+    return out
+
+
 def assign_speakers(audio: np.ndarray, tr: Transcript, num_speakers: Optional[int] = None) -> None:
-    """Give each segment the speaker who talks most during it. Failure only loses the labels."""
+    """Give each line the speaker who talks most during it; split lines where the speaker changes mid-line;
+    mark lines where a second person talks at the same time ("also"). Failure only loses the labels."""
     try:
         turns, vecs = _diarize(audio, num_speakers)
     except Exception as e:
         log.warning("speaker labelling failed: %s", e)
         return
+    segs = []
+    for s in tr.segments:
+        segs += split_by_speaker(s, turns)
+    tr.segments = segs
     names: dict[str, str] = {}
     secs: dict[str, float] = {}
+
+    def label(spk):
+        if spk not in names:
+            names[spk] = f"Speaker {len(names) + 1}"
+        return names[spk]
+
     for s in tr.segments:
-        overlap: dict[str, float] = {}
-        for a, b, spk in turns:
-            o = min(b, s.end) - max(a, s.start)
-            if o > 0:
-                overlap[spk] = overlap.get(spk, 0) + o
+        overlap = _who(turns, s.start, s.end)
         if overlap:
-            spk = max(overlap, key=overlap.get)
-            if spk not in names:
-                names[spk] = f"Speaker {len(names) + 1}"
-            s.speaker = names[spk]
-            secs[names[spk]] = secs.get(names[spk], 0) + (s.end - s.start)
+            ranked = sorted(overlap, key=overlap.get, reverse=True)
+            s.speaker = label(ranked[0])
+            secs[s.speaker] = secs.get(s.speaker, 0) + (s.end - s.start)
+            dur = max(0.1, s.end - s.start)
+            # someone else talking over them for a good part of the line: overlapping speech
+            if len(ranked) > 1 and overlap[ranked[1]] >= 0.3 * dur and overlap[ranked[0]] + overlap[ranked[1]] > 1.15 * dur:
+                s.also = [label(ranked[1])]
     tr.speakers = {lab: {"seconds": round(secs.get(lab, 0), 1), "embedding": vecs.get(spk)}
                    for spk, lab in names.items()}

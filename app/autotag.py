@@ -5,7 +5,7 @@ of that meeting with the people you have tagged so far and gives a line to a per
   * similarity >= AUTOTAG_MATCH (cosine of voice prints, default 0.60), and
   * clearly closer to them than to anyone else (margin AUTOTAG_MARGIN, default 0.05) - other tagged people and the
     diarizer's other speakers that do NOT sound like them.
-Lines you tagged yourself are never changed. Voice prints of lines are worked out once per meeting and kept in
+Lines you tagged yourself, and lines where two people talk at once, are never changed. Voice prints of lines are worked out once per meeting and kept in
 seg_emb.json, so the next tag is quick. GET /api/jobs/{id}/autotag reports progress.
 """
 import json
@@ -102,7 +102,7 @@ def apply(jid: str) -> int:
     groups: dict[str, list] = {}
     for i, lab in manual.items():
         e = embs.get(str(i))
-        if e and lab in names:
+        if e and lab in names and not (segs[i].get("also") if i < len(segs) else None):   # mixed voices teach nothing
             groups.setdefault(lab, []).append(e)
     known = {n: v for n, v, _ in voices._all()}
     people = {}
@@ -128,7 +128,7 @@ def apply(jid: str) -> int:
     auto = set(opts.get("auto_lines") or [])
     changed = 0
     for i, s in enumerate(segs):
-        if i in manual:
+        if i in manual or s.get("also"):                   # yours, or two people at once: leave it
             continue
         e = embs.get(str(i))
         if not e:
