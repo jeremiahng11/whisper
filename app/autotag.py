@@ -14,6 +14,7 @@ import math
 import os
 import threading
 import time
+from typing import Optional
 
 from . import db, transcribe, voices, worker
 from .config import settings
@@ -309,7 +310,7 @@ def apply(jid: str) -> int:
     return changed
 
 
-def start(jid: str, speakers: bool = False) -> None:
+def start(jid: str, speakers: bool = False, fill: Optional[tuple] = None) -> None:
     """Run apply() in the background (one at a time per meeting; a new tag during a run re-runs it after)."""
     with _lock:
         if jid in _running:
@@ -320,6 +321,9 @@ def start(jid: str, speakers: bool = False) -> None:
 
     def run():
         try:
+            if fill:
+                n = fill_gap(jid, fill[0], fill[1])
+                _set(jid, filled=n)
             if speakers:
                 redo_speakers(jid)
                 relearn()                                  # tags in this meeting: their voices are learned now
@@ -346,6 +350,61 @@ def after_transcription(jid: str) -> None:
     if not settings.autotag_new or voices_signature().startswith("0:"):
         return
     start(jid)
+
+
+def fill_gap(jid: str, a: float, b: float) -> int:
+    """Nothing was written down between a and b seconds: transcribe that stretch again with a much more sensitive
+    speech detector and a louder copy of the audio, and add the lines found (speaker unknown until the voice check).
+    Line numbers after the gap move up, so your tags, auto marks and voice prints move with their lines."""
+    from . import terms
+    job = db.get(jid)
+    if not job or not job.get("audio_path") or not os.path.exists(job["audio_path"]):
+        raise RuntimeError("the audio of this recording is no longer kept")
+    a, b = max(0.0, float(a) - 1.0), float(b) + 1.0
+    _set(jid, state="running", step="writing down a part")
+    clip = transcribe.load_range(job["audio_path"], a, b)
+    opts = job.get("options") or {}
+    found, _, _ = transcribe._run(transcribe.level_audio(clip), a, job.get("language") or opts.get("language"),
+                                  voices.whisper_prompt(opts.get("attendees")), lambda p, s: None, 0,
+                                  vad_threshold=min(settings.vad_threshold, 0.15))
+    if not found:
+        return 0
+    known = terms.known_terms()
+    with job_lock(jid):
+        job = db.get(jid)
+        tr = worker.load_transcript(jid) or {}
+        old = tr.get("segments", [])
+        busy = [(float(s["start"]), float(s["end"])) for s in old]
+        new = []
+        for s in found:
+            st, en = float(s.start), float(s.end)
+            overlap = sum(max(0.0, min(en, y) - max(st, x)) for x, y in busy)
+            if overlap > 0.5 * max(0.1, en - st):          # already written down
+                continue
+            new.append({"start": st, "end": en, "text": terms.fix_text(s.text, known), "speaker": "", "also": [],
+                        "words": s.words, "added": True})
+        if not new:
+            return 0
+        rows = [(float(s["start"]), 0, i, s) for i, s in enumerate(old)] + [(x["start"], 1, -1, x) for x in new]
+        rows.sort(key=lambda r: (r[0], r[1]))
+        move = {}
+        segs = []
+        for k, (_, _, i, s) in enumerate(rows):
+            if i >= 0:
+                move[i] = k
+            segs.append(s)
+        tr["segments"] = segs
+        opts = dict(job.get("options") or {})
+        opts["manual_lines"] = {str(move[int(i)]): v for i, v in (opts.get("manual_lines") or {}).items() if int(i) in move}
+        opts["auto_lines"] = sorted(move[i] for i in (opts.get("auto_lines") or []) if i in move)
+        cache = worker.load_json(jid, "seg_emb.json", {}) or {}
+        worker._write(jid, "seg_emb.json", json.dumps({str(move[int(i)]): v for i, v in cache.items() if int(i) in move}))
+        worker._write(jid, "transcript.json", json.dumps(tr, ensure_ascii=False, indent=1))
+        opts.pop("recognized_voices", None)                # the new lines get a voice check
+        db.update(jid, options=opts)
+    worker.build_outputs(jid)
+    log.info("filled %d lines in %s between %.0f and %.0f s", len(new), jid, a, b)
+    return len(new)
 
 
 def merge_same_names(jid: str) -> list[str]:

@@ -1040,3 +1040,24 @@ def test_rename_meeting_title_kept_after_redo(client):
     assert wait(client, j["id"])["title"] == "CTRIP dashboard review"
     d = client.get(f"/api/jobs/{j['id']}/result.docx", headers=H)
     assert d.status_code == 200 and "CTRIP dashboard review.docx" in d.headers["content-disposition"]
+
+
+def test_fill_a_gap_adds_lines_and_keeps_tags(client):
+    import json
+    from app import worker, db
+    j = upload(client, "dev1-gap", 40, "diarize=true&speakers=2")
+    jid = j["id"]
+    tr = worker.load_transcript(jid)
+    tr["segments"] = [s for s in tr["segments"] if not (10 <= s["start"] < 20)]   # 10-20 s was "not heard"
+    worker._write(jid, "transcript.json", json.dumps(tr))
+    last = len(tr["segments"]) - 1
+    o = dict(db.get(jid)["options"]); o["manual_lines"] = {str(last): tr["segments"][last]["speaker"]}
+    db.update(jid, options=o)
+    r = client.post(f"/api/jobs/{jid}/fill", json={"start": 10, "end": 20}, headers=H)
+    assert r.status_code == 200
+    st = _wait_autotag(client, jid)
+    assert st["state"] == "done" and st.get("filled", 0) >= 1, st
+    segs = client.get(f"/api/jobs/{jid}/transcript.json", headers=H).json()["segments"]
+    assert any(10 <= s["start"] < 20 for s in segs)
+    assert [s["start"] for s in segs] == sorted(s["start"] for s in segs)
+    assert str(len(segs) - 1) in [str(i) for i in st["manual"]]      # your tag moved with its line

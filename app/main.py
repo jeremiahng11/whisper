@@ -19,7 +19,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.6.7"
+VERSION = "1.6.8"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -703,6 +703,26 @@ def _tag(jid: str, idx: int, data: dict) -> dict:
     return {"index": idx, "speaker": label, "name": who, "learned": learned, "moved": moved, "also": segs[idx].get("also") or [],
             "also_names": [names.get(a, a) for a in segs[idx].get("also") or []], "autotag": "started" if spread else "off",
             "_who": who if named_now else "", "_seg": dict(segs[idx]), "_spread": spread}
+
+
+@app.post("/api/jobs/{jid}/fill", dependencies=[Depends(auth)])
+async def fill_gap(jid: str, request: Request):
+    """Nothing was written down between start and end: {"start": 242, "end": 511} transcribes that stretch again
+    with a more sensitive speech detector, adds what it finds, then runs the voice check on the new lines."""
+    j = _job(jid)
+    if j["status"] != "done":
+        raise HTTPException(409, f"job is {j['status']}")
+    if not j["audio_path"] or not os.path.exists(j["audio_path"]):
+        raise HTTPException(410, "the audio of this recording is no longer kept")
+    data = await body_extra(request)
+    try:
+        a, b = float(data.get("start")), float(data.get("end"))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "send {'start': seconds, 'end': seconds}")
+    if b - a < 1 or b - a > 3600:
+        raise HTTPException(400, "pick a stretch between 1 second and 1 hour")
+    autotag.start(jid, fill=(a, b))
+    return autotag.status(jid)
 
 
 @app.post("/api/jobs/{jid}/autotag/accept", dependencies=[Depends(auth)])

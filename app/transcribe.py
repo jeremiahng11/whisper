@@ -184,8 +184,9 @@ def model_loaded() -> bool:
 
 
 def _run(audio: np.ndarray, offset: float, language: Optional[str], prompt: str,
-         progress: ProgressFn, total: float) -> tuple[list[Segment], str, float]:
-    """Transcribe one stretch of audio; returns (segments with absolute times, language, probability)."""
+         progress: ProgressFn, total: float, vad_threshold: Optional[float] = None) -> tuple[list[Segment], str, float]:
+    """Transcribe one stretch of audio; returns (segments with absolute times, language, probability).
+    vad_threshold = a more sensitive speech detector for one pass (quiet or far-away voices)."""
     if len(audio) < SR // 2:
         return [], language or "", 0.0
     if settings.transcriber == "fake":
@@ -207,7 +208,8 @@ def _run(audio: np.ndarray, offset: float, language: Optional[str], prompt: str,
         language=language or settings.default_language or None,
         beam_size=settings.whisper_beam,
         vad_filter=settings.vad,
-        vad_parameters=dict(min_silence_duration_ms=500, threshold=settings.vad_threshold, speech_pad_ms=400),
+        vad_parameters=dict(min_silence_duration_ms=500, speech_pad_ms=400,
+                            threshold=settings.vad_threshold if vad_threshold is None else vad_threshold),
         condition_on_previous_text=False,     # avoids Whisper getting stuck repeating a phrase
         word_timestamps=True,                 # lets speaker changes inside a line be split at the right word
     )
