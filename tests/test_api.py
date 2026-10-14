@@ -104,7 +104,7 @@ def test_raw_upload_full_flow(client):
     srt = client.get(j["results"]["srt"], headers=H).text
     assert "00:00:05,000 --> 00:00:10,000" in srt
     assert client.get(j["results"]["json"], headers=H).json()["language"] == "en"
-    assert "2026-10-08_1535.md" in md.headers["content-disposition"]
+    assert "_8-Oct-2026.md" in md.headers["content-disposition"]   # title + date
 
 
 def test_multipart_upload(client):
@@ -1039,7 +1039,9 @@ def test_rename_meeting_title_kept_after_redo(client):
     client.post(f"/api/jobs/{j['id']}/summarize", json={}, headers=H)
     assert wait(client, j["id"])["title"] == "CTRIP dashboard review"
     d = client.get(f"/api/jobs/{j['id']}/result.docx", headers=H)
-    assert d.status_code == 200 and "CTRIP dashboard review.docx" in d.headers["content-disposition"]
+    assert d.status_code == 200 and "CTRIP_dashboard_review_9-Oct-2026.docx" in d.headers["content-disposition"], d.headers["content-disposition"]
+    t = client.get(f"/api/jobs/{j['id']}/transcript.txt", headers=H)
+    assert "CTRIP_dashboard_review_9-Oct-2026_transcript.txt" in t.headers["content-disposition"]
 
 
 def test_fill_a_gap_adds_lines_and_keeps_tags(client):

@@ -19,7 +19,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.6.9"
+VERSION = "1.6.10"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -346,6 +346,18 @@ RESULT_FILES = {
 }
 
 
+def export_name(j: dict, kind: str = "") -> str:
+    """File name for downloads: Title + date, e.g. "MANCO_14-Oct-2026" (+ "_transcript" etc.)."""
+    when = render.recorded_at(j["filename"], j["created_at"])
+    title = (j.get("title") or Path(j["filename"]).stem).strip()
+    date = when.strftime("%d-%b-%Y").lstrip("0")
+    t = re.sub(r"[^A-Za-z0-9._-]+", "_", title).strip("_.")[:70] or "Minutes"
+    if not re.search(when.strftime("%Y-%m-%d") + r"|" + when.strftime("%b") + r"[_-]?" + when.strftime("%Y"), t, re.I) \
+            and not re.search(r"\d{1,2}[_-]?" + when.strftime("%b"), t, re.I):
+        t = f"{t}_{date}"
+    return t + (f"_{kind}" if kind else "")
+
+
 def _result(j: dict, name: str):
     if name == "result.docx":
         if j["status"] != "done":
@@ -354,8 +366,7 @@ def _result(j: dict, name: str):
         if not p.exists():
             raise HTTPException(404, "result not available")
         data = render.docx(p.read_text(encoding="utf-8"), speaker_colours(j))
-        stem = Path(j.get("title") or Path(j["filename"]).stem).name
-        stem = re.sub(r"[^A-Za-z0-9 ._-]", "", stem)[:80] or "minutes"
+        stem = export_name(j)
         return Response(data, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                         headers={"Content-Disposition": f'attachment; filename="{stem}.docx"'})
     if name not in RESULT_FILES:
@@ -366,8 +377,10 @@ def _result(j: dict, name: str):
     p = worker.result_dir(j["id"]) / fname
     if not p.exists():
         raise HTTPException(404, f"{name} not available")
-    stem = Path(j["filename"]).stem
-    dl = f"{stem}.md" if name == "result.md" else f"{stem}_{name}"
+    kinds = {"result.md": ("", ".md"), "transcript.txt": ("transcript", ".txt"), "transcript.srt": ("subtitles", ".srt"),
+             "transcript.json": ("transcript", ".json"), "summary.md": ("summary", ".md"), "actions.json": ("actions", ".json")}
+    kind, ext = kinds.get(name, (Path(name).stem, Path(name).suffix))
+    dl = export_name(j, kind) + ext
     return FileResponse(p, media_type=ctype, filename=dl, content_disposition_type="inline")
 
 
