@@ -192,8 +192,16 @@ textarea.gl{width:100%;min-height:180px;font:13px/1.55 ui-monospace,Menlo,monosp
   .files{grid-template-columns:1fr}.flist{border-right:0;max-height:200px}
 }
 @media print{
-  body{background:#fff;color:#000}.side,.tabs,.mtools,#dl,.ribbon,.noprint,.panel:not(#viewCard){display:none!important}
-  .app{display:block}.work{padding:0}#minutesTab{display:block!important}
+  /* keep the speaker colours and the voice ribbon on paper / PDF */
+  *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  body{background:#fff;color:#000}
+  .side,.tabs,.mtools,#dl,.noprint,.panel:not([data-panel=meetings]),#noMeeting,#storageWarn{display:none!important}
+  .app{display:block}.work{padding:0;max-width:none}#minutesTab{display:block!important}
+  #mTitle{font-size:24px;background:none!important;outline:0!important}
+  .ribbon{margin:12px 0 16px}.ribbon .strip i{cursor:default}
+  #view{max-width:none}
+  button.ts{background:none;color:#5d6b7a;padding:0;margin-right:6px}
+  #view h1:first-child{display:none}  /* the title is already at the top */
 }
 </style>
 </head>

@@ -19,7 +19,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.6.5"
+VERSION = "1.6.6"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -353,7 +353,7 @@ def _result(j: dict, name: str):
         p = worker.result_dir(j["id"]) / "result.md"
         if not p.exists():
             raise HTTPException(404, "result not available")
-        data = render.docx(p.read_text(encoding="utf-8"))
+        data = render.docx(p.read_text(encoding="utf-8"), speaker_colours(j))
         stem = Path(j.get("title") or Path(j["filename"]).stem).name
         stem = re.sub(r"[^A-Za-z0-9 ._-]", "", stem)[:80] or "minutes"
         return Response(data, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -736,6 +736,34 @@ def run_autotag(jid: str, loose: Optional[bool] = None):
     return autotag.status(jid)
 
 
+def speaker_labels(j: dict) -> list[str]:
+    """Speakers of a meeting in the order the web page colours them."""
+    jid = j["id"]
+    spk = worker.load_json(jid, "speakers.json", {}) or {}
+    names = (j.get("options") or {}).get("speaker_names") or {}
+    tr = worker.load_transcript(jid) or {}
+    labels = sorted(set(spk) | {s.get("speaker") for s in tr.get("segments", []) if s.get("speaker")}
+                    | {a for s in tr.get("segments", []) for a in (s.get("also") or []) if a},
+                    key=lambda x: int(x.split()[-1]) if x.split()[-1].isdigit() else 99)
+    used = {s.get("speaker") for s in tr.get("segments", [])} | {a for s in tr.get("segments", []) for a in (s.get("also") or [])}
+    merged = (j.get("options") or {}).get("merged") or {}
+    return [lab for lab in labels if lab in used or (lab not in merged and lab in names)]
+
+
+def speaker_colours(j: dict) -> list:
+    """[(name, colour, share of talking time)] for the Word file, most talking first."""
+    names = (j.get("options") or {}).get("speaker_names") or {}
+    tr = worker.load_transcript(j["id"]) or {}
+    secs: dict[str, float] = {}
+    for s in tr.get("segments", []):
+        secs[s.get("speaker", "")] = secs.get(s.get("speaker", ""), 0) + float(s["end"]) - float(s["start"])
+    total = sum(secs.values()) or 1
+    out = []
+    for i, lab in enumerate(speaker_labels(j)):
+        out.append((names.get(lab) or lab, render.SPEAKER_COLOURS[i % 8], secs.get(lab, 0) / total))
+    return sorted([o for o in out if o[2] > 0], key=lambda o: -o[2])
+
+
 @app.get("/api/jobs/{jid}/speakers", dependencies=[Depends(auth)])
 def get_speakers(jid: str):
     j = _job(jid)
@@ -747,12 +775,7 @@ def get_speakers(jid: str):
     for s in tr.get("segments", []):               # a line each person said, to help tell them apart
         if s.get("speaker") and len(s["text"]) > len(sample.get(s["speaker"], "")) and len(s["text"]) < 200:
             sample[s["speaker"]] = s["text"]
-    labels = sorted(set(spk) | {s.get("speaker") for s in tr.get("segments", []) if s.get("speaker")}
-                    | {a for s in tr.get("segments", []) for a in (s.get("also") or []) if a},
-                    key=lambda x: int(x.split()[-1]) if x.split()[-1].isdigit() else 99)
-    used = {s.get("speaker") for s in tr.get("segments", [])} | {a for s in tr.get("segments", []) for a in (s.get("also") or [])}
-    merged = (j.get("options") or {}).get("merged") or {}
-    labels = [lab for lab in labels if lab in used or (lab not in merged and lab in names)]
+    labels = speaker_labels(j)
     return {"speakers": [{"label": lab, "name": names.get(lab, ""), "auto": lab in auto,
                           "seconds": (spk.get(lab) or {}).get("seconds", 0), "has_voice": bool((spk.get(lab) or {}).get("embedding")),
                           "sample": sample.get(lab, "")} for lab in labels]}

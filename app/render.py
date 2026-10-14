@@ -170,20 +170,41 @@ def _runs(par, text: str) -> None:
         elif part.startswith("`") and part.endswith("`"):
             r = par.add_run(part[1:-1])
             r.font.name = "Consolas"
+            from docx.shared import Pt, RGBColor
+            r.font.size = Pt(9)                            # timestamps: small and grey, like the web page
+            r.font.color.rgb = RGBColor.from_string("5D6B7A")
         elif part.startswith("*") and part.endswith("*") and len(part) > 2:
             par.add_run(part[1:-1]).italic = True
         else:
             par.add_run(part)
 
 
-def docx(md: str) -> bytes:
+# the web page's speaker colours (light theme), in speaker-number order
+SPEAKER_COLOURS = ["2F6FD6", "E07A2E", "23935F", "B23F78", "7354CC", "B8901A", "1F9DB3", "8A6545"]
+
+
+def _colour_names(par, colours: dict) -> None:
+    """Bold "Name:" (or "Name + Other:") runs get that speaker's colour."""
+    from docx.shared import RGBColor
+    for r in par.runs:
+        if r.bold:
+            who = r.text.rstrip(": ").split(" + ")[0].strip().lower()
+            if who in colours:
+                r.font.color.rgb = RGBColor.from_string(colours[who])
+
+
+def docx(md: str, speakers: Optional[list] = None) -> bytes:
+    """speakers = [(name, colour hex, share 0..1)]: names in the transcript get their colour, and a line under the
+    title shows who spoke how much (like the web page's voice ribbon)."""
     import io
     from docx import Document
-    from docx.shared import Pt
+    from docx.shared import Pt, RGBColor
     d = Document()
     st = d.styles["Normal"]
     st.font.name = "Calibri"
     st.font.size = Pt(11)
+    colours = {n.lower(): c for n, c, _ in (speakers or [])}
+    legend_done = not speakers
     for line in md.splitlines():
         s = line.rstrip()
         if not s.strip():
@@ -191,6 +212,20 @@ def docx(md: str) -> bytes:
         m = re.match(r"^(#{1,4})\s+(.*)$", s)
         if m:
             d.add_heading(m.group(2).strip(), level=len(m.group(1)) - 1)
+            if not legend_done and len(m.group(1)) == 1:      # under the title: who spoke how much
+                legend_done = True
+                p = d.add_paragraph()
+                for i, (n, c, share) in enumerate(speakers):
+                    if i:
+                        p.add_run("    ")
+                    sq = p.add_run("\u25a0 ")
+                    sq.font.color.rgb = RGBColor.from_string(c)
+                    nm = p.add_run(n)
+                    nm.bold = True
+                    nm.font.color.rgb = RGBColor.from_string(c)
+                    pc = p.add_run(f" {round(share * 100)}%")
+                    pc.font.size = Pt(9)
+                    pc.font.color.rgb = RGBColor.from_string("5D6B7A")
             continue
         m = re.match(r"^\s*[-*]\s+\[( |x|X)\]\s+(.*)$", s)
         if m:
@@ -212,7 +247,10 @@ def docx(md: str) -> bytes:
             for r in p.runs:
                 r.italic = True
             continue
-        _runs(d.add_paragraph(), s)
+        p = d.add_paragraph()
+        _runs(p, s)
+        if colours:
+            _colour_names(p, colours)
     buf = io.BytesIO()
     d.save(buf)
     return buf.getvalue()
