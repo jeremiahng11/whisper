@@ -80,6 +80,15 @@ tr.job .t2{color:var(--mute);font-size:12px;margin-top:3px;display:flex;gap:6px;
 .empty{color:var(--mute);padding:60px 0;text-align:center}
 .empty strong{display:block;color:var(--ink);font-size:17px;margin-bottom:4px}
 
+.find{padding:2px 14px 6px}.find input{width:100%;padding:6px 10px;font-size:13.5px}
+tr.day td{padding:12px 10px 3px;font-size:12px;color:var(--mute);font-weight:600;cursor:default}
+tr.day:first-child td{padding-top:4px}
+button.ts{background:var(--chip);color:var(--mute);border:0;border-radius:5px;padding:0 6px;font:12px/20px ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums;margin-right:4px}
+button.ts:hover{color:var(--ink)}
+button.ts.on{background:var(--warn);color:#fff}
+#view strong.who{font-weight:650}
+#tagBox .line select.also:not(.set){color:var(--mute);border-color:transparent;background:transparent}
+#tagBox .line select.also:not(.set):hover,#tagBox .line select.also:focus{border-color:var(--rule)}
 /* status chips */
 .chip{display:inline-block;padding:0 8px;border-radius:10px;background:var(--chip);font-size:11.5px;line-height:19px;color:var(--mute)}
 .chip.done{background:transparent;color:var(--ok);padding:0}
@@ -222,6 +231,7 @@ textarea.gl{width:100%;min-height:180px;font:13px/1.55 ui-monospace,Menlo,monosp
     </details>
     <div id="up" class="hidden"><div class="mute" id="upText"></div><div class="bar"><i id="upBar"></i></div></div>
     <div class="listhead"><strong>Recordings</strong><button class="ghost" id="refresh">Refresh</button></div>
+    <div class="find"><input id="jobFind" type="search" placeholder="Find a recording" aria-label="Find a recording"></div>
     <div class="jobs"><table><thead><tr><th>Recording</th></tr></thead><tbody id="jobs"></tbody></table></div>
   </aside>
 
@@ -350,6 +360,7 @@ async function api(path, opt = {}) {
   if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.status);
   return r;
 }
+$("#jobFind").oninput = () => load();
 $("#saveKey").onclick = () => { KEY = $("#key").value.trim(); try { localStorage.setItem("whisperKey", KEY); } catch (e) {} load(); loadDevices(); loadGlossary(); loadVoices(); };
 
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -402,6 +413,39 @@ function tab(id) {
   ["minutesTab", "speakersTab", "askTab"].forEach(t => $("#" + t).classList.toggle("hidden", t !== id));
 }
 document.querySelectorAll("#mTabs button").forEach(b => b.onclick = () => tab(b.dataset.tab));
+let autoOpened = false;
+const timeOnly = t => new Date(t * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+function dayLabel(t) {
+  const d = new Date(t * 1000), now = new Date(), day = 864e5;
+  const start = x => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diff = Math.round((start(now) - start(d)) / day);
+  if (diff === 0) return "Today";
+  if (diff === 1) return "Yesterday";
+  if (diff < 7) return d.toLocaleDateString([], { weekday: "long" });
+  return d.toLocaleDateString([], { day: "numeric", month: "long", year: d.getFullYear() === now.getFullYear() ? undefined : "numeric" });
+}
+// minutes: speaker names in their colour, timestamps play that moment
+function decorateMinutes() {
+  const v = $("#view");
+  const byName = {};
+  tagSpk.forEach(x => { if (x.name) byName[x.name.toLowerCase()] = x.label; });
+  v.querySelectorAll("strong").forEach(st => {
+    const n = st.textContent.replace(/:$/, "").trim().toLowerCase();
+    const names = n.split(" + ");
+    const lab = byName[names[0]];
+    if (lab) { st.style.color = spkColor(lab); st.classList.add("who"); }
+  });
+  const codes = [...v.querySelectorAll("code")].filter(c => /^\[?\d{1,2}:\d{2}(:\d{2})?\]?$/.test(c.textContent.trim()));
+  const secs = c => c.textContent.replace(/[\[\]]/g, "").split(":").reduce((a, x) => a * 60 + +x, 0);
+  codes.forEach((c, k) => {
+    const t = secs(c), next = codes[k + 1] ? secs(codes[k + 1]) : t + 20;
+    const b = document.createElement("button");
+    b.className = "ts"; b.dataset.label = c.textContent.replace(/[\[\]]/g, ""); b.textContent = b.dataset.label;
+    b.title = "Play from here";
+    b.onclick = () => playClip(b, t, Math.min(Math.max(next, t + 2), t + 60));
+    c.replaceWith(b);
+  });
+}
 const shortWhen = t => new Date(t * 1000).toLocaleString([], { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
 function setMeta(j) {
   $("#mTitle").textContent = j.title || j.filename;
@@ -457,10 +501,14 @@ function drawRibbon() {
 async function load() {
   if (!KEY) { $("#jobs").innerHTML = `<tr><td class="mute">Add your API key first (Key, above).</td></tr>`; go("key"); return; }
   try {
-    const jobs = await (await api("/api/jobs?limit=100")).json();
-    $("#jobs").innerHTML = jobs.length ? jobs.map(j => `<tr class="job${j.id === current ? " on" : ""}" data-id="${j.id}">
-      <td><div class="t1">${esc(j.title || j.filename)}</div><div class="t2"><span>${shortWhen(j.created_at)}${j.duration ? ", " + dur(j.duration) : ""}</span>${status(j)}</div></td></tr>`).join("")
-      : `<tr><td class="mute">No recordings yet. Drop one above, or record on the watch.</td></tr>`;
+    const all = await (await api("/api/jobs?limit=100")).json();
+    const qf = ($("#jobFind").value || "").trim().toLowerCase();
+    const jobs = qf ? all.filter(j => `${j.title} ${j.filename} ${Object.values(j.speaker_names || {}).join(" ")}`.toLowerCase().includes(qf)) : all;
+    if (!current && !autoOpened && all.length && innerWidth > 900) { autoOpened = true; setTimeout(() => show(all[0].id)); }
+    let lastDay = "";
+    $("#jobs").innerHTML = jobs.length ? jobs.map(j => { const d = dayLabel(j.created_at); const head = d !== lastDay ? `<tr class="day"><td>${esc(d)}</td></tr>` : ""; lastDay = d; return head + `<tr class="job${j.id === current ? " on" : ""}" data-id="${j.id}">
+      <td><div class="t1">${esc(j.title || j.filename)}</div><div class="t2"><span>${timeOnly(j.created_at)}${j.duration ? ", " + dur(j.duration) : ""}</span>${status(j)}</div></td></tr>`; }).join("")
+      : `<tr><td class="mute">${qf ? "No recording matches." : "No recordings yet. Drop one above, or record on the watch."}</td></tr>`;
     document.querySelectorAll("tr.job").forEach(tr => tr.onclick = () => show(tr.dataset.id));
     if (current) { const j = jobs.find(x => x.id === current); if (j) setMeta(j); }
   } catch (e) { $("#jobs").innerHTML = `<tr><td class="mute">${esc(e.message)}</td></tr>`; }
@@ -542,12 +590,12 @@ $("#resum").onclick = async () => {
 // one shared player: plays a stretch of the meeting fetched from /clip (the API key can't go in an <audio src>)
 const player = new Audio();
 let playingBtn = null;
-function stopPlay() { player.pause(); if (playingBtn) { playingBtn.classList.remove("on"); playingBtn.textContent = "▶"; } playingBtn = null; }
+function stopPlay() { player.pause(); if (playingBtn) { playingBtn.classList.remove("on"); playingBtn.textContent = playingBtn.dataset.label || "▶"; } playingBtn = null; }
 player.onended = stopPlay;
 async function playClip(btn, start, end) {
   if (playingBtn === btn) { stopPlay(); return; }
   stopPlay();
-  playingBtn = btn; btn.classList.add("on"); btn.textContent = "■";
+  playingBtn = btn; btn.classList.add("on"); btn.textContent = btn.dataset.label ? "■ " + btn.dataset.label : "■";
   try {
     const enh = $("#clearAudio") && !$("#clearAudio").checked ? "&enhance=false" : "";
     const blob = await (await api(`/api/jobs/${current}/clip?start=${start.toFixed(2)}&end=${end.toFixed(2)}${enh}`)).blob();
@@ -624,7 +672,7 @@ function renderLines() {
     <button class="ghost play" data-s="${s.start}" data-e="${s.end}" title="Play this line">▶</button>
     <span class="t">${mmss(s.start)}</span>
     <select data-i="${s.i}">${speakerOptions(s.speaker)}</select>
-    <select class="also" data-i="${s.i}" title="Someone else talking at the same time">${alsoOptions(s)}</select>
+    <select class="also${(s.also || []).length ? " set" : ""}" data-i="${s.i}" title="Someone else talking at the same time">${alsoOptions(s)}</select>
     <span class="x">${esc(s.text)}${tagManual.has(s.i) ? '<span class="tag me" title="You set this line - it is never changed automatically">✓</span>'
       : tagAuto.has(s.i) ? '<span class="tag" title="Tagged automatically (same voice). Pick another name if it is wrong.">auto</span>' : ""}</span></div>`).join("") || '<p class="mute">No lines.</p>';
   $("#tagMore").classList.toggle("hidden", rows.length <= tagShown);
@@ -760,6 +808,7 @@ async function loadSpeakers(id, opening) {
   $("#tagBox").classList.toggle("hidden", !segs.length);
   $("#tagFilter").innerHTML = '<option value="">All lines</option>' + sp.map(s => `<option value="${esc(s.label)}">Only ${esc(s.name || s.label)}</option>`).join("") + '<option value="__q">Only unnamed (?)</option>';
   renderLines();
+  decorateMinutes();
   $("#spkBox").classList.toggle("hidden", !sp.length);
   $("#spkList").innerHTML = sp.map(s => `<div class="spk"><button class="ghost play" data-l="${esc(s.label)}" title="Hear them"${longest[s.label] ? "" : " disabled"}>▶</button><span class="who"><i class="dot" style="background:${spkColor(s.label)}"></i>${esc(s.label)}${s.auto ? '<span class="badge" title="recognised by voice">recognised</span>' : ""}</span>
     <input type="text" data-l="${esc(s.label)}" value="${esc(s.name)}" placeholder="Name">
