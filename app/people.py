@@ -114,6 +114,60 @@ def top_up(jid: str, per_person: int = 8) -> int:
     return added
 
 
+def unlearn(name: str, job_id: str, segs: list[int] | None = None) -> int:
+    """You said these lines (or this whole speaker) aren't `name`: drop the voice samples taken from them, and
+    rebuild that person's voice from the samples that are left (so a wrong tag doesn't keep pulling your voice
+    towards someone else). Returns how many samples were removed."""
+    if not name or not job_id:
+        return 0
+    with db._lock:
+        q = "DELETE FROM voice_samples WHERE lower(name)=lower(?) AND job_id=?"
+        args: list = [name, job_id]
+        if segs is not None:
+            if not segs:
+                return 0
+            q += " AND seg IN (%s)" % ",".join("?" * len(segs))
+            args += list(segs)
+        n = db._conn.execute(q, args).rowcount
+        db._conn.commit()
+    if n:
+        rebuild_voice(name)
+    return n
+
+
+def relearn_person(name: str) -> dict:
+    """Start this person's voice again from the lines named as them today (your corrections included): their old
+    samples and average are dropped, then rebuilt from ✓ lines and the speakers you named, across all meetings."""
+    from . import autotag
+    with db._lock:
+        db._conn.execute("DELETE FROM voice_samples WHERE lower(name)=lower(?)", (name,))
+        db._conn.execute("DELETE FROM voices WHERE lower(name)=lower(?)", (name,))
+        db._conn.commit()
+    r = autotag.relearn()                                  # names with no voice: learned from ✓ lines / named speakers
+    added = 0
+    for j in db.list_jobs(100000, "done"):
+        if name.lower() in {(n or "").lower() for n in ((j.get("options") or {}).get("speaker_names") or {}).values()}:
+            added += top_up(j["id"], per_person=12)
+    return {"name": name, "samples": len(samples(name).get(name, [])), "relearned": name in r.get("learned", []),
+            "added": added}
+
+
+def rebuild_voice(name: str) -> None:
+    """A person's average voice again, from the samples kept."""
+    s = samples(name).get(name) or next((v for k, v in samples().items() if k.lower() == name.lower()), [])
+    with db._lock:
+        if not s:
+            # nothing left that we know is theirs: forget the average too (it was learned from the removed lines)
+            db._conn.execute("DELETE FROM voices WHERE lower(name)=lower(?)", (name,))
+        else:
+            dim = len(s[0])
+            avg = [sum(v[i] for v in s if len(v) == dim) / len(s) for i in range(dim)]
+            n = math.sqrt(sum(x * x for x in avg)) or 1.0
+            db._conn.execute("UPDATE voices SET embedding=?, samples=?, updated_at=? WHERE lower(name)=lower(?)",
+                             (json.dumps([round(x / n, 5) for x in avg]), min(len(s), 20), time.time(), name))
+        db._conn.commit()
+
+
 def samples(name: str = "") -> dict[str, list]:
     with db._lock:
         rows = db._conn.execute("SELECT name, embedding FROM voice_samples" + (" WHERE name=?" if name else ""),

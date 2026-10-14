@@ -544,13 +544,13 @@ def accept(jid: str, name: str = "") -> dict:
             manual[str(i)] = lab
             done.append(i)
             if cache.get(str(i)) and not segs[i].get("also"):
-                learn.setdefault(who, []).append(cache[str(i)])
+                learn.setdefault(who, []).append((cache[str(i)], i))
         opts["manual_lines"] = manual
         opts["auto_lines"] = sorted(auto - set(done))
         db.update(jid, options=opts)
     for who, es in learn.items():
-        for e in es[:15]:
-            voices.remember(who, e)
+        for e, i in es[:15]:
+            voices.remember(who, e, jid, i)
     return {"accepted": len(done), "learned": sorted(learn)}
 
 
@@ -581,14 +581,14 @@ def relearn() -> dict:
                 e = transcribe.embed_clip(transcribe.load_range(audio, float(s["start"]), min(float(s["end"]), float(s["start"]) + 20)),
                                           t=float(s["start"]))
             if e:
-                found.setdefault(who, []).append(e)
+                found.setdefault(who, []).append((e, jid, i))
         for lab, who in names.items():                      # whole speakers you named ("Save names")
             e = (spk.get(lab) or {}).get("embedding")
             if e and who and who.lower() not in have and lab not in auto:
-                found.setdefault(who, []).append(e)
+                found.setdefault(who, []).append((e, jid, -1))
     for who, es in found.items():
-        for e in es[:40]:
-            voices.remember(who, e)
+        for e, src, seg in es[:40]:
+            voices.remember(who, e, src, seg)
     if found:
         log.info("re-learned %d voices from your tags: %s", len(found), ", ".join(found))
     return {"learned": sorted(found), "samples": sum(min(len(v), 40) for v in found.values())}

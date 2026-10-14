@@ -262,4 +262,6 @@ def spelled(name: str) -> str:
         s = _score(name, t)
         if s > sc:
             best, sc = t, s
-    return best if sc >= 0.88 and len(_letters(name)) >= 4 else name
+    # only a spelling fix: about the same length (so "Jeremiah" never becomes "Jeremiah Ng")
+    ok = sc >= 0.88 and len(_letters(name)) >= 4 and abs(len(_letters(best)) - len(_letters(name))) <= 1
+    return best if ok else name

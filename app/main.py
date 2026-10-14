@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.10.5"
+VERSION = "1.10.6"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -608,14 +608,19 @@ async def name_speakers(jid: str, request: Request):
     cur = dict(opts.get("speaker_names") or {})
     auto = set(opts.get("speaker_auto") or [])
     spk = worker.load_json(jid, "speakers.json", {}) or {}
+    tr0 = worker.load_transcript(jid) or {}
     for label, name in names.items():
         label, name = str(label)[:40], terms.spelled(re.sub(r"\s+", " ", str(name or "")).strip()[:60])
         if not re.match(r"^Speaker \d+$", label):
             raise HTTPException(400, f"unknown speaker label {label!r}")
+        old = cur.get(label, "")
+        if old and old.lower() != name.lower():          # "that's not James": James's samples from these lines go
+            lines = [i for i, s in enumerate(tr0.get("segments", [])) if s.get("speaker") == label]
+            people.unlearn(old, jid, lines + [-1])       # (-1 = the whole speaker's voice print)
         if name:
             cur[label] = name
             if data.get("remember", True) and (spk.get(label) or {}).get("embedding"):
-                voices.remember(name, spk[label]["embedding"])
+                voices.remember(name, spk[label]["embedding"], jid, -1)
         else:
             cur.pop(label, None)
         auto.discard(label)
@@ -653,7 +658,7 @@ async def tag_segment(jid: str, idx: int, request: Request):
         clip = await run_in_threadpool(transcribe.load_range, j["audio_path"], float(segs_idx["start"]), float(segs_idx["end"]))
         emb = await run_in_threadpool(transcribe.embed_clip, clip, float(segs_idx["start"]))
         if emb:
-            voices.remember(who, emb)
+            voices.remember(who, emb, jid, idx)      # kept with the line it came from (so a correction can undo it)
             out["learned"] = True
     if out.pop("_spread"):
         autotag.start(jid)                           # lines elsewhere that sound like them follow (background)
@@ -696,8 +701,11 @@ def _tag(jid: str, idx: int, data: dict) -> dict:
             raise HTTPException(400, "send {'name': 'Alan'} or {'speaker': 'Speaker 2'}")
     elif "also" not in data:
         raise HTTPException(400, "send {'name': 'Alan'}, {'speaker': 'Speaker 2'} or {'also': 'Wei Ling'}")
+    was = names.get(segs[idx].get("speaker", ""), "")
     if segs[idx].get("speaker") and segs[idx].get("speaker") != label:
         segs[idx].setdefault("orig", segs[idx]["speaker"])
+        if was and was.lower() != (names.get(label, "") or "").lower():
+            people.unlearn(was, jid, [idx])          # this line isn't them: don't keep it as their voice
     segs[idx]["speaker"] = label
     manual = dict(opts.get("manual_lines") or {})
     auto_lines = set(opts.get("auto_lines") or [])
@@ -1033,6 +1041,14 @@ def get_person(name: str):
         p = people.build(name, with_note=False)      # first look: the numbers now, the AI note in the background
         threading.Thread(target=people.build, args=(name,), daemon=True).start()
     return p
+
+
+@app.post("/api/people/{name}/relearn", dependencies=[Depends(auth)])
+def relearn_person(name: str):
+    """Rebuild this person's voice only from lines named as them now (e.g. after fixing lines that weren't them)."""
+    if name.lower() not in {n.lower() for n in people.all_names()}:
+        raise HTTPException(404, "no such person")
+    return people.relearn_person(name)
 
 
 @app.post("/api/people/{name}/refresh", dependencies=[Depends(auth)])

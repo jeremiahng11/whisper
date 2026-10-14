@@ -709,7 +709,7 @@ async function showPerson(name, refresh) {
   const mix = Object.entries(l.mix || {}).map(([k, w]) => `${k} (${w.join(", ")})`);
   $("#pview").innerHTML = `<h3>${esc(p.name)}</h3><div class="mute">Last heard ${p.last_seen ? when(p.last_seen) : "never"}</div>
     <div class="facts">${facts.map(([a, b]) => `<div><b>${esc(a)}</b><span>${esc(b)}</span></div>`).join("")}</div>
-    <div class="row">${p.sample ? '<button class="ghost" id="pPlay">▶ Hear them</button>' : ""}<button class="ghost" id="pRefresh">Update now</button><button class="danger" id="pForget">Forget this voice</button></div>
+    <div class="row">${p.sample ? '<button class="ghost" id="pPlay">▶ Hear them</button>' : ""}<button class="ghost" id="pRefresh">Update now</button><button class="ghost" id="pRelearn" title="Rebuild their voice only from lines named as them now - use it after correcting lines that were someone else">Re-learn voice</button><button class="danger" id="pForget">Forget this voice</button></div>
     ${pitch}
     ${chips("Words they use more than others", l.words)}${chips("Phrases", l.phrases)}${chips("Names & terms they use", l.terms)}${chips("Mixes in", mix)}
     ${p.note ? `<div class="block pnote"><div class="sub2">AI note</div>${md(p.note)}</div>` : `<p class="mute" style="margin-top:14px">${p.lines < 8 ? "An AI note is written once they have a few more named lines." : "The AI note is being written in the background - open them again in a minute."}</p>`}
@@ -717,6 +717,16 @@ async function showPerson(name, refresh) {
   document.querySelectorAll(".pmeet div").forEach(d => d.onclick = () => show(d.dataset.id));
   if ($("#pPlay")) { $("#pPlay").dataset.label = "▶ Hear them"; $("#pPlay").onclick = () => playClip($("#pPlay"), p.sample.start, p.sample.end, p.sample.job); }
   $("#pRefresh").onclick = () => showPerson(name, true);
+  $("#pRelearn").onclick = async () => {
+    if (!confirm(`Rebuild ${name}'s voice from the lines named as ${name} now? Samples from lines that were someone else are dropped.`)) return;
+    $("#pRelearn").textContent = "Re-learning…";
+    try {
+      const r = await (await api(`/api/people/${encodeURIComponent(name)}/relearn`, { method: "POST" })).json();
+
+      showPerson(name);
+      setTimeout(() => { const m = document.createElement("p"); m.className = "mute"; m.textContent = `Voice rebuilt from ${r.samples} sample${r.samples === 1 ? "" : "s"} of lines named ${name}.`; $("#pview").prepend(m); }, 600);
+    } catch (e) { $("#pRelearn").textContent = "Re-learn voice"; }
+  };
   $("#pForget").onclick = async () => {
     if (!confirm(`Forget ${name}'s voice and profile? Their names in meetings stay.`)) return;
     await api(`/api/voices/${encodeURIComponent(name)}`, { method: "DELETE" }).catch(() => {});

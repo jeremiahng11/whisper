@@ -1292,3 +1292,24 @@ def test_speaker_heard_only_over_others_is_playable(client):
     sp = {s["label"]: s for s in client.get(f"/api/jobs/{j['id']}/speakers", headers=H).json()["speakers"]}
     assert sp["Speaker 9"]["lines"] == 0 and sp["Speaker 9"]["over_lines"] == 1 and sp["Speaker 9"]["sample"]
     assert "Speaker 8" not in sp                               # no lines at all and no name: not listed
+
+
+def test_correcting_a_name_unlearns_the_wrong_voice(client):
+    from app import people, voices
+    _only_these_voices()
+    with __import__("app.db", fromlist=["_lock"])._lock:
+        __import__("app.db", fromlist=["_conn"])._conn.execute("DELETE FROM voice_samples"); __import__("app.db", fromlist=["_conn"])._conn.commit()
+    j = upload(client, "dev1-unlearn", 40, "diarize=true&speakers=2")
+    jid = j["id"]
+    segs = client.get(f"/api/jobs/{jid}/transcript.json", headers=H).json()["segments"]
+    # line 0 (voice A) wrongly tagged as James: a James sample is taken from it
+    client.post(f"/api/jobs/{jid}/segments/0", json={"name": "James"}, headers=H)
+    _wait_autotag(client, jid)
+    assert people.samples("James").get("James")
+    # you correct it: it's Jeremiah -> James's sample from that line is dropped (and his voice with it)
+    client.post(f"/api/jobs/{jid}/segments/0", json={"name": "Jeremiah"}, headers=H)
+    _wait_autotag(client, jid)
+    assert not people.samples("James").get("James")
+    assert "James" not in [v["name"] for v in voices.list_voices()]
+    r = client.post("/api/people/Jeremiah/relearn", headers=H).json()
+    assert r["samples"] >= 1
