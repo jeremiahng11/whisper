@@ -319,7 +319,7 @@ ul.replies{margin:4px 0;padding-left:20px;font-size:13.5px}
         <div id="speakersTab" role="tabpanel" class="hidden">
           <div id="spkBox" class="hidden noprint block">
             <div class="sub2">Who's speaking</div>
-            <p class="mute" style="margin:0 0 8px">Type a name once and every line in that voice gets it. Voices are remembered for your other meetings.</p>
+            <p class="mute" style="margin:0 0 8px">Type a name and press Enter: it is saved straight away, and every line in that voice gets it. Voices are remembered for your other meetings.</p>
             <div id="spkList"></div>
             <div class="row" style="margin-top:10px"><button id="spkSave">Save names</button><label class="mute"><input type="checkbox" id="spkRemember" checked> Remember voices</label><span class="mute" id="spkMsg"></span></div>
           </div>
@@ -1109,12 +1109,35 @@ async function loadSpeakers(id, opening) {
   renderLines();
   decorateMinutes();
   $("#spkBox").classList.toggle("hidden", !sp.length);
+  const typing = {};                                 // names typed but not saved yet survive a refresh
+  document.querySelectorAll("#spkList input").forEach(i => { if (i.value.trim() !== (i.dataset.was || "")) typing[i.dataset.l] = i.value; });
+  sp.forEach(s => { if (typing[s.label] !== undefined) s.typed = typing[s.label]; });
   $("#spkList").innerHTML = sp.map(s => `<div class="spk"><button class="ghost play" data-l="${esc(s.label)}" title="Hear them"${longest[s.label] ? "" : " disabled"}>▶</button><span class="who"><i class="dot" style="background:${spkColor(s.label)}"></i>${esc(s.label)}${s.auto ? '<span class="badge" title="recognised by voice">recognised</span>' : ""}</span>
-    <input type="text" data-l="${esc(s.label)}" value="${esc(s.name)}" placeholder="Name">
+    <input type="text" data-l="${esc(s.label)}" data-was="${esc(s.name)}" value="${esc(s.typed ?? s.name)}" placeholder="Name">
     <span class="mute" title="${esc(s.sample)}">${s.lines === 0 && s.over_lines ? `Only heard talking over someone else (${s.over_lines} line${s.over_lines > 1 ? "s" : ""}): "${esc(s.sample)}"` : `${Math.round(s.seconds / 60) || "<1"} min, "${esc(s.sample)}"`}</span></div>`).join("");
   document.querySelectorAll("#spkList .play").forEach(b => b.onclick = () => {
     const s = longest[b.dataset.l]; if (s) playClip(b, s.start, Math.min(s.end, s.start + 12));
   });
+  // a name is saved as soon as you finish typing it (Enter, Tab or clicking elsewhere) - nothing is lost if you
+  // tag lines before pressing Save names, and the line menus offer the name straight away
+  document.querySelectorAll("#spkList input").forEach(inp => {
+    inp.onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); inp.blur(); } };
+    inp.onchange = () => saveOneName(inp);
+  });
+}
+async function saveOneName(inp) {
+  const v = inp.value.trim(), lab = inp.dataset.l, id = current;
+  if (v === (inp.dataset.was || "")) return;
+  $("#spkMsg").textContent = "Saving…";
+  try {
+    const r = await (await api(`/api/jobs/${id}/speakers`, { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ names: { [lab]: v }, remember: $("#spkRemember").checked }) })).json();
+    inp.dataset.was = v;
+    const sp = tagSpk.find(x => x.label === lab); if (sp) sp.name = v;
+    $("#spkMsg").textContent = r.joined && r.joined.length ? `Joined into one speaker: ${r.joined.join(", ")}.` : `Saved: ${lab} is ${v || "unnamed"}.`;
+    await refreshAfterTag(-1);                       // list, menus and minutes with the new name (and new numbers)
+    loadVoices();
+  } catch (e) { $("#spkMsg").textContent = "Couldn't save: " + e.message; }
 }
 $("#spkSave").onclick = async () => {
   const names = {}; document.querySelectorAll("#spkList input").forEach(i => names[i.dataset.l] = i.value.trim());
