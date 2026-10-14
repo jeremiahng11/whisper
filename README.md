@@ -1,4 +1,4 @@
-# Whisper Minutes
+# Oracle Minutes
 
 Self-hosted speech-to-text + meeting summaries for Coolify.
 Upload a recording (from the Idea Saver, a phone, or the web page) → get back a Markdown file with a title,

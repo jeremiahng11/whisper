@@ -82,7 +82,7 @@ def test_health_and_auth(client):
     assert client.get("/api/jobs").status_code == 401
     assert client.get("/api/jobs", headers={"Authorization": "Bearer nope"}).status_code == 401
     assert client.get("/api/jobs", headers={"X-API-Key": "test-key"}).status_code == 200
-    assert "Whisper Minutes" in client.get("/").text
+    assert "Oracle Minutes" in client.get("/").text
 
 
 def test_raw_upload_full_flow(client):

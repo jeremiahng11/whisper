@@ -19,7 +19,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.6.2"
+VERSION = "1.6.3"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -38,7 +38,7 @@ async def lifespan(app: FastAPI):
     worker.stop()
 
 
-app = FastAPI(title="Whisper meeting service", version=VERSION, lifespan=lifespan)
+app = FastAPI(title="Oracle Minutes", version=VERSION, lifespan=lifespan)
 
 
 # ---------------------------------------------------------------- auth
@@ -787,7 +787,7 @@ async def restore(request: Request):
     """Load a backup: Names & terms are merged (new lines added), voices added or replaced by name."""
     data = await body_extra(request)
     if data.get("kind") != "whisper-minutes-backup":
-        raise HTTPException(400, "not a Whisper Minutes backup file")
+        raise HTTPException(400, "not an Oracle Minutes backup file")
     old = voices.glossary()
     new = [t for t in str(data.get("glossary", "")).splitlines() if t.strip() and not t.strip().startswith("#")]
     p = settings.glossary_path
