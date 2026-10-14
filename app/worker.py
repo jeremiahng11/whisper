@@ -116,7 +116,10 @@ def run_summary(jid: str) -> None:
 def process(job: dict) -> None:
     jid = job["id"]
     opts = job.get("options", {})
-    if opts.pop("resummarize", False) and load_transcript(jid) is not None:   # only redo the summary
+    if opts.get("resummarize") and load_transcript(jid) is not None:   # only redo the summary
+        # re-read the options: names / tags you set after pressing "Redo minutes" must not be lost
+        opts = dict((db.get(jid) or {}).get("options") or opts)
+        opts.pop("resummarize", None)
         db.update(jid, options=opts)
         run_summary(jid)
         build_outputs(jid)

@@ -785,3 +785,26 @@ def test_tagging_a_line_names_its_whole_speaker_group_at_once(client):
     # "Me"
     assert client.put("/api/me", json={"name": "Jeremiah Ng"}, headers=H).json()["name"] == "Jeremiah Ng"
     assert client.get("/api/me", headers=H).json()["name"] == "Jeremiah Ng"
+
+
+def test_redo_minutes_keeps_names_and_tags(client):
+    j = upload(client, "dev1-redo", 40, "diarize=true&speakers=2")
+    segs = client.get(f"/api/jobs/{j['id']}/transcript.json", headers=H).json()["segments"]
+    a = next(i for i, s in enumerate(segs) if s["speaker"] == "Speaker 1")
+    b = next(i for i, s in enumerate(segs) if s["speaker"] == "Speaker 2")
+    client.post(f"/api/jobs/{j['id']}/segments/{a}", json={"name": "Kai Wen"}, headers=H)
+    client.post(f"/api/jobs/{j['id']}/segments/{b}", json={"name": "Nurul", "also": "Kai Wen"}, headers=H)
+    before = client.get(f"/api/jobs/{j['id']}/transcript.json", headers=H).json()["segments"]
+    st0 = client.get(f"/api/jobs/{j['id']}/autotag", headers=H).json()
+    r = client.post(f"/api/jobs/{j['id']}/summarize", json={}, headers=H)
+    assert r.status_code == 200
+    j2 = wait(client, j["id"])
+    assert j2["status"] == "done"
+    names = set(j2["speaker_names"].values())
+    assert {"Kai Wen", "Nurul"} <= names
+    after = client.get(f"/api/jobs/{j['id']}/transcript.json", headers=H).json()["segments"]
+    assert [s["speaker"] for s in after] == [s["speaker"] for s in before] and after[b]["also"]
+    st = client.get(f"/api/jobs/{j['id']}/autotag", headers=H).json()
+    assert st["manual"] == st0["manual"]
+    md = client.get(f"/api/jobs/{j['id']}/result.md", headers=H).text
+    assert "**Kai Wen:**" in md and "Nurul + Kai Wen" in md

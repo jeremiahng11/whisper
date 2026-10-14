@@ -292,9 +292,16 @@ $("#del").onclick = async () => {
 };
 $("#resum").onclick = async () => {
   if (!current) return;
-  await api(`/api/jobs/${current}/summarize`, { method: "POST", headers: { "Content-Type": "application/json" },
+  const id = current;
+  await api(`/api/jobs/${id}/summarize`, { method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ template: $("#reTpl").value, best: $("#reBest").checked }) });
-  load(); show(current);
+  load(); show(id);
+  // names and tags are kept; show them again (with the new minutes) as soon as it's done
+  for (let k = 0; k < 400 && id === current; k++) {
+    await new Promise(r => setTimeout(r, 3000));
+    const j = await (await api(`/api/jobs/${id}`)).json().catch(() => ({}));
+    if (j.status === "done" || j.status === "error") { if (id === current) { load(); show(id); } return; }
+  }
 };
 
 // ---------------------------------------------------------------- speakers
