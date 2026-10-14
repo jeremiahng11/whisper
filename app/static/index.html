@@ -5,191 +5,339 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Whisper Minutes</title>
 <style>
-:root{--bg:#f6f5f2;--card:#fff;--ink:#1d1d1f;--mute:#6e6e73;--line:#e3e1dc;--accent:#2f6f5e;--accent-ink:#fff;--warn:#b3261e;--chip:#eeece7}
-@media (prefers-color-scheme:dark){:root{--bg:#141414;--card:#1e1e1e;--ink:#ececec;--mute:#9a9a9a;--line:#2e2e2e;--accent:#5fb39a;--accent-ink:#0d1f1a;--warn:#ff8a80;--chip:#2a2a2a}}
+/* Tokens. Cool paper and graphite; colour is spent on the speakers (the voice ribbon), not on chrome. */
+:root{
+  --paper:#eef1f4; --surface:#ffffff; --sunk:#f6f8fa; --ink:#18212b; --mute:#5d6b7a; --rule:#d7dee6;
+  --action:#2147b8; --action-ink:#fff; --warn:#b42318; --ok:#1f7a4d; --chip:#e7ecf1; --focus:#2147b8;
+  --s1:#2f6fd6; --s2:#e07a2e; --s3:#23935f; --s4:#b23f78; --s5:#7354cc; --s6:#b8901a; --s7:#1f9db3; --s8:#8a6545;
+  --unknown:#a9b4c0; --r:10px;
+}
+@media (prefers-color-scheme:dark){:root{
+  --paper:#0f1419; --surface:#161d24; --sunk:#1b232c; --ink:#e6ebf0; --mute:#93a1b0; --rule:#283340;
+  --action:#7d9bf0; --action-ink:#0c1530; --warn:#ff8a7a; --ok:#5cc792; --chip:#222c37; --focus:#9db4f5;
+  --s1:#6a9cf0; --s2:#f09a5c; --s3:#4fc08a; --s4:#e070a8; --s5:#a08af0; --s6:#e0bb45; --s7:#4cc4d8; --s8:#c39a76;
+  --unknown:#55626f;
+}}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
-main{max-width:980px;margin:0 auto;padding:24px 16px 60px}
-h1{font-size:22px;margin:0 0 4px;letter-spacing:-.01em}
-.sub{color:var(--mute);margin:0 0 20px;font-size:13px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:16px}
-.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-input[type=password],input[type=text],select{background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font:inherit}
-input[type=password]{flex:1;min-width:200px}
-button{background:var(--accent);color:var(--accent-ink);border:0;border-radius:8px;padding:8px 14px;font:inherit;font-weight:600;cursor:pointer}
-button.ghost{background:transparent;color:var(--ink);border:1px solid var(--line);font-weight:500}
-button.danger{background:transparent;color:var(--warn);border:1px solid var(--line);font-weight:500}
+html,body{height:100%}
+body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
+button,input,select,textarea{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.hidden{display:none!important}
+.mute{color:var(--mute);font-size:12.5px}
+code{background:var(--chip);padding:0 4px;border-radius:4px;font-size:12.5px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+
+/* controls */
+input[type=password],input[type=text],input[type=number],select,textarea{background:var(--surface);border:1px solid var(--rule);border-radius:8px;padding:7px 10px}
+input[type=number]{width:72px}
+button{background:var(--action);color:var(--action-ink);border:1px solid transparent;border-radius:8px;padding:7px 14px;font-weight:600;cursor:pointer}
+button.ghost{background:var(--surface);color:var(--ink);border-color:var(--rule);font-weight:500}
+button.ghost:hover{border-color:var(--mute)}
+button.danger{background:transparent;color:var(--warn);border-color:var(--rule);font-weight:500}
 button:disabled{opacity:.5;cursor:default}
-#drop{border:2px dashed var(--line);border-radius:12px;padding:28px;text-align:center;color:var(--mute);cursor:pointer;margin-bottom:12px}
-#drop.over{border-color:var(--accent);color:var(--ink)}
-.bar{height:6px;background:var(--chip);border-radius:3px;overflow:hidden;margin-top:6px}
-.bar>i{display:block;height:100%;background:var(--accent);width:0}
-table{width:100%;border-collapse:collapse}
-td,th{text-align:left;padding:9px 6px;border-bottom:1px solid var(--line);vertical-align:top}
-th{font-size:12px;color:var(--mute);font-weight:500}
-tr.job{cursor:pointer}
-tr.job:hover td{background:var(--chip)}
-.chip{display:inline-block;padding:1px 8px;border-radius:10px;background:var(--chip);font-size:12px}
-.chip.done{background:var(--accent);color:var(--accent-ink)}
+label.mute{display:inline-flex;gap:6px;align-items:center}
+
+/* shell: sidebar + workspace */
+.app{display:grid;grid-template-columns:320px 1fr;min-height:100%}
+.side{background:var(--surface);border-right:1px solid var(--rule);display:flex;flex-direction:column;height:100vh;position:sticky;top:0}
+.brand{padding:18px 18px 10px}
+.brand h1{font-size:17px;margin:0;letter-spacing:-.01em;display:flex;align-items:center;gap:9px}
+.brand h1 svg{flex:none}
+#health{display:block;margin-top:4px;min-height:18px}
+.nav{display:flex;gap:2px;padding:0 10px 10px;border-bottom:1px solid var(--rule)}
+.nav button{flex:1;background:transparent;color:var(--mute);border:0;border-radius:7px;padding:6px 4px;font-weight:500;font-size:13px}
+.nav button[aria-current=true]{background:var(--chip);color:var(--ink)}
+#drop{margin:12px 14px 4px;border:1.5px dashed var(--rule);border-radius:var(--r);padding:14px;text-align:center;color:var(--mute);cursor:pointer;font-size:13.5px}
+#drop:hover,#drop.over{border-color:var(--action);color:var(--ink)}
+#drop strong{display:block;color:var(--ink);font-size:14px}
+details.opts{margin:0 14px 8px;font-size:13px}
+details.opts summary{cursor:pointer;color:var(--mute);padding:4px 0}
+details.opts .grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:6px 0}
+details.opts .grid > *{min-width:0}
+details.opts .grid .wide{grid-column:1/-1}
+details.opts select,details.opts input[type=text],details.opts input[type=number]{width:100%}
+#up{margin:0 14px 10px}
+.bar{height:4px;background:var(--chip);border-radius:2px;overflow:hidden;margin-top:5px}
+.bar>i{display:block;height:100%;background:var(--action);width:0}
+.listhead{display:flex;justify-content:space-between;align-items:center;padding:8px 18px 4px}
+.listhead strong{font-size:13px}
+.listhead button{padding:3px 10px;font-size:12.5px}
+.jobs{overflow:auto;flex:1;padding:0 8px 12px}
+.jobs table{width:100%;border-collapse:collapse}
+.jobs thead{display:none}
+tr.job td{padding:9px 10px;border-radius:8px;cursor:pointer}
+tr.job:hover td{background:var(--sunk)}
+tr.job.on td{background:var(--chip)}
+tr.job .t1{font-weight:550;font-size:14px;line-height:1.3;overflow-wrap:anywhere}
+tr.job .t2{color:var(--mute);font-size:12px;margin-top:3px;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+
+.work{min-width:0;padding:28px 36px 60px;max-width:1080px}
+.panel h2{font-size:22px;margin:0 0 4px;letter-spacing:-.015em}
+.panel > p.mute{margin:0 0 16px;max-width:68ch}
+.block{background:var(--surface);border:1px solid var(--rule);border-radius:var(--r);padding:18px;margin:14px 0}
+.sub2{font-size:14px;font-weight:600;margin:0 0 4px}
+.empty{color:var(--mute);padding:60px 0;text-align:center}
+.empty strong{display:block;color:var(--ink);font-size:17px;margin-bottom:4px}
+
+/* status chips */
+.chip{display:inline-block;padding:0 8px;border-radius:10px;background:var(--chip);font-size:11.5px;line-height:19px;color:var(--mute)}
+.chip.done{background:transparent;color:var(--ok);padding:0}
+.chip.done::before{content:"✓ "}
 .chip.error{background:var(--warn);color:#fff}
-.chip.busy{background:transparent;border:1px solid var(--accent);color:var(--accent);animation:pulse 1.6s ease-in-out infinite}
-.chip.busy::before{content:"";display:inline-block;width:7px;height:7px;margin-right:5px;border-radius:50%;background:var(--accent);vertical-align:1px}
-@keyframes pulse{50%{opacity:.45}}
-@media (prefers-reduced-motion: reduce){.chip.busy{animation:none}}
-.mute{color:var(--mute);font-size:12px}
-#view h1,#view h2,#view h3{margin:18px 0 6px}
-#view h1{font-size:20px}#view h2{font-size:17px}#view h3{font-size:15px}
-#view code{background:var(--chip);padding:0 4px;border-radius:4px;font-size:12px}
-#view ul{padding-left:20px;margin:4px 0}
-#view blockquote{margin:6px 0;padding:4px 10px;border-left:3px solid var(--warn);color:var(--mute)}
-.files{display:grid;grid-template-columns:240px 1fr;gap:14px}
-.flist{max-height:420px;overflow:auto;border-right:1px solid var(--line);padding-right:8px}
-.flist div{padding:5px 6px;border-radius:6px;cursor:pointer;font-size:13px;word-break:break-all}
-.flist div:hover{background:var(--chip)}.flist div.on{background:var(--accent);color:var(--accent-ink)}
-.flist .dir{color:var(--mute);font-size:11px;cursor:default;padding-top:10px}.flist .dir:hover{background:none}
-#fedit{width:100%;min-height:360px;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:10px;font:13px/1.5 ui-monospace,Menlo,monospace}
-#fview h1,#fview h2,#fview h3{margin:14px 0 6px}#fview ul{padding-left:20px;margin:4px 0}
-@media (max-width:640px){.files{grid-template-columns:1fr}.flist{border-right:0;max-height:200px}}
-.spk{display:grid;grid-template-columns:110px 170px 1fr;gap:8px;align-items:center;margin:4px 0}
+.chip.busy{background:transparent;border:1px solid var(--action);color:var(--action);line-height:17px}
+.chip.busy::before{content:"";display:inline-block;width:6px;height:6px;margin-right:5px;border-radius:50%;background:var(--action);vertical-align:1px;animation:pulse 1.6s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.3}}
+@media (prefers-reduced-motion:reduce){.chip.busy::before{animation:none}}
+
+/* meeting */
+.mhead{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;flex-wrap:wrap}
+#mTitle{font-size:28px;line-height:1.15;letter-spacing:-.02em;margin:0;max-width:30ch}
+#mMeta{margin-top:6px}
+.mtools{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.mtools select{padding:6px 8px}
+#dl{margin-top:12px}
+#dl button{padding:5px 11px;font-size:13px}
+
+/* the voice ribbon: who spoke when */
+.ribbon{margin:22px 0 4px}
+.ribbon .strip{display:flex;height:26px;border-radius:6px;overflow:hidden;background:var(--chip)}
+.ribbon .strip i{display:block;height:100%;min-width:1px;cursor:pointer}
+.ribbon .strip i:hover{filter:brightness(1.12)}
+.ribbon .strip i.q{background:repeating-linear-gradient(135deg,var(--unknown) 0 3px,transparent 3px 6px)}
+.ribbon .axis{display:flex;justify-content:space-between;font-size:11.5px;color:var(--mute);font-variant-numeric:tabular-nums;margin-top:3px}
+.ribbon .who{display:flex;flex-wrap:wrap;gap:4px 14px;margin-top:8px;font-size:13px}
+.ribbon .who span{display:inline-flex;align-items:center;gap:6px}
+.dot{width:10px;height:10px;border-radius:3px;display:inline-block;flex:none}
+.dot.q{background:repeating-linear-gradient(135deg,var(--unknown) 0 2px,transparent 2px 4px);outline:1px solid var(--unknown);outline-offset:-1px}
+
+.tabs{display:flex;gap:22px;border-bottom:1px solid var(--rule);margin:22px 0 0}
+.tabs button{background:none;border:0;border-radius:0;color:var(--mute);padding:10px 0;font-weight:500;border-bottom:2px solid transparent;margin-bottom:-1px}
+.tabs button[aria-selected=true]{color:var(--ink);border-bottom-color:var(--ink)}
+.tabs .n{font-size:11.5px;color:var(--mute);margin-left:4px}
+
+#view{max-width:72ch;padding-top:6px}
+#view h1{font-size:21px;margin:24px 0 8px;letter-spacing:-.01em}
+#view h2{font-size:17px;margin:22px 0 6px}
+#view h3{font-size:15px;margin:18px 0 6px}
+#view p{margin:6px 0}
+#view ul{padding-left:20px;margin:6px 0}
+#view li{margin:3px 0}
+#view blockquote{margin:8px 0;padding:4px 12px;border-left:3px solid var(--warn);color:var(--mute)}
+#view strong{font-weight:620}
+
+/* speakers */
+.spk{display:grid;grid-template-columns:34px 190px 200px 1fr;gap:10px;align-items:center;padding:6px 0}
+.spk + .spk{border-top:1px solid var(--rule)}
+.spk .who{display:flex;align-items:center;gap:7px;font-size:13.5px;white-space:nowrap}
 .spk .mute{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.spk{grid-template-columns:34px 110px 170px 1fr}
-.play{width:30px;height:30px;padding:0;border-radius:50%;font-size:12px;line-height:30px}
-.play.on{background:var(--warn);color:#fff}
-#tagBox .line{display:grid;grid-template-columns:34px 54px 160px 120px 1fr;gap:8px;align-items:start;padding:5px 0;border-top:1px solid var(--line)}
-#tagBox .line .t{font-variant-numeric:tabular-nums;color:var(--mute);font-size:13px;padding-top:6px}
-#tagBox .line select{width:100%}
-#tagBox .line .x{padding-top:5px}
-#tagBox .line.done select{border-color:var(--accent)}
-#tagLines{max-height:520px;overflow:auto}
-#tagBox .line .tag{font-size:11px;padding:1px 6px;border-radius:8px;margin-left:6px;background:var(--chip);color:var(--mute)}
-#tagBox .line .tag.me{background:var(--accent);color:var(--accent-ink)}
-.badge{font-size:11px;padding:0 6px;border-radius:8px;background:var(--accent);color:var(--accent-ink);margin-left:4px}
-.answer{white-space:pre-wrap;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;margin-top:8px;font-size:14px}
-input[type=number]{width:64px;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px;font:inherit}
-textarea.gl{width:100%;min-height:120px;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px;font:13px/1.5 ui-monospace,Menlo,monospace}
-.sub2{font-size:13px;font-weight:600;margin:14px 0 6px}
-@media (max-width:640px){.spk{grid-template-columns:34px 1fr 1fr}.spk .mute{grid-column:1/-1}#tagBox .line{grid-template-columns:34px 1fr 1fr}#tagBox .line .t{display:none}#tagBox .line .x{grid-column:1/-1}}
-@media print{body{background:#fff;color:#000}main>*:not(#viewCard){display:none}#viewCard .row,#viewCard .noprint{display:none}#viewCard{border:0}}
-.hidden{display:none}
-@media (max-width:640px){.hide-sm{display:none}}
+.badge{font-size:11px;padding:0 6px;border-radius:8px;background:var(--chip);color:var(--mute);margin-left:2px}
+.play{width:30px;height:30px;padding:0;border-radius:50%;font-size:11px;line-height:28px;background:var(--surface);color:var(--ink);border:1px solid var(--rule)}
+.play.on{background:var(--warn);border-color:var(--warn);color:#fff}
+
+.toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:12px 0}
+.toolbar select{padding:6px 8px}
+.toolbar button,.toolbar select,.mtools button,.mtools select{font-size:13.5px}
+.mtools button{padding:6px 12px}
+#tagMsg{flex-basis:100%}
+#tagMsg:empty{display:none}
+#tagReport{background:var(--sunk);border-radius:8px;padding:8px 12px;margin:0 0 10px;font-size:13px}
+#tagReport:empty{display:none}
+#tagLines{max-height:62vh;overflow:auto;border-top:1px solid var(--rule)}
+#tagBox .line{display:grid;grid-template-columns:34px 46px 170px 130px 1fr;gap:10px;align-items:start;padding:7px 8px 7px 10px;border-bottom:1px solid var(--rule);border-left:4px solid var(--unknown)}
+#tagBox .line .t{font-variant-numeric:tabular-nums;color:var(--mute);font-size:12.5px;padding-top:6px}
+#tagBox .line select{width:100%;padding:5px 8px}
+#tagBox .line .x{padding-top:4px;line-height:1.5}
+#tagBox .line.done select{border-color:var(--ok)}
+#tagBox .line .tag{font-size:11px;padding:0 6px;border-radius:8px;margin-left:6px;background:var(--chip);color:var(--mute);white-space:nowrap}
+#tagBox .line .tag.me{background:var(--ok);color:#fff}
+.legend{font-size:12px;color:var(--mute);padding-top:10px}
+.legend .tag{font-size:11px;padding:0 6px;border-radius:8px;background:var(--chip)}
+.legend .tag.me{background:var(--ok);color:#fff}
+
+.answer{white-space:pre-wrap;background:var(--sunk);border:1px solid var(--rule);border-radius:8px;padding:12px;margin-top:10px;font-size:14px;max-width:80ch}
+textarea.gl{width:100%;min-height:180px;font:13px/1.55 ui-monospace,Menlo,monospace}
+#voices .chip{background:var(--chip);color:var(--ink);font-size:12.5px;line-height:24px;padding:0 10px}
+#storageWarn{border-color:var(--warn)}
+
+/* device notes */
+.files{display:grid;grid-template-columns:240px 1fr;gap:16px}
+.flist{max-height:520px;overflow:auto;border-right:1px solid var(--rule);padding-right:8px}
+.flist div{padding:5px 8px;border-radius:6px;cursor:pointer;font-size:13px;word-break:break-all}
+.flist div:hover{background:var(--sunk)}.flist div.on{background:var(--chip)}
+.flist .dir{color:var(--mute);font-size:11.5px;cursor:default;padding-top:10px}.flist .dir:hover{background:none}
+#fedit{width:100%;min-height:380px;font:13px/1.55 ui-monospace,Menlo,monospace}
+#fview h1,#fview h2,#fview h3{margin:14px 0 6px}#fview ul{padding-left:20px;margin:4px 0}
+
+@media (max-width:900px){
+  .app{grid-template-columns:1fr}
+  .side{position:static;height:auto;border-right:0;border-bottom:1px solid var(--rule)}
+  .jobs{max-height:46vh}
+  .work{padding:20px 16px 60px}
+  #mTitle{font-size:23px}
+  .spk{grid-template-columns:34px 1fr 1fr}.spk .mute{grid-column:1/-1}
+  #tagBox .line{grid-template-columns:34px 1fr 1fr}#tagBox .line .t{display:none}#tagBox .line .x{grid-column:1/-1}
+  .files{grid-template-columns:1fr}.flist{border-right:0;max-height:200px}
+}
+@media print{
+  body{background:#fff;color:#000}.side,.tabs,.mtools,#dl,.ribbon,.noprint,.panel:not(#viewCard){display:none!important}
+  .app{display:block}.work{padding:0}#minutesTab{display:block!important}
+}
 </style>
 </head>
 <body>
-<main>
-  <h1>Whisper Minutes</h1>
-  <p class="sub">Self-hosted transcription and meeting summaries. Recordings stay on this server.</p>
-
-  <div class="card hidden" id="storageWarn" style="border-color:var(--warn)">
-    <strong style="color:var(--warn)">Your data is wiped on every deploy.</strong>
-    This server keeps recordings, minutes, Names &amp; terms and remembered voices in <code>/data</code>, but <code>/data</code>
-    is a temporary Docker volume. In Coolify open this app → <b>Persistent Storage</b> → <b>+ Add</b> → Volume, name
-    <code>whisper-data</code>, destination path <code>/data</code>, then redeploy. (Copy your Names &amp; terms first.)
-  </div>
-
-  <div class="card row">
-    <input id="key" type="password" placeholder="API key" autocomplete="off">
-    <button class="ghost" id="saveKey">Save key</button>
-    <span id="health" class="mute"></span>
-  </div>
-
-  <div class="card">
-    <div id="drop">Drop an audio file here or click to choose (wav, mp3, m4a, ogg, webm, flac…)</div>
+<div class="app">
+  <aside class="side">
+    <div class="brand">
+      <h1><svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><g fill="none" stroke-linecap="round" stroke-width="2.4"><path d="M3 9v4" stroke="var(--s1)"/><path d="M7.5 5v12" stroke="var(--s2)"/><path d="M12 8v6" stroke="var(--s3)"/><path d="M16.5 3v16" stroke="var(--s4)"/><path d="M21 9v4" stroke="var(--s5)"/></g></svg>Whisper Minutes</h1>
+      <span id="health" class="mute"></span>
+    </div>
+    <nav class="nav" aria-label="Sections">
+      <button data-go="meetings" aria-current="true">Meetings</button>
+      <button data-go="ask">Ask</button>
+      <button data-go="names">Names</button>
+      <button data-go="notes">Notes</button>
+      <button data-go="key" title="API key">Key</button>
+    </nav>
+    <div id="drop"><strong>Add a recording</strong>Drop audio here or click to choose</div>
     <input id="file" type="file" accept="audio/*,video/*" class="hidden">
-    <div class="row">
-      <label class="mute">Language
+    <details class="opts">
+      <summary>Options for the next upload</summary>
+      <div class="grid">
+        <input id="title" type="text" placeholder="Title (optional)" class="wide">
+        <label class="mute">Language</label>
         <select id="lang">
           <option value="">Auto-detect</option><option value="en">English</option><option value="zh">Chinese</option>
           <option value="ms">Malay</option><option value="ta">Tamil</option><option value="id">Indonesian</option>
           <option value="ja">Japanese</option><option value="ko">Korean</option><option value="th">Thai</option>
           <option value="vi">Vietnamese</option>
-        </select></label>
-      <label class="mute"><input type="checkbox" id="sum" checked> Summary</label>
-      <label class="mute" id="diarLabel"><input type="checkbox" id="diar" checked> Speaker labels</label>
-      <input id="title" type="text" placeholder="Title (optional)">
-    </div>
-    <div class="row" style="margin-top:8px">
-      <label class="mute">Meeting type <select id="tpl"></select></label>
-      <label class="mute">People <input type="number" id="ppl" min="1" max="20" placeholder="auto"></label>
-      <input id="att" type="text" placeholder="Names of attendees (optional, comma separated)" style="flex:1;min-width:220px">
-      <label class="mute" id="bestLabel"><input type="checkbox" id="best"> Best quality (slower)</label>
-    </div>
-    <div id="up" class="hidden"><div class="mute" id="upText"></div><div class="bar"><i id="upBar"></i></div></div>
-  </div>
-
-  <div class="card">
-    <strong>Ask your meetings</strong>
-    <div class="row" style="margin-top:8px"><input id="qAll" type="text" placeholder="e.g. What did we decide about the rollback plan?" style="flex:1;min-width:240px"><button id="askAll">Ask</button><button class="ghost" id="findAll">Search</button></div>
-    <div id="ansAll"></div>
-  </div>
-
-  <div class="card">
-    <div class="row" style="justify-content:space-between"><strong>Recordings</strong><button class="ghost" id="refresh">Refresh</button></div>
-    <table><thead><tr><th>Recording</th><th class="hide-sm">Length</th><th>Status</th><th class="hide-sm">Added</th></tr></thead>
-      <tbody id="jobs"></tbody></table>
-  </div>
-
-  <div class="card hidden" id="viewCard">
-    <div class="row" style="justify-content:space-between">
-      <div class="row" id="dl"></div>
-      <div class="row"><select id="reTpl" title="Meeting type for the new minutes"></select><label class="mute" id="reBestLabel"><input type="checkbox" id="reBest"> Best</label><button class="ghost" id="resum">Redo minutes</button><button class="danger" id="del">Delete</button></div>
-    </div>
-    <div id="spkBox" class="hidden noprint">
-      <div class="sub2">Who's speaking? <span class="mute" style="font-weight:400">Type names - voices are remembered, so next time they're named automatically.</span></div>
-      <div id="spkList"></div>
-      <div class="row" style="margin-top:6px"><button id="spkSave">Save names</button><label class="mute"><input type="checkbox" id="spkRemember" checked> Remember voices</label><span class="mute" id="spkMsg"></span></div>
-    </div>
-    <div id="tagBox" class="hidden noprint">
-      <div class="sub2">Who said what <span class="mute" style="font-weight:400">Play a line, then pick who it really was. With "Remember voices" on, that clip also teaches the server their voice.</span></div>
-      <div class="row"><select id="tagFilter"></select>
-        <button class="ghost" id="tagFind" title="Look again for lines that sound like the people you tagged">Find their other lines</button>
-        <button class="ghost hidden" id="tagAccept" title="The auto lines are right: mark them ✓ (yours). With a speaker picked in the filter: only theirs.">✓ Confirm auto lines</button>
-        <select id="playRate" title="Playback speed"><option value="1">1x</option><option value="0.85">0.85x</option><option value="0.7">0.7x</option></select>
-        <label class="mute" title="Noise reduction and steady volume for listening (the transcript always uses the original)"><input type="checkbox" id="clearAudio" checked> Clearer audio</label>
-        <label class="mute" title="Accept closer calls between voices (more lines filled in, check them)"><input type="checkbox" id="tagLoose"> Match more</label>
-        <span class="mute" id="tagMsg"></span></div>
-      <div class="mute" id="tagReport" style="margin:2px 0 8px"></div>
-      <div id="tagLines"></div>
-      <div class="row"><button class="ghost hidden" id="tagMore">Show more lines</button><span class="mute"><span class="tag me" style="font-size:11px;padding:1px 6px;border-radius:8px;background:var(--accent);color:var(--accent-ink)">✓</span> you picked this line's name &nbsp;·&nbsp; <span style="font-size:11px;padding:1px 6px;border-radius:8px;background:var(--chip)">auto</span> filled in from the same voice - check these &nbsp;·&nbsp; no mark = the speaker separation's guess. Names update right away; the minutes' wording with "Redo minutes".</span></div>
-    </div>
-    <div id="askBox" class="hidden noprint">
-      <div class="sub2">Ask about this meeting</div>
-      <div class="row"><input id="qOne" type="text" placeholder="e.g. What did San agree to do?" style="flex:1;min-width:220px"><button id="askOne">Ask</button><button class="ghost" id="email">Draft follow-up email</button></div>
-      <div id="ansOne"></div>
-    </div>
-    <div id="view"></div>
-  </div>
-
-  <div class="card">
-    <strong>Names &amp; terms</strong>
-    <p class="mute">One per line: people, companies, products and jargon. Used to spell them right in transcripts and minutes: words that sound like one of these ("C trip", "Pricilla") get your spelling. Names of known voices below count too, and a name you type for a speaker takes the spelling from here. 🔗 = a name here that also has a remembered voice.</p>
-    <textarea class="gl" id="gloss" placeholder="Aleta Planet&#10;SkenPay&#10;San Tan&#10;Coolify"></textarea>
-    <div class="row" style="margin-top:6px"><button id="glossSave">Save</button><span class="mute" id="glossMsg"></span></div>
-    <div class="sub2">Known voices</div>
-    <div id="voices" class="mute">None yet - name the speakers of a recording to add them.</div>
-    <div class="row" style="margin-top:8px"><button class="ghost" id="bkDown">Download backup</button>
-      <button class="ghost" id="bkUp">Restore backup…</button><input type="file" id="bkFile" accept=".json" class="hidden">
-      <span class="mute" id="bkMsg">Names &amp; terms and remembered voices, in one file.</span></div>
-  </div>
-  <div class="card" id="notesCard">
-    <div class="row" style="justify-content:space-between">
-      <strong>Notes from your Idea Saver</strong>
-      <div class="row"><select id="dev"></select><button class="ghost" id="fnew">New note</button><button class="ghost" id="frefresh">Refresh</button></div>
-    </div>
-    <p class="mute">Turn on Settings &gt; Sync &amp; backup on the device. Edits made here go back to the device on its next sync.</p>
-    <div class="files">
-      <div class="flist" id="flist"><span class="mute">No synced files yet.</span></div>
-      <div>
-        <div class="row" style="justify-content:space-between;margin-bottom:8px">
-          <strong id="fname" class="mute">Pick a file</strong>
-          <div class="row"><button class="ghost hidden" id="fedbtn">Edit</button><button class="hidden" id="fsave">Save</button><button class="ghost hidden" id="fcancel">Cancel</button><button class="danger hidden" id="fdel">Delete</button></div>
-        </div>
-        <div id="fmsg" class="mute"></div>
-        <div id="fview"></div>
-        <textarea id="fedit" class="hidden"></textarea>
+        </select>
+        <label class="mute">Meeting type</label><select id="tpl"></select>
+        <label class="mute">People</label><input type="number" id="ppl" min="1" max="20" placeholder="auto">
+        <input id="att" type="text" placeholder="Attendees, comma separated" class="wide">
+        <label class="mute"><input type="checkbox" id="sum" checked> Write minutes</label>
+        <label class="mute" id="diarLabel"><input type="checkbox" id="diar" checked> Separate speakers</label>
+        <label class="mute wide" id="bestLabel"><input type="checkbox" id="best"> Best quality (slower)</label>
       </div>
+    </details>
+    <div id="up" class="hidden"><div class="mute" id="upText"></div><div class="bar"><i id="upBar"></i></div></div>
+    <div class="listhead"><strong>Recordings</strong><button class="ghost" id="refresh">Refresh</button></div>
+    <div class="jobs"><table><thead><tr><th>Recording</th></tr></thead><tbody id="jobs"></tbody></table></div>
+  </aside>
+
+  <main class="work">
+    <div class="block hidden" id="storageWarn">
+      <strong style="color:var(--warn)">Your data is wiped on every deploy.</strong>
+      This server keeps recordings, minutes, Names &amp; terms and remembered voices in <code>/data</code>, but <code>/data</code>
+      is a temporary Docker volume. In Coolify open this app, <b>Persistent Storage</b>, <b>+ Add</b>, Volume, name
+      <code>whisper-data</code>, destination path <code>/data</code>, then redeploy. Copy your Names &amp; terms first.
     </div>
-  </div>
-</main>
+
+    <section class="panel" data-panel="meetings">
+      <div class="empty" id="noMeeting"><strong>Pick a recording</strong>Its minutes, speakers and transcript open here.</div>
+      <div class="hidden" id="viewCard">
+        <div class="mhead">
+          <div><h2 id="mTitle"></h2><div class="mute" id="mMeta"></div></div>
+          <div class="mtools noprint">
+            <select id="reTpl" title="Meeting type for the new minutes"></select>
+            <label class="mute" id="reBestLabel"><input type="checkbox" id="reBest"> Best</label>
+            <button class="ghost" id="resum" title="Write the minutes again with the current names and meeting type">Redo minutes</button>
+            <button class="danger" id="del">Delete</button>
+          </div>
+        </div>
+        <div class="row" id="dl"></div>
+        <div class="ribbon hidden" id="ribbon" aria-label="Who spoke when"></div>
+        <div class="tabs noprint" role="tablist" id="mTabs">
+          <button role="tab" data-tab="minutesTab" aria-selected="true">Minutes</button>
+          <button role="tab" data-tab="speakersTab">Who said what<span class="n" id="qCount"></span></button>
+          <button role="tab" data-tab="askTab">Ask</button>
+        </div>
+        <div id="minutesTab" role="tabpanel"><div id="view"></div></div>
+        <div id="speakersTab" role="tabpanel" class="hidden">
+          <div id="spkBox" class="hidden noprint block">
+            <div class="sub2">Who's speaking</div>
+            <p class="mute" style="margin:0 0 8px">Type a name once and every line in that voice gets it. Voices are remembered for your other meetings.</p>
+            <div id="spkList"></div>
+            <div class="row" style="margin-top:10px"><button id="spkSave">Save names</button><label class="mute"><input type="checkbox" id="spkRemember" checked> Remember voices</label><span class="mute" id="spkMsg"></span></div>
+          </div>
+          <div id="tagBox" class="hidden noprint">
+            <div class="toolbar">
+              <select id="tagFilter"></select>
+              <button class="ghost" id="tagFind" title="Look again for lines that sound like the people you tagged">Find their other lines</button>
+              <button class="ghost hidden" id="tagAccept" title="The auto lines are right: mark them ✓ (yours). With a speaker picked in the filter: only theirs.">✓ Confirm auto lines</button>
+              <select id="playRate" title="Playback speed"><option value="1">1x</option><option value="0.85">0.85x</option><option value="0.7">0.7x</option></select>
+              <label class="mute" title="Noise reduction and steady volume for listening (the transcript always uses the original)"><input type="checkbox" id="clearAudio" checked> Clearer audio</label>
+              <label class="mute" title="Accept closer calls between voices (more lines filled in, check them)"><input type="checkbox" id="tagLoose"> Match more</label>
+              <span class="mute" id="tagMsg"></span>
+            </div>
+            <div id="tagReport"></div>
+            <div id="tagLines"></div>
+            <div class="row" style="margin-top:10px"><button class="ghost hidden" id="tagMore">Show more lines</button></div>
+            <div class="legend"><span class="tag me">✓</span> you picked this name &nbsp; <span class="tag">auto</span> filled in from the same voice, check these &nbsp; no mark: the speaker separation's guess. The colour on the left is the speaker; striped is unnamed.</div>
+          </div>
+        </div>
+        <div id="askTab" role="tabpanel" class="hidden">
+          <div id="askBox" class="hidden noprint">
+            <div class="row" style="margin-top:16px"><input id="qOne" type="text" placeholder="What did San agree to do?" style="flex:1;min-width:220px"><button id="askOne">Ask</button><button class="ghost" id="email">Draft follow-up email</button></div>
+            <div id="ansOne"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel hidden" data-panel="ask">
+      <h2>Ask your meetings</h2>
+      <p class="mute">Questions are answered from all your minutes and transcripts. Search finds the exact lines.</p>
+      <div class="row"><input id="qAll" type="text" placeholder="What did we decide about the rollback plan?" style="flex:1;min-width:240px"><button id="askAll">Ask</button><button class="ghost" id="findAll">Search</button></div>
+      <div id="ansAll"></div>
+    </section>
+
+    <section class="panel hidden" data-panel="names">
+      <h2>Names &amp; voices</h2>
+      <p class="mute">One per line: people, companies, products and jargon. Words that sound like one of these ("C trip", "Pricilla") get your spelling in transcripts and minutes. A name you type for a speaker takes its spelling from here.</p>
+      <div class="block">
+        <div class="sub2">Names &amp; terms</div>
+        <textarea class="gl" id="gloss" placeholder="Aleta Planet&#10;SkenPay&#10;San Tan&#10;Coolify"></textarea>
+        <div class="row" style="margin-top:8px"><button id="glossSave">Save</button><span class="mute" id="glossMsg"></span></div>
+      </div>
+      <div class="block">
+        <div class="sub2">Known voices</div>
+        <p class="mute" style="margin:0 0 8px">People the server recognises by voice in every meeting. 🔗 = also in Names &amp; terms.</p>
+        <div id="voices" class="mute">None yet - name the speakers of a recording to add them.</div>
+      </div>
+      <div class="block">
+        <div class="sub2">Backup</div>
+        <div class="row"><button class="ghost" id="bkDown">Download backup</button>
+          <button class="ghost" id="bkUp">Restore backup…</button><input type="file" id="bkFile" accept=".json" class="hidden">
+          <span class="mute" id="bkMsg">Names &amp; terms and remembered voices, in one file.</span></div>
+      </div>
+    </section>
+
+    <section class="panel hidden" data-panel="notes" id="notesCard">
+      <h2>Notes from your Idea Saver</h2>
+      <p class="mute">Turn on Settings &gt; Sync &amp; backup on the device. Edits made here go back to the device on its next sync.</p>
+      <div class="row" style="margin-bottom:12px"><select id="dev"></select><button class="ghost" id="fnew">New note</button><button class="ghost" id="frefresh">Refresh</button></div>
+      <div class="files block">
+        <div class="flist" id="flist"><span class="mute">No synced files yet.</span></div>
+        <div>
+          <div class="row" style="justify-content:space-between;margin-bottom:8px">
+            <strong id="fname" class="mute">Pick a file</strong>
+            <div class="row"><button class="ghost hidden" id="fedbtn">Edit</button><button class="hidden" id="fsave">Save</button><button class="ghost hidden" id="fcancel">Cancel</button><button class="danger hidden" id="fdel">Delete</button></div>
+          </div>
+          <div id="fmsg" class="mute"></div>
+          <div id="fview"></div>
+          <textarea id="fedit" class="hidden"></textarea>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel hidden" data-panel="key">
+      <h2>API key</h2>
+      <p class="mute">The key this server was set up with. It's kept in this browser only.</p>
+      <div class="row"><input id="key" type="password" placeholder="API key" autocomplete="off" style="flex:1;max-width:420px"><button id="saveKey">Save key</button></div>
+    </section>
+  </main>
+</div>
 <script>
 const $ = s => document.querySelector(s);
 let KEY = ""; try { KEY = localStorage.getItem("whisperKey") || ""; } catch (e) {}
@@ -220,8 +368,11 @@ async function health() {
     }
     $("#storageWarn").classList.toggle("hidden", h.storage !== "temporary");
     const vw = (h.voice_work || [])[0];
-    $("#health").textContent = `${h.model}${h.model_loaded ? "" : " (loading…)"} · summary: ${h.summary_backend === "none" ? "off" : h.summary_model}`
-      + (h.running ? " · transcribing" : "") + (vw ? ` · working on ${vw.title}: ${vw.step === "separating speakers" ? "separating speakers" : "checking voices"}` : "");
+    $("#health").textContent = !h.model_loaded ? "Server starting, loading the speech model…"
+      : h.running ? "Transcribing a recording…"
+      : vw ? `${vw.step === "separating speakers" ? "Separating speakers" : "Checking voices"} in ${vw.title}…`
+      : `Ready. ${h.voices || 0} known voice${h.voices === 1 ? "" : "s"}, version ${h.version}`;
+    $("#health").title = `${h.model}, minutes by ${h.summary_backend === "none" ? "nobody (off)" : h.summary_model}`;
   } catch (e) { $("#health").textContent = "server not reachable"; }
 }
 
@@ -240,16 +391,79 @@ function status(j) {
   return `<span class="chip done">done</span>${j.summary_error ? ' <span class="mute">no summary</span>' : ""}${voiceWork(j.voice_work)}`;
 }
 
+// ---------------------------------------------------------------- layout: sections, tabs, meeting header
+function go(name) {
+  document.querySelectorAll(".panel").forEach(p => p.classList.toggle("hidden", p.dataset.panel !== name));
+  document.querySelectorAll(".nav button").forEach(b => b.setAttribute("aria-current", b.dataset.go === name));
+}
+document.querySelectorAll(".nav button").forEach(b => b.onclick = () => go(b.dataset.go));
+function tab(id) {
+  document.querySelectorAll("#mTabs button").forEach(b => b.setAttribute("aria-selected", b.dataset.tab === id));
+  ["minutesTab", "speakersTab", "askTab"].forEach(t => $("#" + t).classList.toggle("hidden", t !== id));
+}
+document.querySelectorAll("#mTabs button").forEach(b => b.onclick = () => tab(b.dataset.tab));
+const shortWhen = t => new Date(t * 1000).toLocaleString([], { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
+function setMeta(j) {
+  $("#mTitle").textContent = j.title || j.filename;
+  const parts = [when(j.created_at)];
+  if (j.duration) parts.push(dur(j.duration));
+  const n = Object.keys(j.speaker_names || {}).length;
+  if (n) parts.push(`${n} named speaker${n > 1 ? "s" : ""}`);
+  $("#mMeta").innerHTML = esc(parts.join(", ")) + (j.status === "done" ? "" : " " + status(j)) + (j.voice_work ? voiceWork(j.voice_work) : "");
+}
+// each speaker keeps one colour: in the ribbon, on their lines and in the speaker list
+function spkColor(label) {
+  const labs = [...new Set(tagSpk.map(x => x.label))].sort((a, b) => (+(a.split(" ")[1]) || 0) - (+(b.split(" ")[1]) || 0));
+  const i = labs.indexOf(label);
+  return i < 0 ? "var(--unknown)" : `var(--s${(i % 8) + 1})`;
+}
+// the voice ribbon: who spoke when across the whole meeting; click a stretch to jump to that line
+function drawRibbon() {
+  const el = $("#ribbon");
+  if (!tagSegs.length) { el.classList.add("hidden"); return; }
+  const end = Math.max(...tagSegs.map(s => s.end || 0)) || 1;
+  const runs = [];
+  tagSegs.forEach((s, i) => {
+    const who = tagNamed(s.speaker) || /^Speaker \d+$/.test(s.speaker || "") ? s.speaker : "";
+    const last = runs[runs.length - 1];
+    if (last && last.who === who && s.start - last.end < 4) last.end = s.end;
+    else runs.push({ who, start: s.start, end: s.end, i });
+  });
+  let html = "", t = 0;
+  for (const r of runs) {
+    if (r.start > t + 0.5) html += `<i style="flex:${r.start - t};background:transparent"></i>`;
+    const name = r.who ? ((tagSpk.find(x => x.label === r.who) || {}).name || r.who) : "Unnamed";
+    html += `<i class="${r.who ? "" : "q"}" data-i="${r.i}" title="${esc(name)}, ${mmss(r.start)}" style="flex:${Math.max(0.2, r.end - r.start)}${r.who ? ";background:" + spkColor(r.who) : ""}"></i>`;
+    t = r.end;
+  }
+  const secs = {};
+  tagSegs.forEach(s => { const k = tagNamed(s.speaker) || /^Speaker \d+$/.test(s.speaker || "") ? s.speaker : ""; secs[k] = (secs[k] || 0) + (s.end - s.start); });
+  const who = Object.entries(secs).sort((a, b) => b[1] - a[1]).map(([k, v]) => {
+    const name = k ? ((tagSpk.find(x => x.label === k) || {}).name || k) : "Unnamed";
+    return `<span><i class="dot${k ? "" : " q"}" style="${k ? "background:" + spkColor(k) : ""}"></i>${esc(name)} <span class="mute">${Math.round(100 * v / end)}%</span></span>`;
+  }).join("");
+  const q = tagSegs.filter(s => !tagNamed(s.speaker) && !(s.also || []).length).length;
+  $("#qCount").textContent = q ? `${q} unnamed` : "";
+  el.innerHTML = `<div class="strip">${html}</div><div class="axis"><span>0:00</span><span>${mmss(end / 2)}</span><span>${mmss(end)}</span></div><div class="who">${who}</div>`;
+  el.classList.remove("hidden");
+  el.querySelectorAll("i[data-i]").forEach(b => b.onclick = () => {
+    tab("speakersTab");
+    $("#tagFilter").value = ""; tagShown = Math.max(tagShown, +b.dataset.i + 50); renderLines();
+    const line = document.querySelector(`#tagLines .line[data-i="${b.dataset.i}"]`);
+    if (line) { line.scrollIntoView({ block: "center" }); line.querySelector("button.play")?.focus(); }
+  });
+}
+
 async function load() {
-  if (!KEY) { $("#jobs").innerHTML = `<tr><td colspan="4" class="mute">Enter the API key above.</td></tr>`; return; }
+  if (!KEY) { $("#jobs").innerHTML = `<tr><td class="mute">Add your API key first (Key, above).</td></tr>`; go("key"); return; }
   try {
     const jobs = await (await api("/api/jobs?limit=100")).json();
-    $("#jobs").innerHTML = jobs.length ? jobs.map(j => `<tr class="job" data-id="${j.id}">
-      <td><div>${esc(j.title || j.filename)}</div>${j.title ? `<div class="mute">${esc(j.filename)}</div>` : ""}</td>
-      <td class="hide-sm">${dur(j.duration)}</td><td>${status(j)}</td><td class="hide-sm mute">${when(j.created_at)}</td></tr>`).join("")
-      : `<tr><td colspan="4" class="mute">No recordings yet.</td></tr>`;
+    $("#jobs").innerHTML = jobs.length ? jobs.map(j => `<tr class="job${j.id === current ? " on" : ""}" data-id="${j.id}">
+      <td><div class="t1">${esc(j.title || j.filename)}</div><div class="t2"><span>${shortWhen(j.created_at)}${j.duration ? ", " + dur(j.duration) : ""}</span>${status(j)}</div></td></tr>`).join("")
+      : `<tr><td class="mute">No recordings yet. Drop one above, or record on the watch.</td></tr>`;
     document.querySelectorAll("tr.job").forEach(tr => tr.onclick = () => show(tr.dataset.id));
-  } catch (e) { $("#jobs").innerHTML = `<tr><td colspan="4" class="mute">${esc(e.message)}</td></tr>`; }
+    if (current) { const j = jobs.find(x => x.id === current); if (j) setMeta(j); }
+  } catch (e) { $("#jobs").innerHTML = `<tr><td class="mute">${esc(e.message)}</td></tr>`; }
 }
 
 function md(src) {   // tiny Markdown renderer: headings, lists, checkboxes, bold, italics, code, quotes
@@ -270,8 +484,11 @@ function md(src) {   // tiny Markdown renderer: headings, lists, checkboxes, bol
 
 async function show(id) {
   current = id;
+  go("meetings");
+  document.querySelectorAll("tr.job").forEach(tr => tr.classList.toggle("on", tr.dataset.id === id));
   const j = await (await api(`/api/jobs/${id}`)).json();
-  $("#viewCard").classList.remove("hidden");
+  $("#viewCard").classList.remove("hidden"); $("#noMeeting").classList.add("hidden");
+  setMeta(j); tab("minutesTab"); $("#ribbon").classList.add("hidden"); $("#mTabs").classList.toggle("hidden", j.status !== "done");
   $("#resum").disabled = j.status !== "done";
   if (j.status !== "done") {
     $("#dl").innerHTML = "";
@@ -292,7 +509,7 @@ async function show(id) {
   }
   if (j.status !== "done") { $("#askBox").classList.add("hidden"); $("#spkBox").classList.add("hidden"); $("#tagBox").classList.add("hidden"); }
   stopPlay();
-  $("#viewCard").scrollIntoView({ behavior: "smooth" });
+  if (matchMedia("(max-width:900px)").matches) $("#viewCard").scrollIntoView({ behavior: "smooth" });
 }
 
 async function download(url) {
@@ -305,7 +522,7 @@ async function download(url) {
 $("#del").onclick = async () => {
   if (!current) return;
   try { await api(`/api/jobs/${current}`, { method: "DELETE" }); } catch (e) { $("#view").innerHTML = `<p>${esc(e.message)}</p>`; return; }
-  $("#viewCard").classList.add("hidden"); current = null; load();
+  $("#viewCard").classList.add("hidden"); $("#noMeeting").classList.remove("hidden"); current = null; load();
 };
 $("#resum").onclick = async () => {
   if (!current) return;
@@ -402,7 +619,8 @@ $("#tagLoose").onchange = async () => {
 function renderLines() {
   const f = $("#tagFilter").value;
   const rows = tagSegs.map((s, i) => ({ ...s, i })).filter(s => !f || (f === "__q" ? !tagNamed(s.speaker) && !(s.also || []).length : s.speaker === f));
-  $("#tagLines").innerHTML = rows.slice(0, tagShown).map(s => `<div class="line" data-i="${s.i}">
+  drawRibbon();
+  $("#tagLines").innerHTML = rows.slice(0, tagShown).map(s => `<div class="line" data-i="${s.i}" style="border-left-color:${tagNamed(s.speaker) || /^Speaker \d+$/.test(s.speaker || "") ? spkColor(s.speaker) : "var(--unknown)"}">
     <button class="ghost play" data-s="${s.start}" data-e="${s.end}" title="Play this line">▶</button>
     <span class="t">${mmss(s.start)}</span>
     <select data-i="${s.i}">${speakerOptions(s.speaker)}</select>
@@ -543,9 +761,9 @@ async function loadSpeakers(id, opening) {
   $("#tagFilter").innerHTML = '<option value="">All lines</option>' + sp.map(s => `<option value="${esc(s.label)}">Only ${esc(s.name || s.label)}</option>`).join("") + '<option value="__q">Only unnamed (?)</option>';
   renderLines();
   $("#spkBox").classList.toggle("hidden", !sp.length);
-  $("#spkList").innerHTML = sp.map(s => `<div class="spk"><button class="ghost play" data-l="${esc(s.label)}" title="Hear them"${longest[s.label] ? "" : " disabled"}>▶</button><span>${esc(s.label)}${s.auto ? '<span class="badge" title="recognised by voice">recognised</span>' : ""}</span>
+  $("#spkList").innerHTML = sp.map(s => `<div class="spk"><button class="ghost play" data-l="${esc(s.label)}" title="Hear them"${longest[s.label] ? "" : " disabled"}>▶</button><span class="who"><i class="dot" style="background:${spkColor(s.label)}"></i>${esc(s.label)}${s.auto ? '<span class="badge" title="recognised by voice">recognised</span>' : ""}</span>
     <input type="text" data-l="${esc(s.label)}" value="${esc(s.name)}" placeholder="Name">
-    <span class="mute" title="${esc(s.sample)}">${Math.round(s.seconds / 60) || "<1"} min · "${esc(s.sample)}"</span></div>`).join("");
+    <span class="mute" title="${esc(s.sample)}">${Math.round(s.seconds / 60) || "<1"} min, "${esc(s.sample)}"</span></div>`).join("");
   document.querySelectorAll("#spkList .play").forEach(b => b.onclick = () => {
     const s = longest[b.dataset.l]; if (s) playClip(b, s.start, Math.min(s.end, s.start + 12));
   });
