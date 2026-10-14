@@ -19,8 +19,8 @@ COPY requirements.txt requirements-diarize.txt requirements-tts.txt ./
 RUN pip install -r requirements.txt \
  && if [ "$GPU" = "1" ]; then pip install "nvidia-cublas-cu12" "nvidia-cudnn-cu12==9.*"; fi \
  && if [ "$INSTALL_DIARIZE" = "1" ]; then \
-      if [ "$GPU" = "1" ]; then pip install torch torchaudio; \
-      else pip install --index-url https://download.pytorch.org/whl/cpu torch torchaudio; fi \
+      if [ "$GPU" = "1" ]; then pip install torch==2.8.0 torchaudio==2.8.0; \
+      else pip install --index-url https://download.pytorch.org/whl/cpu torch==2.8.0 torchaudio==2.8.0; fi \
       && pip install -r requirements-diarize.txt; \
     fi \
  && if [ "$INSTALL_TTS" = "1" ]; then pip install -r requirements-tts.txt || echo "TTS install failed - continuing without speech"; fi

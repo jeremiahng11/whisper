@@ -1,2 +1,5 @@
 # speaker labels - installed only when the image is built with INSTALL_DIARIZE=1 (adds ~1.5 GB)
 pyannote.audio>=3.3,<4
+# pyannote.audio 3.x uses torchaudio.AudioMetaData, which torchaudio 2.9+ removed: keep torch/torchaudio at 2.8
+torch==2.8.0
+torchaudio==2.8.0
