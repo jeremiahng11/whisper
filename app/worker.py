@@ -68,8 +68,9 @@ def build_outputs(jid: str) -> None:
     named = render.apply_names(tr, names)
     known = terms.known_terms()
     summ = load_summary(jid)
-    if summ:                                        # minutes written before a name/term was added: its spelling
-        summ = "\n".join(terms.fix_text(line, known) for line in summ.split("\n"))
+    fixes = {**terms.corrections(), **terms.meeting_fixes(tr)}   # words you corrected, here or in any meeting
+    if summ:                                        # minutes written before a name/term/fix was added: follow it
+        summ = "\n".join(terms.fix_text(terms.apply_corrections(line, fixes), known) for line in summ.split("\n"))
     _write(jid, "result.md", render.markdown(job, tr, summ, job.get("title", "")))
     _write(jid, "transcript.txt", render.text(named))
     _write(jid, "transcript.srt", render.srt(named))
@@ -77,7 +78,7 @@ def build_outputs(jid: str) -> None:
     if raw is not None:
         at = opts.get("names_at_summary")
         acts = [{**a, "owner": render.rename_text(a.get("owner", ""), names, at),
-                 "task": render.rename_text(a.get("task", ""), names, at)} for a in raw]
+                 "task": terms.apply_corrections(render.rename_text(a.get("task", ""), names, at), fixes)} for a in raw]
         _write(jid, "actions.json", json.dumps(acts, ensure_ascii=False, indent=1))
     try:
         summary = render.rename_text(load_summary(jid) or "", names, opts.get("names_at_summary"))

@@ -1094,3 +1094,19 @@ def test_fixing_words_is_learned_for_every_meeting(client):
     assert client.get("/api/corrections", headers=H).json()["corrections"]["tapin"] == "DABIN"
     assert client.delete("/api/corrections/TAPIN", headers=H).status_code == 200
     terms.save_corrections({})
+
+
+def test_word_fix_also_changes_the_minutes_summary(client):
+    from app import terms, worker
+    terms.save_corrections({})
+    j = upload(client, "dev1-sumfix", 20)
+    worker._write(j["id"], "summary.md", "### Summary\nThe team reviewed the TAPIN dashboard.\n")
+    worker.build_outputs(j["id"])
+    import json
+    tr = worker.load_transcript(j["id"])
+    tr["segments"][0]["text"] = "This is TAPIN sentence number 1."     # what the speech model heard
+    worker._write(j["id"], "transcript.json", json.dumps(tr))
+    client.post(f"/api/jobs/{j['id']}/segments/0/text", json={"text": "This is DABIN sentence number 1.", "learn": False}, headers=H)
+    md = client.get(f"/api/jobs/{j['id']}/result.md", headers=H).text
+    assert "reviewed the DABIN dashboard" in md, md[:400]
+    terms.save_corrections({})

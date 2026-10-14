@@ -44,6 +44,32 @@ def save_corrections(c: dict) -> None:
     _corr_path().write_text(json.dumps(dict(sorted(c.items())), ensure_ascii=False, indent=1), encoding="utf-8")
 
 
+def changed_words(before: str, after: str) -> list[tuple[str, str]]:
+    """The words / short phrases replaced between two versions of a line (see learn)."""
+    a = _WORD.findall(before or "")
+    b = _WORD.findall(after or "")
+    out = []
+    sm = difflib.SequenceMatcher(None, [w.lower() for w in a], [w.lower() for w in b], autojunk=False)
+    for op, i1, i2, j1, j2 in sm.get_opcodes():
+        if op == "replace" and 1 <= i2 - i1 <= 4 and 1 <= j2 - j1 <= 4:
+            heard, right = " ".join(a[i1:i2]), " ".join(b[j1:j2])
+            if heard != right:
+                out.append((heard, right))
+    return out
+
+
+def meeting_fixes(tr: dict) -> dict:
+    """Words you fixed in this meeting's lines (learned or "only this line"): {"tapin": "DABIN"} - so the minutes
+    written from the old wording follow your fixes too."""
+    out = {}
+    for s in tr.get("segments", []):
+        if s.get("edited") and s.get("heard"):
+            for heard, right in changed_words(s["heard"], s["text"]):
+                if len(heard.split()) > 1 or heard.lower() not in COMMON:
+                    out[heard.lower()] = right
+    return out
+
+
 def learn(before: str, after: str) -> list[tuple[str, str]]:
     """You changed a line from `before` to `after`: remember each replaced word or short phrase (1-4 words each side),
     e.g. "TAPIN" -> "DABIN", "B to B" -> "B2B". Pure deletions / additions aren't learned (that's editing, not
