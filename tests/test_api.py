@@ -734,7 +734,7 @@ def test_split_line_at_speaker_change_and_mark_overlap(client):
     import numpy as np
     orig = t._diarize
     try:
-        t._diarize = lambda a, n: ([(0.0, 1.7, "A"), (1.7, 4.0, "B"), (5.0, 9.0, "A"), (5.5, 8.5, "B")], {})
+        t._diarize = lambda a, n, p=None: ([(0.0, 1.7, "A"), (1.7, 4.0, "B"), (5.0, 9.0, "A"), (5.5, 8.5, "B")], {})
         tr.segments = [seg, t.Segment(5.0, 9.0, "talking over each other", words=[])]
         t.assign_speakers(np.zeros(16000 * 10, np.float32), tr, 2)
     finally:

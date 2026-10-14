@@ -247,8 +247,8 @@ def transcribe(path: str, language: Optional[str], progress: ProgressFn, diarize
     tr = Transcript(lang or detected, prob if not lang else 1.0, total,
                     "fake" if settings.transcriber == "fake" else settings.whisper_model, segs + new)
     if diarize and tr.segments:
-        progress(1.0, "labelling speakers")
-        assign_speakers(audio, tr, num_speakers)
+        progress(0.0, "separating speakers")
+        assign_speakers(audio, tr, num_speakers, lambda f: progress(f, "separating speakers"))
     return tr
 
 
@@ -520,8 +520,28 @@ def _get_diarizer():
     return _diar
 
 
-def _diarize(audio: np.ndarray, num_speakers: Optional[int]) -> tuple[list[tuple[float, float, str]], dict]:
-    """-> ([(start, end, label)], {label: embedding list})"""
+def _diar_hook(progress):
+    """pyannote reports its steps; turn them into 0..1 (finding speech ~30 %, voice prints ~65 %, the rest ~5 %)."""
+    if not progress:
+        return None
+    span = {"segmentation": (0.0, 0.30), "speaker_counting": (0.30, 0.32), "embeddings": (0.32, 0.95),
+            "discrete_diarization": (0.95, 1.0)}
+    last = [0.0]
+
+    def hook(step_name, step_artifact=None, file=None, total=None, completed=None, **_):
+        a, b = span.get(step_name, (last[0], last[0]))
+        frac = a + (b - a) * (completed / total if total and completed is not None else 1.0)
+        if frac >= last[0] + 0.01 or frac >= 0.999:
+            last[0] = frac
+            try:
+                progress(min(1.0, frac))
+            except Exception:                            # noqa: BLE001
+                pass
+    return hook
+
+
+def _diarize(audio: np.ndarray, num_speakers: Optional[int], progress=None) -> tuple[list[tuple[float, float, str]], dict]:
+    """-> ([(start, end, label)], {label: embedding list}). progress(0..1) while it works."""
     if settings.diarizer == "fake":                 # tests: two people taking turns every 10 s
         dur = len(audio) / SR
         n = max(1, min(num_speakers or 2, 4))
@@ -536,8 +556,17 @@ def _diarize(audio: np.ndarray, num_speakers: Optional[int]) -> tuple[list[tuple
     inp = {"waveform": torch.from_numpy(audio).unsqueeze(0), "sample_rate": SR}
     pipe = _get_diarizer()
     emb = None
+    hook = _diar_hook(progress)
+    if hook:
+        kw["hook"] = hook
     try:
-        out = pipe(inp, return_embeddings=True, **kw)
+        try:
+            out = pipe(inp, return_embeddings=True, **kw)
+        except TypeError:
+            if "hook" not in kw:
+                raise
+            kw.pop("hook")                               # an older pipeline without progress reports
+            out = pipe(inp, return_embeddings=True, **kw)
         if isinstance(out, tuple):
             out, emb = out
     except TypeError:
@@ -603,12 +632,12 @@ def split_by_speaker(s: Segment, turns) -> list[Segment]:
     return out
 
 
-def label_lines(audio: np.ndarray, segs: list[dict], num_speakers: Optional[int] = None, first: int = 1):
+def label_lines(audio: np.ndarray, segs: list[dict], num_speakers: Optional[int] = None, first: int = 1, progress=None):
     """Speaker separation for a meeting that already has its lines (they're not split, so line numbers stay):
     -> ([(speaker, also)] per line, {label: {"seconds", "embedding"}}). Labels start at "Speaker <first>"."""
     global diarize_error
     try:
-        turns, vecs = _diarize(audio, num_speakers)
+        turns, vecs = _diarize(audio, num_speakers, progress)
         diarize_error = ""
     except Exception as e:
         diarize_error = str(e)[:200] or type(e).__name__
@@ -639,12 +668,12 @@ def label_lines(audio: np.ndarray, segs: list[dict], num_speakers: Optional[int]
     return out, spk
 
 
-def assign_speakers(audio: np.ndarray, tr: Transcript, num_speakers: Optional[int] = None) -> None:
+def assign_speakers(audio: np.ndarray, tr: Transcript, num_speakers: Optional[int] = None, progress=None) -> None:
     """Give each line the speaker who talks most during it; split lines where the speaker changes mid-line;
     mark lines where a second person talks at the same time ("also"). Failure only loses the labels."""
     global diarize_error
     try:
-        turns, vecs = _diarize(audio, num_speakers)
+        turns, vecs = _diarize(audio, num_speakers, progress)
         diarize_error = ""
     except Exception as e:
         diarize_error = str(e)[:200] or type(e).__name__

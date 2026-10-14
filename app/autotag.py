@@ -75,7 +75,7 @@ def active(jid: str | None = None):
         rows = {k: dict(_state.get(k) or {}) for k in _running}
     out = {}
     for k, st in rows.items():
-        out[k] = {"step": st.get("step", "starting"), "done": st.get("done"), "total": st.get("total"),
+        out[k] = {"step": st.get("step", "starting"), "done": st.get("done"), "total": st.get("total"), "pct": st.get("pct"),
                   "minutes": int((time.time() - st.get("since", time.time())) // 60)}
     return out.get(jid) if jid is not None else out
 
@@ -624,7 +624,8 @@ def redo_speakers(jid: str) -> int:
     used = {s.get("speaker") for s in tr.get("segments", [])} | set(names)
     nums = [int(x.split()[-1]) for x in used if x and x.startswith("Speaker ") and x.split()[-1].isdigit()]
     try:
-        labels, spk = transcribe.label_lines(audio, tr.get("segments", []), opts.get("speakers"), max(nums, default=0) + 1)
+        labels, spk = transcribe.label_lines(audio, tr.get("segments", []), opts.get("speakers"), max(nums, default=0) + 1,
+                                             lambda f: _set(jid, pct=round(100 * f)))
     except Exception as e:                                 # noqa: BLE001
         with job_lock(jid):
             o = dict((db.get(jid) or {}).get("options") or {})

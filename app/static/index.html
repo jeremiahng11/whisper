@@ -470,7 +470,7 @@ async function health() {
           if (p.kind === "live") return `Transcribing a live recording… ${p.done_min} of ${p.received_min} min received${p.pct != null ? ` (${p.pct}%)` : ""}`;
           return `${p.status === "summarizing" ? "Writing the minutes of" : "Transcribing"} ${p.title || "a recording"}… ${p.pct ?? 0}%${p.stage && !/^(transcribing|summarizing)$/.test(p.stage) ? ", " + p.stage : ""}`;
         })()
-      : vw ? `${vw.step === "separating speakers" ? "Separating speakers" : "Checking voices"} in ${vw.title}…`
+      : vw ? `${vw.step === "separating speakers" ? "Separating speakers" : "Checking voices"} in ${vw.title}… ${vw.step === "separating speakers" && vw.pct != null ? vw.pct + "%" : vw.total ? Math.round(100 * vw.done / vw.total) + "%" : ""}`
       : `Ready. ${h.voices || 0} known voice${h.voices === 1 ? "" : "s"}, version ${h.version}`;
     $("#health").title = `${h.model}, minutes by ${h.summary_backend === "none" ? "nobody (off)" : h.summary_model}`;
   } catch (e) { $("#health").textContent = "server not reachable"; }
@@ -479,7 +479,7 @@ async function health() {
 // background work on a finished meeting: speaker separation / voice check
 function voiceWork(w) {
   if (!w) return "";
-  const what = w.step === "separating speakers" ? `separating speakers · ${w.minutes} min`
+  const what = w.step === "separating speakers" ? `separating speakers ${w.pct != null ? w.pct + "%" : ""} · ${w.minutes} min`
     : w.step === "listening" && w.total ? `checking voices ${w.done}/${w.total}` : "checking voices";
   return ` <span class="chip busy" title="Working in the background - you can leave this page">${what}</span>`;
 }
@@ -1021,7 +1021,7 @@ async function followAutotag(id, who, known) {
       const whose = known ? "people you've named before" : who ? `${who}'s voice` : "the voices you tagged";
       if (st.state === "running") $("#tagReport").textContent = "";
       if (st.step === "writing down a part") { $("#gapMsg").textContent = "Writing down that part…"; continue; }
-      $("#tagMsg").textContent = st.step === "separating speakers" ? `Separating the speakers of this meeting… ${Math.floor(k * 1.5 / 60)} min so far. A one-hour meeting can take 10-30 minutes on the server's CPU - you can leave this page, it carries on.`
+      $("#tagMsg").textContent = st.step === "separating speakers" ? `Separating the speakers of this meeting… ${st.pct != null ? st.pct + "%, " : ""}${Math.floor(k * 1.5 / 60)} min so far. A one-hour meeting can take 10-30 minutes on the server's CPU - you can leave this page, it carries on.`
         : st.step === "listening" && st.total
         ? `Finding ${whose} in the meeting… ${st.done}/${st.total} lines` : `Finding ${whose} in the meeting…`;
       continue;
