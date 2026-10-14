@@ -87,6 +87,7 @@ button.ts{background:var(--chip);color:var(--mute);border:0;border-radius:5px;pa
 button.ts:hover{color:var(--ink)}
 button.ts.on{background:var(--warn);color:#fff}
 #view strong.who{font-weight:650}
+#view .hdate{font-size:.62em;font-weight:500;color:var(--mute)}
 #tagBox .line select.also:not(.set){color:var(--mute);border-color:transparent;background:transparent}
 #tagBox .line select.also:not(.set):hover,#tagBox .line select.also:focus{border-color:var(--rule)}
 /* status chips */
@@ -205,7 +206,7 @@ textarea.gl{width:100%;min-height:180px;font:13px/1.55 ui-monospace,Menlo,monosp
   .ribbon{margin:12px 0 16px}.ribbon .strip i{cursor:default}
   #view{max-width:none}
   button.ts{background:none;color:#5d6b7a;padding:0;margin-right:6px}
-  #view h1:first-child{display:none}  /* the title is already at the top */
+  #mTitle,#mMeta{display:none!important}   /* the minutes' own title (with its date) is printed instead */
 }
 </style>
 </head>
@@ -444,6 +445,9 @@ function dayLabel(t) {
 // minutes: speaker names in their colour, timestamps play that moment
 function decorateMinutes() {
   const v = $("#view");
+  const h = v.querySelector("h1");
+  const dm = h && h.textContent.match(/^(.*?)\s+\u2013\s+(\d{1,2})(st|nd|rd|th)\s+(\w{3}\s+\d{4})$/);
+  if (dm) h.innerHTML = `${esc(dm[1])} \u2013 <span class="hdate">${dm[2]}<sup>${dm[3]}</sup> ${esc(dm[4])}</span>`;
   const byName = {};
   tagSpk.forEach(x => { if (x.name) byName[x.name.toLowerCase()] = x.label; });
   v.querySelectorAll("strong").forEach(st => {

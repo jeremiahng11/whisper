@@ -1061,3 +1061,13 @@ def test_fill_a_gap_adds_lines_and_keeps_tags(client):
     assert any(10 <= s["start"] < 20 for s in segs)
     assert [s["start"] for s in segs] == sorted(s["start"] for s in segs)
     assert str(len(segs) - 1) in [str(i) for i in st["manual"]]      # your tag moved with its line
+
+
+def test_minutes_title_carries_the_date():
+    import datetime
+    from app import render
+    d = datetime.date(2026, 10, 14)
+    assert render.titled("MANCO Meeting", d) == "MANCO Meeting – 14th Oct 2026"
+    assert render.titled("MANCO - 14 Oct 2026", d) == "MANCO - 14 Oct 2026"
+    assert [render.nice_date(datetime.date(2026, 10, n)) for n in (1, 2, 3, 11, 22)] == \
+        ["1st Oct 2026", "2nd Oct 2026", "3rd Oct 2026", "11th Oct 2026", "22nd Oct 2026"]

@@ -100,6 +100,21 @@ def flagged_text(tr: dict, marks: list[tuple[float, str]]) -> str:
     return "\n\n".join(f"[{ts(t)}] {('(' + note + ') ') if note else ''}{around(tr, t)[:1500]}" for t, note in marks)
 
 
+def nice_date(d) -> str:
+    """14th Oct 2026"""
+    n = d.day
+    suf = "th" if 10 <= n % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suf} {d.strftime('%b %Y')}"
+
+
+def titled(title: str, when) -> str:
+    """The meeting title with its date: "MANCO Meeting – 14th Oct 2026" (unless the title already has a date)."""
+    t = (title or "").strip()
+    has_date = re.search(r"\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}(st|nd|rd|th)?\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)",
+                         t, re.I) or re.search(r"(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}\b", t, re.I)
+    return t if has_date else f"{t} \u2013 {nice_date(when)}"
+
+
 def markdown(job: dict, tr: dict, summary_md: Optional[str], title: str = "") -> str:
     opts = job.get("options") or {}
     names = names_of(job)
@@ -107,11 +122,11 @@ def markdown(job: dict, tr: dict, summary_md: Optional[str], title: str = "") ->
     summary_md = rename_text(summary_md or "", names, opts.get("names_at_summary")) or None
     when = recorded_at(job["filename"], job["created_at"])
     mins = tr.get("duration", 0) / 60
-    lines = [f"# {title or job.get('title') or job['filename']}", ""]
+    lines = [f"# {titled(title or job.get('title') or job['filename'], when)}", ""]
     meta = [when.strftime("%Y-%m-%d %H:%M"), f"{mins:.0f} min" if mins >= 1 else f"{tr.get('duration', 0):.0f} s"]
     if tr.get("language"):
         meta.append(tr["language"])
-    meta.append(f"whisper {tr.get('model', '')}")
+    meta.append(f"Oracle Minutes {tr.get('model', '')}".strip())
     lines += ["*" + " · ".join(meta) + "*", ""]
     if summary_md:
         lines += [summary_md.strip(), ""]
@@ -211,7 +226,18 @@ def docx(md: str, speakers: Optional[list] = None) -> bytes:
             continue
         m = re.match(r"^(#{1,4})\s+(.*)$", s)
         if m:
-            d.add_heading(m.group(2).strip(), level=len(m.group(1)) - 1)
+            text = m.group(2).strip()
+            dm = re.match(r"^(.*?)\s+\u2013\s+(\d{1,2})(st|nd|rd|th)\s+(\w{3}\s+\d{4})$", text) if len(m.group(1)) == 1 else None
+            if dm:                                         # "MANCO Meeting – 14th Oct 2026": the date smaller
+                h = d.add_heading("", level=0)
+                h.add_run(dm.group(1) + " \u2013 ")
+                big = h.runs[0].font.size or Pt(26)
+                for txt, sup in ((dm.group(2), False), (dm.group(3), True), (" " + dm.group(4), False)):
+                    r = h.add_run(txt)
+                    r.font.size = Pt(round(big.pt * 0.6))
+                    r.font.superscript = sup
+            else:
+                d.add_heading(text, level=len(m.group(1)) - 1)
             if not legend_done and len(m.group(1)) == 1:      # under the title: who spoke how much
                 legend_done = True
                 p = d.add_paragraph()
