@@ -366,7 +366,7 @@ function tagNamed(label) { return !!(tagSpk.find(x => x.label === label) || {}).
 function showReport(st) {
   const r = st && st.report, el = $("#tagReport");
   $("#tagLoose").checked = !!(st && st.loose);
-  if (st && st.diarize_error) { el.textContent = "Speaker separation failed on the server: " + st.diarize_error; return; }
+  if (st && st.diarize_error && st.state !== "running") { el.textContent = "Speaker separation failed on the server: " + st.diarize_error; return; }
   if (!r) { el.textContent = ""; return; }
   const when = new Date(r.at * 1000).toLocaleString([], { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
   let t = `Voice check ${when}: `;
@@ -440,13 +440,14 @@ async function tagLine(sel) {
 let autoRun = 0;
 async function followAutotag(id, who, known) {
   const run = ++autoRun;
-  for (let k = 0; k < 900 && run === autoRun && id === current; k++) {
+  for (let k = 0; k < 4000 && run === autoRun && id === current; k++) {
     await new Promise(r => setTimeout(r, k < 5 ? 600 : 1500));
     let st;
     try { st = await (await api(`/api/jobs/${id}/autotag`)).json(); } catch (e) { return; }
     if (st.state === "running") {
       const whose = known ? "people you've named before" : who ? `${who}'s voice` : "the voices you tagged";
-      $("#tagMsg").textContent = st.step === "separating speakers" ? "Separating the speakers of this meeting (they were missing)… this takes a few minutes."
+      if (st.state === "running") $("#tagReport").textContent = "";
+      $("#tagMsg").textContent = st.step === "separating speakers" ? `Separating the speakers of this meeting… ${Math.floor(k * 1.5 / 60)} min so far. A one-hour meeting can take 10-30 minutes on the server's CPU - you can leave this page, it carries on.`
         : st.step === "listening" && st.total
         ? `Finding ${whose} in the meeting… ${st.done}/${st.total} lines` : `Finding ${whose} in the meeting…`;
       continue;
