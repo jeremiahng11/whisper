@@ -992,3 +992,16 @@ def test_no_undefined_names_in_app():
     out = subprocess.run([sys.executable, "-m", "pyflakes", *files], capture_output=True, text=True).stdout
     bad = [l for l in out.splitlines() if "undefined name" in l]
     assert not bad, bad
+
+
+def test_confirm_auto_lines_marks_them_yours(client):
+    _only_these_voices()
+    j = upload(client, "dev1-accept", 40, "diarize=true&speakers=2")
+    client.post(f"/api/jobs/{j['id']}/segments/0", json={"name": "Priscilla"}, headers=H)
+    st = _wait_autotag(client, j["id"])
+    auto = st["auto"]
+    assert auto
+    r = client.post(f"/api/jobs/{j['id']}/autotag/accept", json={"name": "Priscilla"}, headers=H).json()
+    assert r["accepted"] >= 1
+    st = client.get(f"/api/jobs/{j['id']}/autotag", headers=H).json()
+    assert set(auto) - set(st["auto"]) <= set(st["manual"]) and 0 in st["manual"]

@@ -19,7 +19,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.5.12"
+VERSION = "1.5.13"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -677,6 +677,17 @@ def _tag(jid: str, idx: int, data: dict) -> dict:
     return {"index": idx, "speaker": label, "name": who, "learned": learned, "moved": moved, "also": segs[idx].get("also") or [],
             "also_names": [names.get(a, a) for a in segs[idx].get("also") or []], "autotag": "started" if spread else "off",
             "_who": who if named_now else "", "_seg": dict(segs[idx]), "_spread": spread}
+
+
+@app.post("/api/jobs/{jid}/autotag/accept", dependencies=[Depends(auth)])
+async def accept_autotag(jid: str, request: Request):
+    """The "auto" lines are right: mark them ✓ (yours). {"name": "Priscilla"} = only hers."""
+    _job(jid)
+    data = await body_extra(request)
+    from starlette.concurrency import run_in_threadpool
+    r = await run_in_threadpool(autotag.accept, jid, str(data.get("name") or ""))
+    await run_in_threadpool(worker.build_outputs, jid)
+    return r
 
 
 @app.post("/api/jobs/{jid}/autotag", dependencies=[Depends(auth)])

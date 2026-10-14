@@ -142,6 +142,7 @@ textarea.gl{width:100%;min-height:120px;background:var(--bg);color:var(--ink);bo
       <div class="sub2">Who said what <span class="mute" style="font-weight:400">Play a line, then pick who it really was. With "Remember voices" on, that clip also teaches the server their voice.</span></div>
       <div class="row"><select id="tagFilter"></select>
         <button class="ghost" id="tagFind" title="Look again for lines that sound like the people you tagged">Find their other lines</button>
+        <button class="ghost hidden" id="tagAccept" title="The auto lines are right: mark them ✓ (yours). With a speaker picked in the filter: only theirs.">✓ Confirm auto lines</button>
         <select id="playRate" title="Playback speed"><option value="1">1x</option><option value="0.85">0.85x</option><option value="0.7">0.7x</option></select>
         <label class="mute" title="Noise reduction and steady volume for listening (the transcript always uses the original)"><input type="checkbox" id="clearAudio" checked> Clearer audio</label>
         <label class="mute" title="Accept closer calls between voices (more lines filled in, check them)"><input type="checkbox" id="tagLoose"> Match more</label>
@@ -409,6 +410,7 @@ function renderLines() {
     <span class="x">${esc(s.text)}${tagManual.has(s.i) ? '<span class="tag me" title="You set this line - it is never changed automatically">✓</span>'
       : tagAuto.has(s.i) ? '<span class="tag" title="Tagged automatically (same voice). Pick another name if it is wrong.">auto</span>' : ""}</span></div>`).join("") || '<p class="mute">No lines.</p>';
   $("#tagMore").classList.toggle("hidden", rows.length <= tagShown);
+  $("#tagAccept").classList.toggle("hidden", !tagAuto.size);
   document.querySelectorAll("#tagLines .play").forEach(b => b.onclick = () => playClip(b, +b.dataset.s, Math.max(+b.dataset.e, +b.dataset.s + 1.5)));
   document.querySelectorAll("#tagLines select:not(.also)").forEach(sel => sel.onchange = () => tagLine(sel));
   document.querySelectorAll("#tagLines select.also").forEach(sel => sel.onchange = () => tagAlso(sel));
@@ -498,6 +500,17 @@ $("#tagFind").onclick = async () => {
   followAutotag(current, "");
 };
 $("#tagMore").onclick = () => { tagShown += 300; renderLines(); };
+$("#tagAccept").onclick = async () => {
+  const f = $("#tagFilter").value, who = f && f !== "__q" ? ((tagSpk.find(x => x.label === f) || {}).name || "") : "";
+  const n = [...tagAuto].filter(i => tagSegs[i] && tagNamed(tagSegs[i].speaker) && (!who || tagSegs[i].speaker === f)).length;
+  if (!n) { $("#tagMsg").textContent = "No named auto lines to confirm."; return; }
+  if (!confirm(`Mark ${n} auto line${n > 1 ? "s" : ""}${who ? " of " + who : ""} as ✓ (checked by you)?`)) return;
+  try {
+    const r = await (await api(`/api/jobs/${current}/autotag/accept`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: who }) })).json();
+    $("#tagMsg").textContent = `${r.accepted} line${r.accepted === 1 ? "" : "s"} confirmed ✓` + (r.learned.length ? ` · voices learned more: ${r.learned.join(", ")}` : "");
+    await refreshAfterTag(-1);
+  } catch (e) { $("#tagMsg").textContent = "Couldn't confirm: " + e.message; }
+};
 
 async function loadSpeakers(id, opening) {
   const sp = (await (await api(`/api/jobs/${id}/speakers`)).json()).speakers;

@@ -219,6 +219,9 @@ Open a recording on the web page:
 * **Voices lost, tags kept:** if the voices were lost (e.g. `/data` wasn't persistent on an old deploy), the server
   learns them again from the lines you tagged when it starts (`POST /api/voices/relearn` does it on demand).
   `/api/health` shows `voice_prints` - "ok", or why voice prints can't be made.
+* **✓ Confirm auto lines:** once you've checked the *auto* lines, one click marks them ✓ (yours - never changed
+  automatically again) and adds them to those people's voice prints. Pick a speaker in the filter first to confirm
+  only theirs (`POST /api/jobs/{id}/autotag/accept`, `{"name": "..."}` optional).
 * **Voice check line:** under *Who said what* the page shows the last check of that meeting - who it compared
   with, how many lines it named, how many are still unnamed and why (close call between two voices, sounds like
   nobody you've named, too short). *Match more* accepts closer calls for that meeting (`POST /api/jobs/{id}/autotag?loose=true`);

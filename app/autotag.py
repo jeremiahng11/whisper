@@ -348,6 +348,42 @@ def after_transcription(jid: str) -> None:
     start(jid)
 
 
+def accept(jid: str, name: str = "") -> dict:
+    """You checked the "auto" lines: they become yours (✓, never changed automatically again) and teach the server
+    those voices a little more. name = only that person's lines."""
+    learn: dict[str, list] = {}
+    with job_lock(jid):
+        job = db.get(jid)
+        tr = worker.load_transcript(jid) or {}
+        if not job:
+            return {"accepted": 0}
+        segs = tr.get("segments", [])
+        opts = dict(job.get("options") or {})
+        names = opts.get("speaker_names") or {}
+        manual = dict(opts.get("manual_lines") or {})
+        auto = set(opts.get("auto_lines") or [])
+        cache = worker.load_json(jid, "seg_emb.json", {}) or {}
+        done = []
+        for i in sorted(auto):
+            if i >= len(segs):
+                continue
+            lab = segs[i].get("speaker", "")
+            who = names.get(lab)
+            if not who or (name and who.lower() != name.lower()):
+                continue                                   # only lines with a real name
+            manual[str(i)] = lab
+            done.append(i)
+            if cache.get(str(i)) and not segs[i].get("also"):
+                learn.setdefault(who, []).append(cache[str(i)])
+        opts["manual_lines"] = manual
+        opts["auto_lines"] = sorted(auto - set(done))
+        db.update(jid, options=opts)
+    for who, es in learn.items():
+        for e in es[:15]:
+            voices.remember(who, e)
+    return {"accepted": len(done), "learned": sorted(learn)}
+
+
 def relearn() -> dict:
     """Voices lost (e.g. /data wasn't kept on a redeploy) but your tags are still in the meetings: learn each
     person's voice again from the lines you tagged and the speakers you named. Only for names with no voice now."""
