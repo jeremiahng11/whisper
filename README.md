@@ -196,6 +196,10 @@ Open a recording on the web page:
 * **Who said what** - every transcript line with ▶ (play just that line) and a speaker menu. Pick who really said it,
   or *Someone else…* to add a person. With *Remember voices* on, that clip is added to the person's voice print, so
   later meetings name them automatically (and better each time you correct one). Filter to one speaker to check them.
+* **Split speakers are joined up:** if the speaker separation split one person over several groups, a group whose
+  voice matches someone you tagged becomes theirs (`AUTOTAG_GROUP`, default 0.50), then single lines that sound
+  more like them than anyone else follow (`AUTOTAG_MATCH` 0.50, `AUTOTAG_MARGIN` 0.03). *Find their other lines*
+  re-runs this for meetings tagged earlier. If voice prints can't be made on the server, the page says why.
 * **Tag once, the voice follows:** tagging a line names its whole speaker group at once (the speaker separation
   already put that voice's lines together - unless you named that group as someone else yourself). Then a voice
   comparison picks up that person's lines that ended up in other groups. Lines you set show ✓, automatic ones

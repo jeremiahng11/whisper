@@ -19,7 +19,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.5.2"
+VERSION = "1.5.3"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -159,10 +159,11 @@ def new_job(src: Path, filename: str, opts: dict, rid: Optional[str], priority: 
     if ext == ".wav":
         transcribe.fix_wav_header(str(dest))          # a live upload's header still says "0 bytes"
     j = db.create(filename, str(dest), opts, rid, 1 if priority == "high" else 0)
-    if rid and (live := worker.live_state_path(rid)).exists():
-        d = worker.result_dir(j["id"])
-        d.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(live), d / "live.json")      # parts already transcribed while it was recording
+    with worker.live_lock:
+        if rid and (live := worker.live_state_path(rid)).exists():
+            d = worker.result_dir(j["id"])
+            d.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(live), d / "live.json")  # parts already transcribed while it was recording
     worker.wake()
     return j
 
@@ -578,6 +579,28 @@ async def tag_segment(jid: str, idx: int, request: Request):
     if j["status"] != "done":
         raise HTTPException(409, f"job is {j['status']}")
     data = await body_extra(request)
+    from starlette.concurrency import run_in_threadpool
+    out = await run_in_threadpool(_tag_locked, jid, idx, data)
+    # learn the voice from this line (outside the lock: it can take a moment)
+    who, label, segs_idx = out.pop("_who"), out["speaker"], out.pop("_seg")
+    if data.get("learn", True) and who and not segs_idx.get("also") and j["audio_path"] and os.path.exists(j["audio_path"]):
+        clip = await run_in_threadpool(transcribe.load_range, j["audio_path"], float(segs_idx["start"]), float(segs_idx["end"]))
+        emb = await run_in_threadpool(transcribe.embed_clip, clip, float(segs_idx["start"]))
+        if emb:
+            voices.remember(who, emb)
+            out["learned"] = True
+    if out.pop("_spread"):
+        autotag.start(jid)                           # lines elsewhere that sound like them follow (background)
+    return out
+
+
+def _tag_locked(jid: str, idx: int, data: dict) -> dict:
+    with autotag.job_lock(jid):
+        return _tag(jid, idx, data)
+
+
+def _tag(jid: str, idx: int, data: dict) -> dict:
+    j = _job(jid)
     tr = worker.load_transcript(jid)
     segs = (tr or {}).get("segments", [])
     if not 0 <= idx < len(segs):
@@ -638,25 +661,34 @@ async def tag_segment(jid: str, idx: int, request: Request):
     worker._write(jid, "transcript.json", json.dumps(tr, ensure_ascii=False, indent=1))
     learned = False
     who = names.get(label, "")
-    if data.get("learn", True) and who and not segs[idx].get("also") and j["audio_path"] and os.path.exists(j["audio_path"]):
-        from starlette.concurrency import run_in_threadpool
-        clip = await run_in_threadpool(transcribe.load_range, j["audio_path"], float(segs[idx]["start"]), float(segs[idx]["end"]))
-        emb = await run_in_threadpool(transcribe.embed_clip, clip, float(segs[idx]["start"]))
-        if emb:
-            voices.remember(who, emb)
-            learned = True
     opts["speaker_names"] = names
     opts["speaker_auto"] = sorted(set(opts.get("speaker_auto") or []) - {label})
-    manual[str(idx)] = label                         # you said so: auto-tagging never changes this line
-    opts["manual_lines"] = manual
-    opts["auto_lines"] = sorted(auto_lines - {idx})
+    named_now = bool(data.get("name") or data.get("speaker"))
+    if named_now:                                    # you chose who said it: auto-tagging never changes this line
+        manual[str(idx)] = label
+        auto_lines.discard(idx)
+    opts["manual_lines"] = manual                    # (only the "+ second person" changed: the name stays as it was)
+    opts["auto_lines"] = sorted(auto_lines)
     db.update(jid, options=opts)
     worker.build_outputs(jid)
-    spread = bool(data.get("spread", True)) and bool(who) and bool(j["audio_path"]) and os.path.exists(j["audio_path"])
-    if spread:                                       # lines elsewhere that sound like them follow (background)
-        autotag.start(jid)
+    spread = named_now and bool(data.get("spread", True)) and bool(who) and bool(j["audio_path"]) and os.path.exists(j["audio_path"])
     return {"index": idx, "speaker": label, "name": who, "learned": learned, "moved": moved, "also": segs[idx].get("also") or [],
-            "also_names": [names.get(a, a) for a in segs[idx].get("also") or []], "autotag": "started" if spread else "off"}
+            "also_names": [names.get(a, a) for a in segs[idx].get("also") or []], "autotag": "started" if spread else "off",
+            "_who": who if named_now else "", "_seg": dict(segs[idx]), "_spread": spread}
+
+
+@app.post("/api/jobs/{jid}/autotag", dependencies=[Depends(auth)])
+def run_autotag(jid: str):
+    """Look again for lines that sound like the people you tagged (e.g. a meeting tagged before auto-tag existed)."""
+    j = _job(jid)
+    if j["status"] != "done":
+        raise HTTPException(409, f"job is {j['status']}")
+    if not j["audio_path"] or not os.path.exists(j["audio_path"]):
+        raise HTTPException(410, "the audio of this recording is no longer kept")
+    if not (j.get("options") or {}).get("manual_lines") and not (j.get("options") or {}).get("speaker_names"):
+        raise HTTPException(400, "tag a line or name a speaker first")
+    autotag.start(jid)
+    return autotag.status(jid)
 
 
 @app.get("/api/jobs/{jid}/speakers", dependencies=[Depends(auth)])

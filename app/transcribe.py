@@ -399,33 +399,64 @@ def wav16(a: np.ndarray) -> bytes:
             + b"data" + struct.pack("<I", len(pcm)) + pcm)
 
 
+_embedder = None
+embed_error = ""                                         # why voice prints of clips aren't available (shown to you)
+
+
+def _get_embedder():
+    """The speaker-embedding model the diarizer uses (same "voice print" space as its speaker embeddings).
+    pyannote 3.x pipelines carry it as ._embedding; otherwise load the model itself."""
+    global _embedder
+    if _embedder is not None:
+        return _embedder
+    import torch
+    pipe = _get_diarizer()
+    e = getattr(pipe, "_embedding", None)
+    if e is not None and callable(e):
+        _embedder = ("pipeline", e)
+        return _embedder
+    from pyannote.audio import Inference, Model
+    name = getattr(pipe, "embedding", None)
+    name = name if isinstance(name, str) and "/" in name else "pyannote/wespeaker-voxceleb-resnet34-LM"
+    try:
+        m = Model.from_pretrained(name, use_auth_token=settings.hf_token)
+    except TypeError:
+        m = Model.from_pretrained(name, token=settings.hf_token)
+    if m is None:
+        raise RuntimeError(f"could not load {name} - accept its terms on huggingface.co")
+    inf = Inference(m, window="whole")
+    if torch.cuda.is_available():
+        inf.to(torch.device("cuda"))
+    _embedder = ("inference", inf)
+    return _embedder
+
+
 def embed_clip(a: np.ndarray, t: Optional[float] = None) -> Optional[list[float]]:
-    """Voice print of one clip, in the same space as the diarizer's speaker embeddings (None if not available).
-    t = where the clip starts in the recording (only the test diarizer uses it)."""
-    if len(a) < SR * 1.2:
+    """Voice print of one clip, in the same space as the diarizer's speaker embeddings (None if too short or not
+    available - then embed_error says why). t = where the clip starts in the recording (only the test diarizer)."""
+    global embed_error
+    if len(a) < SR * 1.0:
         return None
     if settings.diarizer == "fake":                      # tests: two people taking turns every 10 s
         k = int((t or 0) // 10) % 2
         return [1.0 if j == k else 0.0 for j in range(4)]
     try:
         import torch
-        pipe = _get_diarizer()
-        emb_model = getattr(pipe, "_embedding", None)
-        if emb_model is None:
-            return None
-        w = torch.from_numpy(a[: SR * 30].astype(np.float32)).reshape(1, 1, -1)
-        v = emb_model(w)
-        v = np.asarray(v.detach().cpu() if hasattr(v, "detach") else v).reshape(-1)
+        kind, emb = _get_embedder()
+        w = torch.from_numpy(a[: SR * 30].astype(np.float32))
+        if kind == "pipeline":
+            v = emb(w.reshape(1, 1, -1))
+        else:
+            v = emb({"waveform": w.reshape(1, -1), "sample_rate": SR})
+        v = np.asarray(v.detach().cpu() if hasattr(v, "detach") else v, dtype=np.float32).reshape(-1)
         if not len(v) or np.any(np.isnan(v)):
             return None
+        embed_error = ""
         return [round(float(x), 5) for x in v]
     except Exception as e:                                   # noqa: BLE001
+        embed_error = str(e)[:200] or type(e).__name__
         log.warning("voice print of a clip failed: %s", e)
         return None
-
-
-# ---------------------------------------------------------------- speaker labels
-_diar = None
 
 
 def _get_diarizer():

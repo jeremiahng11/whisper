@@ -158,6 +158,9 @@ def process(job: dict) -> None:
 
 
 # ---------------------------------------------------------------- live uploads (transcribed while recording)
+live_lock = threading.Lock()       # a live part being saved vs the recording being completed (moves the state)
+
+
 def live_state_path(rid: str) -> Path:
     return settings.upload_dir / f"{rid}.live.json"
 
@@ -182,11 +185,12 @@ def live_pass() -> bool:
             did = False
         finally:
             current_job = None
-        if did and st_path.exists():                # it may have been completed meanwhile
-            tmp = st_path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(state))
-            os.replace(tmp, st_path)
-            return True
+        with live_lock:
+            if did and st_path.exists():            # it may have been completed meanwhile
+                tmp = st_path.with_suffix(".tmp")
+                tmp.write_text(json.dumps(state))
+                os.replace(tmp, st_path)
+                return True
     return False
 
 

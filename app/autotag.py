@@ -22,6 +22,13 @@ log = logging.getLogger("autotag")
 _state: dict[str, dict] = {}
 _lock = threading.Lock()
 _running: set[str] = set()
+_job_locks: dict[str, threading.Lock] = {}
+
+
+def job_lock(jid: str) -> threading.Lock:
+    """One change at a time per meeting (your tags and auto-tagging both read and rewrite the transcript)."""
+    with _lock:
+        return _job_locks.setdefault(jid, threading.Lock())
 
 
 def status(jid: str) -> dict:
@@ -113,8 +120,8 @@ def apply(jid: str) -> int:
             groups.setdefault(lab, []).append(e)
     for lab in names:
         e = (spk.get(lab) or {}).get("embedding")
-        if e and lab in groups:
-            groups[lab].append(e)
+        if e and (lab in groups or lab not in (opts.get("speaker_auto") or [])):   # named by you ("Save names")
+            groups.setdefault(lab, []).append(e)
     people = {}
     for lab, vs in groups.items():
         if names.get(lab) in known:
@@ -123,21 +130,38 @@ def apply(jid: str) -> int:
         if c:
             people[lab] = c
     if not people:
+        if embs and not any(embs.values()) and transcribe.embed_error:
+            raise RuntimeError("voice comparison isn't working on the server: " + transcribe.embed_error)
         return 0
     thr, margin = settings.autotag_match, settings.autotag_margin
+    # 1. whole groups: the speaker separation often splits one person into two or three groups (noisy room,
+    #    long talker). A group whose voice clearly matches a tagged person becomes theirs, all its lines at once.
+    group_to: dict[str, str] = {}
+    for g, info in spk.items():
+        e = (info or {}).get("embedding")
+        if not e or g in people or g in merged or (names.get(g) and g not in (opts.get("speaker_auto") or [])):
+            continue
+        sims = sorted(((_cos(e, c), lab) for lab, c in people.items()), reverse=True)
+        second = sims[1][0] if len(sims) > 1 else -1.0
+        if sims[0][0] >= settings.autotag_group and sims[0][0] - second >= 0.05:
+            group_to[g] = sims[0][1]
     # the diarizer's speakers count as "someone else" unless they sound like a tagged person (then they're them)
     others = {}
     for lab, info in spk.items():
         e = (info or {}).get("embedding")
-        if not e or lab in people or lab in merged or names.get(lab):
+        if not e or lab in people or lab in merged or names.get(lab) or lab in group_to:
             continue
         if max(_cos(e, c) for c in people.values()) >= thr:
             continue
         others[lab] = e
-    auto = set(opts.get("auto_lines") or [])
-    changed = 0
+    decide: dict[int, str] = {}                            # line -> person, from this snapshot
+    unsure: set[int] = set()
     for i, s in enumerate(segs):
         if i in manual or s.get("also"):                   # yours, or two people at once: leave it
+            continue
+        g = s.get("orig") or s.get("speaker")
+        if s.get("speaker") == g and g in group_to:        # its whole group sounds like them
+            decide[i] = group_to[g]
             continue
         e = embs.get(str(i))
         if not e:
@@ -146,16 +170,39 @@ def apply(jid: str) -> int:
         best, lab = sims[0]
         rival = max([x for x, _ in sims[1:]] + [_cos(e, v) for v in others.values()] + [-1.0])
         if best >= thr and best - rival >= margin:
-            if s.get("speaker") != lab:
-                s["speaker"] = lab
+            decide[i] = lab
+        else:
+            unsure.add(i)
+    # write onto the LATEST transcript and settings: you may have tagged more lines while this was running
+    changed = 0
+    with job_lock(jid):
+        job = db.get(jid)
+        tr = worker.load_transcript(jid)
+        if not job or not tr:
+            return 0
+        segs = tr.get("segments", [])
+        opts = dict(job.get("options") or {})
+        manual = {int(k) for k in (opts.get("manual_lines") or {})}
+        auto = set(opts.get("auto_lines") or [])
+        for i, lab in decide.items():
+            if i >= len(segs) or i in manual or segs[i].get("also"):
+                continue
+            if segs[i].get("speaker") != lab:
+                segs[i].setdefault("orig", segs[i].get("speaker", ""))
+                segs[i]["speaker"] = lab
                 changed += 1
             auto.add(i)
-        elif i in auto and s.get("speaker") in people:
-            auto.discard(i)                                # no longer sure: leave it, but not marked as auto
-    worker._write(jid, "transcript.json", json.dumps(tr, ensure_ascii=False, indent=1))
-    opts["auto_lines"] = sorted(auto)
-    db.update(jid, options=opts)
-    worker.build_outputs(jid)
+        for i in unsure:
+            if i in auto and i < len(segs) and segs[i].get("speaker") in people:
+                auto.discard(i)                            # no longer sure: leave it, but not marked as auto
+        worker._write(jid, "transcript.json", json.dumps(tr, ensure_ascii=False, indent=1))
+        if group_to:
+            m = dict(opts.get("merged") or {})
+            m.update(group_to)
+            opts["merged"] = m
+        opts["auto_lines"] = sorted(auto - manual)
+        db.update(jid, options=opts)
+        worker.build_outputs(jid)
     return changed
 
 

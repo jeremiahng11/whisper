@@ -46,8 +46,9 @@ class Settings:
     diarize_model: str = os.getenv("DIARIZE_MODEL", "pyannote/speaker-diarization-3.1")
     diarizer: str = os.getenv("DIARIZER", "pyannote")             # "fake" is only for tests
     voice_match: float = float(os.getenv("VOICE_MATCH", "0.70") or 0.70)
-    autotag_match: float = float(os.getenv("AUTOTAG_MATCH", "0.60") or 0.60)    # same meeting: line sounds like X
-    autotag_margin: float = float(os.getenv("AUTOTAG_MARGIN", "0.05") or 0.05)  # ... and clearly not like anyone else   # cosine similarity to recognise a known voice
+    autotag_match: float = float(os.getenv("AUTOTAG_MATCH", "0.50") or 0.50)    # same meeting: a line sounds like X
+    autotag_margin: float = float(os.getenv("AUTOTAG_MARGIN", "0.03") or 0.03)  # ... and more like X than anyone else
+    autotag_group: float = float(os.getenv("AUTOTAG_GROUP", "0.50") or 0.50)    # a whole speaker group sounds like X   # cosine similarity to recognise a known voice
 
     # --- summary ---
     summary_backend: str = os.getenv("SUMMARY_BACKEND", "ollama")   # ollama | openai | none

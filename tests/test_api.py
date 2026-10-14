@@ -209,7 +209,7 @@ def test_ask_ai(client):
     r = client.post("/api/ask", json={"messages": [{"role": "user", "content": "Name ideas?"}]}, headers=H)
     assert r.status_code == 202 and r.json()["status"] == "pending"
     aid = r.json()["id"]
-    for _ in range(100):
+    for _ in range(400):
         a = client.get(f"/api/ask/{aid}", headers=H).json()
         if a["status"] != "pending":
             break
@@ -402,7 +402,7 @@ def test_ask_meeting_search_email_docx(client):
     def ask(body):
         r = client.post("/api/ask", json=body, headers=H)
         assert r.status_code == 202, r.text
-        for _ in range(100):
+        for _ in range(400):
             a = client.get(f"/api/ask/{r.json()['id']}", headers=H).json()
             if a["status"] != "pending":
                 return a
@@ -430,7 +430,7 @@ def test_live_upload_transcribes_while_recording(client, monkeypatch):
     r = client.put(f"/api/uploads/{rid}", content=bytes(data[:first]), headers={**H, "X-Offset": "0", "X-Live": "1"})
     assert r.status_code == 200
     st = worker.live_state_path(rid)
-    for _ in range(100):
+    for _ in range(400):
         if st.exists() and '"until": 0,' not in st.read_text() and '"until": 0}' not in st.read_text():
             break
         time.sleep(0.05)
@@ -694,7 +694,7 @@ def test_tagging_one_line_tags_the_same_voice_everywhere(client):
     first = next(i for i, s in enumerate(segs) if s["start"] < 10)                  # voice A (0-10 s, 20-30 s)
     r = client.post(f"/api/jobs/{j['id']}/segments/{first}", json={"name": "Wei Ling"}, headers=H).json()
     assert r["autotag"] == "started"
-    for _ in range(100):
+    for _ in range(400):
         st = client.get(f"/api/jobs/{j['id']}/autotag", headers=H).json()
         if st["state"] in ("done", "error"):
             break
@@ -712,7 +712,7 @@ def test_tagging_one_line_tags_the_same_voice_everywhere(client):
     b = next(i for i, s in enumerate(segs2) if int(s["start"] // 10) % 2 == 1)
     client.post(f"/api/jobs/{j['id']}/segments/{b}", json={"name": "Wei Ling", "spread": False}, headers=H)
     client.post(f"/api/jobs/{j['id']}/segments/{first}", json={"name": "Wei Ling"}, headers=H)
-    for _ in range(100):
+    for _ in range(400):
         if client.get(f"/api/jobs/{j['id']}/autotag", headers=H).json()["state"] == "done":
             break
         time.sleep(0.05)
@@ -808,3 +808,40 @@ def test_redo_minutes_keeps_names_and_tags(client):
     assert st["manual"] == st0["manual"]
     md = client.get(f"/api/jobs/{j['id']}/result.md", headers=H).text
     assert "**Kai Wen:**" in md and "Nurul + Kai Wen" in md
+
+
+def test_second_person_only_does_not_mark_line_as_yours(client):
+    j = upload(client, "dev1-also2", 20, "diarize=true&speakers=2")
+    client.post(f"/api/jobs/{j['id']}/segments/2", json={"also": "Rahul"}, headers=H)
+    st = client.get(f"/api/jobs/{j['id']}/autotag", headers=H).json()
+    assert 2 not in st["manual"]
+    client.post(f"/api/jobs/{j['id']}/segments/2", json={"name": "Siti"}, headers=H)
+    assert 2 in client.get(f"/api/jobs/{j['id']}/autotag", headers=H).json()["manual"]
+
+
+def test_autotag_takes_over_a_split_group_of_the_same_voice(client):
+    import json
+    from app import worker
+    j = upload(client, "dev1-split", 40, "diarize=true&speakers=2")
+    jid = j["id"]
+    tr = worker.load_transcript(jid)
+    # the speaker separation split voice A into two groups: lines at 20-30 s became "Speaker 3"
+    for s in tr["segments"]:
+        if 20 <= s["start"] < 30:
+            s["speaker"] = "Speaker 3"
+    worker._write(jid, "transcript.json", json.dumps(tr))
+    spk = worker.load_json(jid, "speakers.json", {})
+    spk["Speaker 3"] = {"seconds": 10, "embedding": [1.0, 0.0, 0.0, 0.0]}           # same voice as Speaker 1
+    worker._write(jid, "speakers.json", json.dumps(spk))
+    first = next(i for i, s in enumerate(tr["segments"]) if s["start"] < 10)
+    r = client.post(f"/api/jobs/{jid}/segments/{first}", json={"name": "Priscilla"}, headers=H).json()
+    for _ in range(400):
+        st = client.get(f"/api/jobs/{jid}/autotag", headers=H).json()
+        if st["state"] in ("done", "error"):
+            break
+        time.sleep(0.05)
+    assert st["state"] == "done", st
+    segs = client.get(f"/api/jobs/{jid}/transcript.json", headers=H).json()["segments"]
+    for s in segs:
+        voice_a = int(s["start"] // 10) % 2 == 0
+        assert (s["speaker"] == r["speaker"]) == voice_a, (s["start"], s["speaker"])

@@ -137,11 +137,12 @@ textarea.gl{width:100%;min-height:120px;background:var(--bg);color:var(--ink);bo
     <div id="tagBox" class="hidden noprint">
       <div class="sub2">Who said what <span class="mute" style="font-weight:400">Play a line, then pick who it really was. With "Remember voices" on, that clip also teaches the server their voice.</span></div>
       <div class="row"><select id="tagFilter"></select>
+        <button class="ghost" id="tagFind" title="Look again for lines that sound like the people you tagged">Find their other lines</button>
         <select id="playRate" title="Playback speed"><option value="1">1x</option><option value="0.85">0.85x</option><option value="0.7">0.7x</option></select>
         <label class="mute" title="Noise reduction and steady volume for listening (the transcript always uses the original)"><input type="checkbox" id="clearAudio" checked> Clearer audio</label>
         <span class="mute" id="tagMsg"></span></div>
       <div id="tagLines"></div>
-      <div class="row"><button class="ghost hidden" id="tagMore">Show more lines</button><span class="mute">The minutes' wording changes only with "Redo minutes"; names update right away.</span></div>
+      <div class="row"><button class="ghost hidden" id="tagMore">Show more lines</button><span class="mute"><span class="tag me" style="font-size:11px;padding:1px 6px;border-radius:8px;background:var(--accent);color:var(--accent-ink)">✓</span> you picked this line's name &nbsp;·&nbsp; <span style="font-size:11px;padding:1px 6px;border-radius:8px;background:var(--chip)">auto</span> filled in from the same voice - check these &nbsp;·&nbsp; no mark = the speaker separation's guess. Names update right away; the minutes' wording with "Redo minutes".</span></div>
     </div>
     <div id="askBox" class="hidden noprint">
       <div class="sub2">Ask about this meeting</div>
@@ -418,16 +419,18 @@ async function followAutotag(id, who) {
     let st;
     try { st = await (await api(`/api/jobs/${id}/autotag`)).json(); } catch (e) { return; }
     if (st.state === "running") {
+      const whose = who ? `${who}'s voice` : "the voices you tagged";
       $("#tagMsg").textContent = st.step === "listening" && st.total
-        ? `Finding ${who}'s voice in the meeting… ${st.done}/${st.total} lines` : `Finding ${who}'s voice in the meeting…`;
+        ? `Finding ${whose} in the meeting… ${st.done}/${st.total} lines` : `Finding ${whose} in the meeting…`;
       continue;
     }
     if (st.state === "error") { $("#tagMsg").textContent = "Auto-tag: " + st.error; return; }
     if (st.state === "done") {
       await refreshAfterTag(-1);
       const prev = $("#tagMsg").dataset.moved | 0;
-      $("#tagMsg").textContent = st.changed ? `${st.changed + prev} more line${st.changed + prev > 1 ? "s" : ""} sound like ${who} - tagged (marked "auto"). Fix any that are wrong.`
-        : prev ? `${prev} more line${prev > 1 ? "s" : ""} in ${who}'s voice tagged (marked "auto"). Fix any that are wrong.` : `No other lines clearly sound like ${who}.`;
+      const n = st.changed + prev, them = who || "the people you tagged";
+      $("#tagMsg").textContent = n ? `${n} more line${n > 1 ? "s" : ""} sound like ${them} - tagged (marked "auto"). Fix any that are wrong.`
+        : `No other lines clearly sound like ${them}.`;
       return;
     }
   }
@@ -448,6 +451,11 @@ async function refreshAfterTag(i) {
   } catch (e) {}
 }
 $("#tagFilter").onchange = () => { tagShown = 200; renderLines(); };
+$("#tagFind").onclick = async () => {
+  try { await api(`/api/jobs/${current}/autotag`, { method: "POST" }); } catch (e) { $("#tagMsg").textContent = e.message; return; }
+  $("#tagMsg").dataset.moved = 0;
+  followAutotag(current, "");
+};
 $("#tagMore").onclick = () => { tagShown += 300; renderLines(); };
 
 async function loadSpeakers(id) {
