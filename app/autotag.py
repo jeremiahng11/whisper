@@ -25,6 +25,9 @@ _running: set[str] = set()
 _job_locks: dict[str, threading.Lock] = {}
 
 
+_STARTED = time.time()                                     # a failure before a redeploy is retried
+
+
 def job_lock(jid: str) -> threading.Lock:
     """One change at a time per meeting (your tags and auto-tagging both read and rewrite the transcript)."""
     with _lock:
@@ -379,7 +382,8 @@ def needs_speakers(job: dict) -> bool:
     opts = job.get("options") or {}
     if job.get("status") != "done" or not opts.get("diarize", settings.diarize) or opts.get("speakers_redone"):
         return False
-    if time.time() - float(opts.get("diarize_failed_at") or 0) < 6 * 3600:   # failed again just now: not every minute
+    failed = float(opts.get("diarize_failed_at") or 0)
+    if failed > _STARTED and time.time() - failed < 6 * 3600:   # failed since this server started: not every minute
         return False
     if not job.get("audio_path") or not os.path.exists(job["audio_path"]):
         return False
