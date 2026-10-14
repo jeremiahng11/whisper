@@ -17,6 +17,41 @@ _wake = threading.Event()
 _stop = threading.Event()
 _thread: threading.Thread | None = None
 current_job: str | None = None
+live_info: dict = {}                # the live recording being transcribed now: {"rid", "until", "received"}
+
+
+def wav_seconds(path) -> float:
+    """Length of a (still growing) WAV from its size: IMA ADPCM (the watch) or PCM."""
+    try:
+        with open(path, "rb") as f:
+            h = f.read(48)
+        size = os.path.getsize(path)
+        fmt = int.from_bytes(h[20:22], "little") if len(h) >= 22 else 1
+        rate = int.from_bytes(h[24:28], "little") or 16000
+        if fmt == 0x11:                             # IMA ADPCM: 256-byte blocks of 505 samples (mono)
+            return max(0.0, (size - 48) / 256 * 505 / rate)
+        ch = int.from_bytes(h[22:24], "little") or 1
+        bits = int.from_bytes(h[34:36], "little") or 16
+        return max(0.0, (size - 44) / (rate * ch * bits / 8))
+    except OSError:
+        return 0.0
+
+
+def progress_info() -> dict | None:
+    """What the transcriber is doing right now, with a percentage (for the web page header)."""
+    cj = current_job
+    if not cj:
+        return None
+    if cj.startswith("live:"):
+        li = dict(live_info)
+        rec = li.get("received") or 0
+        done = li.get("until") or 0
+        return {"kind": "live", "title": cj[5:], "stage": "transcribing while recording",
+                "pct": round(100 * min(1.0, done / rec)) if rec else None,
+                "done_min": round(done / 60, 1), "received_min": round(rec / 60, 1)}
+    j = db.get(cj) or {}
+    return {"kind": "job", "id": cj, "title": j.get("title") or j.get("filename") or cj, "stage": j.get("stage") or j.get("status"),
+            "pct": round(100 * float(j.get("progress") or 0)), "status": j.get("status")}
 
 
 def wake() -> None:
@@ -220,6 +255,8 @@ def live_pass() -> bool:
             state = {}
         global current_job
         current_job = f"live:{rid}"
+        live_info.clear()
+        live_info.update(rid=rid, until=float(state.get("until", 0)), received=wav_seconds(part))
         try:
             did = transcribe.partial(str(part), state, voices.whisper_prompt())
         except Exception as e:

@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.10.0"
+VERSION = "1.10.1"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -1269,6 +1269,7 @@ def health():
         "tts": speech.tts_available(),
         "jobs": db.counts(),
         "running": worker.current_job,
+        "progress": worker.progress_info(),
         "voice_work": [{"id": k, "title": ((db.get(k) or {}).get("title") or (db.get(k) or {}).get("filename") or k), **v}
                        for k, v in autotag.active().items()],
     }

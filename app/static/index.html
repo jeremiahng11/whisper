@@ -465,7 +465,11 @@ async function health() {
     $("#storageWarn").classList.toggle("hidden", h.storage !== "temporary");
     const vw = (h.voice_work || [])[0];
     $("#health").textContent = !h.model_loaded ? "Server starting, loading the speech model…"
-      : h.running ? "Transcribing a recording…"
+      : h.running ? (() => {
+          const p = h.progress || {};
+          if (p.kind === "live") return `Transcribing a live recording… ${p.done_min} of ${p.received_min} min received${p.pct != null ? ` (${p.pct}%)` : ""}`;
+          return `${p.status === "summarizing" ? "Writing the minutes of" : "Transcribing"} ${p.title || "a recording"}… ${p.pct ?? 0}%${p.stage && !/^(transcribing|summarizing)$/.test(p.stage) ? ", " + p.stage : ""}`;
+        })()
       : vw ? `${vw.step === "separating speakers" ? "Separating speakers" : "Checking voices"} in ${vw.title}…`
       : `Ready. ${h.voices || 0} known voice${h.voices === 1 ? "" : "s"}, version ${h.version}`;
     $("#health").title = `${h.model}, minutes by ${h.summary_backend === "none" ? "nobody (off)" : h.summary_model}`;

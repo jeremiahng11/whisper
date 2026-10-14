@@ -1263,3 +1263,18 @@ def test_builtin_fintech_vocabulary(client):
     assert tr["segments"][0]["text"] == "s g q r"
     client.put("/api/vocab", json={"on": ["payments", "tech", "finance"]}, headers=H)
     assert "SGQR" in vocab.terms()
+
+
+def test_progress_in_health(client, tmp_path):
+    from app import worker
+    import struct
+    p = tmp_path / "a.wav"
+    hdr = bytearray(48); hdr[20:22] = (0x11).to_bytes(2, "little"); hdr[24:28] = (16000).to_bytes(4, "little")
+    p.write_bytes(bytes(hdr) + b"\0" * 256 * 3168)          # 3168 blocks x 505 samples = 100 s
+    assert abs(worker.wav_seconds(p) - 100) < 0.5
+    worker.current_job, worker.live_info = "live:ir-x", {"rid": "ir-x", "until": 30.0, "received": 120.0}
+    try:
+        pr = client.get("/api/health").json()["progress"]
+        assert pr["kind"] == "live" and pr["pct"] == 25 and pr["received_min"] == 2.0
+    finally:
+        worker.current_job, worker.live_info = None, {}
