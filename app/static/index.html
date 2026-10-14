@@ -1101,6 +1101,9 @@ async function loadSpeakers(id, opening) {
   // each speaker's longest line (up to 12 s) to listen to
   const longest = {};
   segs.forEach(s => { if (s.speaker && (!longest[s.speaker] || s.end - s.start > longest[s.speaker].end - longest[s.speaker].start)) longest[s.speaker] = s; });
+  segs.forEach(s => (s.also || []).forEach(a => {      // heard only over someone else: play one of those lines
+    if (!sp.some(x => x.label === a && x.lines) && (!longest[a] || s.end - s.start > longest[a].end - longest[a].start)) longest[a] = s;
+  }));
   $("#tagBox").classList.toggle("hidden", !segs.length);
   $("#tagFilter").innerHTML = '<option value="">All lines</option>' + sp.map(s => `<option value="${esc(s.label)}">Only ${esc(s.name || s.label)}</option>`).join("") + '<option value="__q">Only unnamed (?)</option>';
   renderLines();
@@ -1108,7 +1111,7 @@ async function loadSpeakers(id, opening) {
   $("#spkBox").classList.toggle("hidden", !sp.length);
   $("#spkList").innerHTML = sp.map(s => `<div class="spk"><button class="ghost play" data-l="${esc(s.label)}" title="Hear them"${longest[s.label] ? "" : " disabled"}>▶</button><span class="who"><i class="dot" style="background:${spkColor(s.label)}"></i>${esc(s.label)}${s.auto ? '<span class="badge" title="recognised by voice">recognised</span>' : ""}</span>
     <input type="text" data-l="${esc(s.label)}" value="${esc(s.name)}" placeholder="Name">
-    <span class="mute" title="${esc(s.sample)}">${Math.round(s.seconds / 60) || "<1"} min, "${esc(s.sample)}"</span></div>`).join("");
+    <span class="mute" title="${esc(s.sample)}">${s.lines === 0 && s.over_lines ? `Only heard talking over someone else (${s.over_lines} line${s.over_lines > 1 ? "s" : ""}): "${esc(s.sample)}"` : `${Math.round(s.seconds / 60) || "<1"} min, "${esc(s.sample)}"`}</span></div>`).join("");
   document.querySelectorAll("#spkList .play").forEach(b => b.onclick = () => {
     const s = longest[b.dataset.l]; if (s) playClip(b, s.start, Math.min(s.end, s.start + 12));
   });

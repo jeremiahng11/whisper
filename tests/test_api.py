@@ -1278,3 +1278,17 @@ def test_progress_in_health(client, tmp_path):
         assert pr["kind"] == "live" and pr["pct"] == 25 and pr["received_min"] == 2.0
     finally:
         worker.current_job, worker.live_info = None, {}
+
+
+def test_speaker_heard_only_over_others_is_playable(client):
+    import json
+    from app import worker
+    j = upload(client, "dev1-over", 40, "diarize=true&speakers=2")
+    tr = worker.load_transcript(j["id"])
+    tr["segments"][2]["also"] = ["Speaker 9"]
+    worker._write(j["id"], "transcript.json", json.dumps(tr))
+    spk = worker.load_json(j["id"], "speakers.json", {}); spk["Speaker 8"] = {"seconds": 0.4, "embedding": None}
+    worker._write(j["id"], "speakers.json", json.dumps(spk))
+    sp = {s["label"]: s for s in client.get(f"/api/jobs/{j['id']}/speakers", headers=H).json()["speakers"]}
+    assert sp["Speaker 9"]["lines"] == 0 and sp["Speaker 9"]["over_lines"] == 1 and sp["Speaker 9"]["sample"]
+    assert "Speaker 8" not in sp                               # no lines at all and no name: not listed

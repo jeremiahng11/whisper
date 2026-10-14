@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.10.3"
+VERSION = "1.10.4"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -894,9 +894,19 @@ def get_speakers(jid: str):
         if s.get("speaker") and len(s["text"]) > len(sample.get(s["speaker"], "")) and len(s["text"]) < 200:
             sample[s["speaker"]] = s["text"]
     labels = speaker_labels(j)
+    own, over = {}, {}
+    for s in tr.get("segments", []):
+        own[s.get("speaker")] = own.get(s.get("speaker"), 0) + 1
+        for a in s.get("also") or []:
+            over[a] = over.get(a, 0) + 1
+            if a not in sample and len(s["text"]) < 200:        # only heard over someone else: that line
+                sample[a] = s["text"]
+    # nobody's: no line of their own, not over anyone, no name -> not worth a row
+    labels = [lab for lab in labels if own.get(lab) or over.get(lab) or names.get(lab)]
     return {"speakers": [{"label": lab, "name": names.get(lab, ""), "auto": lab in auto,
                           "seconds": (spk.get(lab) or {}).get("seconds", 0), "has_voice": bool((spk.get(lab) or {}).get("embedding")),
-                          "sample": sample.get(lab, "")} for lab in labels]}
+                          "sample": sample.get(lab, ""), "lines": own.get(lab, 0), "over_lines": over.get(lab, 0)}
+                         for lab in labels]}
 
 
 @app.get("/api/voices", dependencies=[Depends(auth)])
