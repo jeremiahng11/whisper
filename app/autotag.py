@@ -348,6 +348,60 @@ def after_transcription(jid: str) -> None:
     start(jid)
 
 
+def merge_same_names(jid: str) -> list[str]:
+    """Two speakers with the same name are one person: their lines, tags and voice prints become one speaker
+    (the one with the most lines). Returns the names that were joined."""
+    with job_lock(jid):
+        job = db.get(jid)
+        tr = worker.load_transcript(jid) or {}
+        if not job:
+            return []
+        segs = tr.get("segments", [])
+        opts = dict(job.get("options") or {})
+        names = dict(opts.get("speaker_names") or {})
+        by: dict[str, list[str]] = {}
+        for lab, n in names.items():
+            if n and n.strip():
+                by.setdefault(n.strip().lower(), []).append(lab)
+        dup = {k: v for k, v in by.items() if len(v) > 1}
+        if not dup:
+            return []
+        lines = {}
+        for s in segs:
+            lines[s.get("speaker")] = lines.get(s.get("speaker"), 0) + 1
+        auto = set(opts.get("speaker_auto") or [])
+        manual = dict(opts.get("manual_lines") or {})
+        merged = dict(opts.get("merged") or {})
+        joined = []
+        for labs in dup.values():
+            keep = max(labs, key=lambda l: (lines.get(l, 0), l not in auto, -int(l.split()[-1]) if l.split()[-1].isdigit() else 0))
+            gone = [l for l in labs if l != keep]
+            for s in segs:
+                if s.get("speaker") in gone:
+                    s["speaker"] = keep
+                if s.get("also"):
+                    a = [keep if x in gone else x for x in s["also"]]
+                    s["also"] = [x for i, x in enumerate(a) if x != s.get("speaker") and x not in a[:i]]
+            for k, v in list(manual.items()):
+                if v in gone:
+                    manual[k] = keep
+            for g, v in list(merged.items()):
+                if v in gone:
+                    merged[g] = keep
+            for g in gone:
+                merged[g] = keep                           # its voice print counts for the kept speaker
+                names.pop(g, None)
+            if not all(l in auto for l in labs):
+                auto.discard(keep)
+            auto -= set(gone)
+            joined.append(names[keep])
+        worker._write(jid, "transcript.json", json.dumps(tr, ensure_ascii=False, indent=1))
+        opts.update(speaker_names=names, speaker_auto=sorted(auto), manual_lines=manual, merged=merged)
+        db.update(jid, options=opts)
+    worker.build_outputs(jid)
+    return joined
+
+
 def accept(jid: str, name: str = "") -> dict:
     """You checked the "auto" lines: they become yours (✓, never changed automatically again) and teach the server
     those voices a little more. name = only that person's lines."""

@@ -819,10 +819,12 @@ async function loadSpeakers(id, opening) {
 }
 $("#spkSave").onclick = async () => {
   const names = {}; document.querySelectorAll("#spkList input").forEach(i => names[i.dataset.l] = i.value.trim());
-  await api(`/api/jobs/${current}/speakers`, { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ names, remember: $("#spkRemember").checked }) });
-  await show(current); $("#spkMsg").textContent = "Saved - minutes updated."; loadVoices();
-  setTimeout(() => $("#spkMsg").textContent = "", 4000);
+  const r = await (await api(`/api/jobs/${current}/speakers`, { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ names, remember: $("#spkRemember").checked }) })).json();
+  await show(current); tab("speakersTab");
+  $("#spkMsg").textContent = (r.joined && r.joined.length ? `Joined into one speaker: ${r.joined.join(", ")}. ` : "") + "Saved, minutes updated."; loadVoices();
+  if (r.joined && r.joined.length) followAutotag(current, r.joined[0]);
+  setTimeout(() => $("#spkMsg").textContent = "", 6000);
 };
 
 // ---------------------------------------------------------------- ask

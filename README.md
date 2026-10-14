@@ -219,6 +219,8 @@ Open a recording on the web page:
 * **Voices lost, tags kept:** if the voices were lost (e.g. `/data` wasn't persistent on an old deploy), the server
   learns them again from the lines you tagged when it starts (`POST /api/voices/relearn` does it on demand).
   `/api/health` shows `voice_prints` - "ok", or why voice prints can't be made.
+* **Same name, one speaker:** giving two speakers the same name in *Who's speaking* (any capitals) and saving joins
+  them: their lines, tags and voice prints become one speaker, and that voice is looked for in the rest of the meeting.
 * **✓ Confirm auto lines:** once you've checked the *auto* lines, one click marks them ✓ (yours - never changed
   automatically again) and adds them to those people's voice prints. Pick a speaker in the filter first to confirm
   only theirs (`POST /api/jobs/{id}/autotag/accept`, `{"name": "..."}` optional).

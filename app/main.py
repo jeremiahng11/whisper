@@ -19,7 +19,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.6.1"
+VERSION = "1.6.2"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -564,11 +564,18 @@ async def name_speakers(jid: str, request: Request):
         else:
             cur.pop(label, None)
         auto.discard(label)
-    opts["speaker_names"], opts["speaker_auto"] = cur, sorted(auto)
-    db.update(jid, options=opts)
+    with autotag.job_lock(jid):                      # an auto-tag run may be saving at the same moment
+        o2 = dict((db.get(jid) or {}).get("options") or opts)
+        o2["speaker_names"], o2["speaker_auto"] = cur, sorted(auto)
+        db.update(jid, options=o2)
+    joined = autotag.merge_same_names(jid)           # the same name twice = one person: join them
     if j["status"] == "done":
         worker.build_outputs(jid)
-    return job_out(db.get(jid))
+        if joined:
+            autotag.start(jid)                       # their joined voice finds more of their lines
+    out = job_out(db.get(jid))
+    out["joined"] = joined
+    return out
 
 
 @app.post("/api/jobs/{jid}/segments/{idx}", dependencies=[Depends(auth)])

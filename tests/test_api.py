@@ -1005,3 +1005,26 @@ def test_confirm_auto_lines_marks_them_yours(client):
     assert r["accepted"] >= 1
     st = client.get(f"/api/jobs/{j['id']}/autotag", headers=H).json()
     assert set(auto) - set(st["auto"]) <= set(st["manual"]) and 0 in st["manual"]
+
+
+def test_same_name_on_two_speakers_joins_them(client):
+    import json
+    from app import worker
+    _only_these_voices()
+    j = upload(client, "dev1-join", 40, "diarize=true&speakers=2")
+    jid = j["id"]
+    tr = worker.load_transcript(jid)
+    for s in tr["segments"]:                               # one person split into Speaker 1 and Speaker 3
+        if 20 <= s["start"] < 30:
+            s["speaker"] = "Speaker 3"
+    worker._write(jid, "transcript.json", json.dumps(tr))
+    labs = sorted({s["speaker"] for s in tr["segments"]})
+    a = next(s["speaker"] for s in tr["segments"] if s["start"] < 10)
+    r = client.post(f"/api/jobs/{jid}/speakers", json={"names": {a: "Priscilla", "Speaker 3": "priscilla"}}, headers=H).json()
+    assert r["joined"] == ["Priscilla"]
+    segs = client.get(f"/api/jobs/{jid}/transcript.json", headers=H).json()["segments"]
+    assert "Speaker 3" not in {s["speaker"] for s in segs}
+    names = client.get(f"/api/jobs/{jid}", headers=H).json()["speaker_names"]
+    assert list(names.values()).count("Priscilla") == 1 and "Speaker 3" not in names
+    sp = [s["label"] for s in client.get(f"/api/jobs/{jid}/speakers", headers=H).json()["speakers"]]
+    assert "Speaker 3" not in sp, sp
