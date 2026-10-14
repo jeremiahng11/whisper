@@ -67,6 +67,17 @@ def status(jid: str) -> dict:
     return st
 
 
+def active(jid: str | None = None):
+    """What the voice work is doing right now: {"step", "done", "total", "minutes"} per meeting (or one meeting)."""
+    with _lock:
+        rows = {k: dict(_state.get(k) or {}) for k in _running}
+    out = {}
+    for k, st in rows.items():
+        out[k] = {"step": st.get("step", "starting"), "done": st.get("done"), "total": st.get("total"),
+                  "minutes": int((time.time() - st.get("since", time.time())) // 60)}
+    return out.get(jid) if jid is not None else out
+
+
 def _set(jid: str, **kw) -> None:
     with _lock:
         _state.setdefault(jid, {}).update(kw)
@@ -305,7 +316,7 @@ def start(jid: str, speakers: bool = False) -> None:
             _state.setdefault(jid, {})["again"] = True
             return
         _running.add(jid)
-        _state[jid] = {"state": "running", "step": "starting"}
+        _state[jid] = {"state": "running", "step": "starting", "since": int(time.time())}
 
     def run():
         try:

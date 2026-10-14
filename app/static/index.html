@@ -32,6 +32,10 @@ tr.job:hover td{background:var(--chip)}
 .chip{display:inline-block;padding:1px 8px;border-radius:10px;background:var(--chip);font-size:12px}
 .chip.done{background:var(--accent);color:var(--accent-ink)}
 .chip.error{background:var(--warn);color:#fff}
+.chip.busy{background:transparent;border:1px solid var(--accent);color:var(--accent);animation:pulse 1.6s ease-in-out infinite}
+.chip.busy::before{content:"";display:inline-block;width:7px;height:7px;margin-right:5px;border-radius:50%;background:var(--accent);vertical-align:1px}
+@keyframes pulse{50%{opacity:.45}}
+@media (prefers-reduced-motion: reduce){.chip.busy{animation:none}}
 .mute{color:var(--mute);font-size:12px}
 #view h1,#view h2,#view h3{margin:18px 0 6px}
 #view h1{font-size:20px}#view h2{font-size:17px}#view h3{font-size:15px}
@@ -214,16 +218,25 @@ async function health() {
       $("#diarLabel").title = h.diarize_installed === false ? "Not installed: rebuild with INSTALL_DIARIZE=1" : "";
     }
     $("#storageWarn").classList.toggle("hidden", h.storage !== "temporary");
-    $("#health").textContent = `${h.model}${h.model_loaded ? "" : " (loading…)"} · summary: ${h.summary_backend === "none" ? "off" : h.summary_model}`;
+    const vw = (h.voice_work || [])[0];
+    $("#health").textContent = `${h.model}${h.model_loaded ? "" : " (loading…)"} · summary: ${h.summary_backend === "none" ? "off" : h.summary_model}`
+      + (h.running ? " · transcribing" : "") + (vw ? ` · working on ${vw.title}: ${vw.step === "separating speakers" ? "separating speakers" : "checking voices"}` : "");
   } catch (e) { $("#health").textContent = "server not reachable"; }
 }
 
+// background work on a finished meeting: speaker separation / voice check
+function voiceWork(w) {
+  if (!w) return "";
+  const what = w.step === "separating speakers" ? `separating speakers · ${w.minutes} min`
+    : w.step === "listening" && w.total ? `checking voices ${w.done}/${w.total}` : "checking voices";
+  return ` <span class="chip busy" title="Working in the background - you can leave this page">${what}</span>`;
+}
 function status(j) {
   if (j.status === "queued") return `<span class="chip">queued${j.queue_position > 1 ? " #" + j.queue_position : ""}</span>`;
   if (j.status === "transcribing" || j.status === "summarizing")
     return `<span class="chip">${esc(j.stage || j.status)} ${Math.round(j.progress * 100)}%</span>`;
   if (j.status === "error") return `<span class="chip error" title="${esc(j.error)}">error</span>`;
-  return `<span class="chip done">done</span>${j.summary_error ? ' <span class="mute">no summary</span>' : ""}`;
+  return `<span class="chip done">done</span>${j.summary_error ? ' <span class="mute">no summary</span>' : ""}${voiceWork(j.voice_work)}`;
 }
 
 async function load() {

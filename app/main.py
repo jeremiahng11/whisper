@@ -19,7 +19,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.5.11"
+VERSION = "1.5.12"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -92,6 +92,7 @@ def job_out(j: dict) -> dict:
         "speakers": (j.get("options") or {}).get("speakers"),
         "speaker_names": (j.get("options") or {}).get("speaker_names") or {},
         "speaker_auto": (j.get("options") or {}).get("speaker_auto") or [],
+        "voice_work": autotag.active(j["id"]),       # speakers / voices being worked on in the background
         "results": {
             "markdown": f"{base}/result.md",
             "text": f"{base}/transcript.txt",
@@ -1037,6 +1038,8 @@ def health():
         "tts": speech.tts_available(),
         "jobs": db.counts(),
         "running": worker.current_job,
+        "voice_work": [{"id": k, "title": ((db.get(k) or {}).get("title") or (db.get(k) or {}).get("filename") or k), **v}
+                       for k, v in autotag.active().items()],
     }
 
 
