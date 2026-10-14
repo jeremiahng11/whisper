@@ -1282,7 +1282,7 @@ async function loadWake() {
   try {
     const m = await (await api("/api/wakeword")).json();
     const wake = m.models.find(x => x.id === "wake"), cmds = m.models.filter(x => x.id !== "wake");
-    $("#wwNow").innerHTML = `<b>"${esc(wake ? wake.label : "?")}"</b> ${m.source === "starter" ? "(the starter - train your own \"Hey Oracle\")" : "(yours" + (m.uploaded_at ? ", uploaded " + when(m.uploaded_at) : "") + ")"}` +
+    $("#wwNow").innerHTML = `<b>"${esc(wake ? wake.label : "?")}"</b> ${m.source === "starter" ? "(the starter set, also built into the watch)" : "(yours" + (m.uploaded_at ? ", uploaded " + when(m.uploaded_at) : "") + ")"}` +
       (cmds.length ? `<br>Commands: ${cmds.map(c => esc(c.label)).join(", ")}` : "<br>No offline commands yet.");
     $("#wwReset").classList.toggle("hidden", m.source === "starter");
   } catch (e) { $("#wwNow").textContent = "Not available on this server version."; }
