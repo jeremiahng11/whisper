@@ -156,7 +156,7 @@ textarea.gl{width:100%;min-height:120px;background:var(--bg);color:var(--ink);bo
 
   <div class="card">
     <strong>Names &amp; terms</strong>
-    <p class="mute">One per line: people, companies, products and jargon. Used to spell them right in transcripts and minutes.</p>
+    <p class="mute">One per line: people, companies, products and jargon. Used to spell them right in transcripts and minutes: words that sound like one of these ("C trip", "Pricilla") get your spelling. Names of known voices below count too, and a name you type for a speaker takes the spelling from here. 🔗 = a name here that also has a remembered voice.</p>
     <textarea class="gl" id="gloss" placeholder="Aleta Planet&#10;SkenPay&#10;San Tan&#10;Coolify"></textarea>
     <div class="row" style="margin-top:6px"><button id="glossSave">Save</button><span class="mute" id="glossMsg"></span></div>
     <div class="sub2">Known voices</div>
@@ -560,18 +560,29 @@ $("#findAll").onclick = async () => {
 };
 
 // ---------------------------------------------------------------- glossary + voices + templates
+let glossLinks = { voices_linked: [] };
 async function loadGlossary() {
-  try { $("#gloss").value = (await (await api("/api/glossary")).json()).text.trim(); } catch (e) {}
+  try { const g = await (await api("/api/glossary")).json(); $("#gloss").value = g.text.trim(); glossLinks = g; } catch (e) {}
+  loadVoices();
 }
 $("#glossSave").onclick = async () => {
-  const t = (await (await api("/api/glossary", { method: "PUT", body: $("#gloss").value })).json()).terms;
-  $("#glossMsg").textContent = `Saved ${t.length} names and terms.`;
+  const r = await (await api("/api/glossary", { method: "PUT", body: $("#gloss").value })).json();
+  $("#glossMsg").textContent = `Saved ${r.terms.length} names and terms.` + (r.meetings ? ` Fixing their spelling in your ${r.meetings} meetings (transcripts and minutes) - takes a moment.` : "");
+  loadGlossary();
 };
 async function loadVoices() {
   try {
     const v = (await (await api("/api/voices")).json()).voices;
-    $("#voices").innerHTML = v.length ? v.map(x => `<span class="chip" style="margin:2px">${esc(x.name)} <a href="#" data-n="${esc(x.name)}" title="Forget this voice" style="color:var(--warn);text-decoration:none">×</a></span>`).join("")
-      : "None yet - name the speakers of a recording to add them.";
+    const linked = new Set((glossLinks.voices_linked || []).map(n => n.toLowerCase()));
+    $("#voices").innerHTML = v.length ? v.map(x => `<span class="chip" style="margin:2px" title="${linked.has(x.name.toLowerCase()) ? "Also in Names &amp; terms - one person: same spelling everywhere, and their voice names their lines" : "Spelled like this in transcripts and minutes too"}">${linked.has(x.name.toLowerCase()) ? "🔗 " : ""}${esc(x.name)} <a href="#" data-n="${esc(x.name)}" title="Forget this voice" style="color:var(--warn);text-decoration:none">×</a></span>`).join("")
+      : 'None yet - name the speakers of a recording to add them. <a href="#" id="relearn">Learn them again from the lines I tagged</a>';
+    const rl = $("#relearn");
+    if (rl) rl.onclick = async e => {
+      e.preventDefault(); rl.textContent = "Learning…";
+      const r = await (await api("/api/voices/relearn", { method: "POST" })).json();
+      if (!r.learned.length) { rl.textContent = "No tagged lines found to learn from"; return; }
+      loadVoices();
+    };
     document.querySelectorAll("#voices a").forEach(a => a.onclick = async e => { e.preventDefault(); if (confirm("Forget " + a.dataset.n + "'s voice?")) { await api(`/api/voices/${encodeURIComponent(a.dataset.n)}`, { method: "DELETE" }); loadVoices(); } });
   } catch (e) {}
 }

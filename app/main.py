@@ -14,12 +14,12 @@ from typing import Optional
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
 
-from . import agenda, autotag, chat, db, redact, render, search, speech, summarize, transcribe, voices, worker
+from . import agenda, autotag, chat, db, redact, render, search, speech, summarize, terms, transcribe, voices, worker
 from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.5.5"
+VERSION = "1.5.6"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -553,7 +553,7 @@ async def name_speakers(jid: str, request: Request):
     auto = set(opts.get("speaker_auto") or [])
     spk = worker.load_json(jid, "speakers.json", {}) or {}
     for label, name in names.items():
-        label, name = str(label)[:40], re.sub(r"\s+", " ", str(name or "")).strip()[:60]
+        label, name = str(label)[:40], terms.spelled(re.sub(r"\s+", " ", str(name or "")).strip()[:60])
         if not re.match(r"^Speaker \d+$", label):
             raise HTTPException(400, f"unknown speaker label {label!r}")
         if name:
@@ -611,7 +611,7 @@ def _tag(jid: str, idx: int, data: dict) -> dict:
     labels = {s.get("speaker") for s in segs if s.get("speaker")} | set(names)
 
     def resolve(name: str, label: str = "") -> str:
-        name = re.sub(r"\s+", " ", str(name or "")).strip()[:60]
+        name = terms.spelled(re.sub(r"\s+", " ", str(name or "")).strip()[:60])   # spelled as in Names & terms
         if name:
             label = next((lab for lab, n in names.items() if n.lower() == name.lower()), "")
             if not label and re.match(r"^Speaker \d+$", name):
@@ -789,10 +789,21 @@ async def restore(request: Request):
     return {"terms_added": len(add), "voices": n}
 
 
+@app.post("/api/voices/relearn", dependencies=[Depends(auth)])
+def relearn_voices():
+    """Learn voices again from the lines you tagged (for names that have no remembered voice)."""
+    return autotag.relearn()
+
+
 @app.get("/api/glossary", dependencies=[Depends(auth)])
 def get_glossary():
     p = settings.glossary_path
-    return {"text": p.read_text(encoding="utf-8") if p.exists() else "", "terms": voices.glossary()}
+    g = voices.glossary()
+    low = {t.lower() for t in g}
+    vs = [v["name"] for v in voices.list_voices()]
+    return {"text": p.read_text(encoding="utf-8") if p.exists() else "", "terms": g,
+            "voices_linked": [n for n in vs if n.lower() in low],      # a name here + a remembered voice
+            "voices_only": [n for n in vs if n.lower() not in low]}    # remembered voices: spelled like this too
 
 
 @app.put("/api/glossary", dependencies=[Depends(auth)])
@@ -805,7 +816,8 @@ async def put_glossary(request: Request):
             raw = str(v.get("text", ""))
     except ValueError:
         pass
-    return {"terms": voices.set_glossary(raw)}
+    t = voices.set_glossary(raw)
+    return {"terms": t, "meetings": worker.refresh_terms_everywhere()}
 
 
 @app.get("/api/search", dependencies=[Depends(auth)])
@@ -1007,6 +1019,7 @@ def health():
         "best_model": summarize.best_model(),
         "redact": settings.redact,
         "voices": len(voices.list_voices()),
+        "voice_prints": ("error: " + transcribe.embed_error) if transcribe.embed_error else "ok",
         "tts": speech.tts_available(),
         "jobs": db.counts(),
         "running": worker.current_job,

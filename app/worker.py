@@ -9,7 +9,7 @@ import traceback
 from dataclasses import asdict
 from pathlib import Path
 
-from . import db, redact, render, search, summarize, transcribe, voices
+from . import db, redact, render, search, summarize, terms, transcribe, voices
 from .config import settings
 
 log = logging.getLogger("worker")
@@ -66,7 +66,11 @@ def build_outputs(jid: str) -> None:
     opts = job.get("options") or {}
     names = render.names_of(job)
     named = render.apply_names(tr, names)
-    _write(jid, "result.md", render.markdown(job, tr, load_summary(jid), job.get("title", "")))
+    known = terms.known_terms()
+    summ = load_summary(jid)
+    if summ:                                        # minutes written before a name/term was added: its spelling
+        summ = "\n".join(terms.fix_text(line, known) for line in summ.split("\n"))
+    _write(jid, "result.md", render.markdown(job, tr, summ, job.get("title", "")))
     _write(jid, "transcript.txt", render.text(named))
     _write(jid, "transcript.srt", render.srt(named))
     raw = load_json(jid, "actions_raw.json")
@@ -80,6 +84,33 @@ def build_outputs(jid: str) -> None:
         search.index(jid, f"{job.get('title', '')}\n{summary}", render.paragraphs(named.get("segments", [])))
     except Exception as e:
         log.warning("search index failed for %s: %s", jid, e)
+
+
+def fix_terms(jid: str) -> int:
+    from . import autotag
+    with autotag.job_lock(jid):                     # a tag being saved writes the same file
+        tr = load_transcript(jid)
+        if not tr:
+            return 0
+        n = terms.fix_transcript(tr)
+        if n:
+            _write(jid, "transcript.json", json.dumps(tr, ensure_ascii=False, indent=1))
+        return n
+
+
+def refresh_terms_everywhere() -> int:
+    """Names & terms changed: fix the spelling in every finished meeting (transcripts and minutes)."""
+    jobs = db.list_jobs(100000, "done")
+
+    def run():
+        for j in jobs:
+            try:
+                fix_terms(j["id"])
+                build_outputs(j["id"])
+            except Exception as e:                  # noqa: BLE001
+                log.warning("names & terms for %s: %s", j["id"], e)
+    threading.Thread(target=run, daemon=True).start()
+    return len(jobs)
 
 
 def run_summary(jid: str) -> None:
@@ -97,7 +128,7 @@ def run_summary(jid: str) -> None:
             render.transcript_for_llm(named), tr.get("language", ""),
             lambda p, s: db.update(jid, progress=round(p, 3), stage=s),
             user_notes=opts.get("notes", ""), template=opts.get("template", "general"), best=best,
-            attendees=opts.get("attendees"), glossary=voices.glossary(),
+            attendees=opts.get("attendees"), glossary=terms.known_terms(),
             flagged=render.flagged_text(named, render.parse_marks(opts.get("notes", ""))),
             meeting_date=meeting_date(job),
         )
@@ -121,6 +152,7 @@ def process(job: dict) -> None:
         opts = dict((db.get(jid) or {}).get("options") or opts)
         opts.pop("resummarize", None)
         db.update(jid, options=opts)
+        fix_terms(jid)                               # Names & terms you added since: into the transcript too
         run_summary(jid)
         build_outputs(jid)
         db.update(jid, status="done", stage="done", progress=1, finished_at=time.time())
@@ -144,6 +176,7 @@ def process(job: dict) -> None:
             s.text = redact.redact(s.text)
     data = asdict(tr)
     spk = data.pop("speakers", {}) or {}
+    terms.fix_transcript(data)                      # mis-heard names & terms get your spelling
     _write(jid, "transcript.json", json.dumps(data, ensure_ascii=False, indent=1))
     _write(jid, "speakers.json", json.dumps(spk))
     opts = db.get(jid).get("options", {})

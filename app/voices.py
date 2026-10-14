@@ -59,7 +59,8 @@ def whisper_prompt(attendees: Optional[list[str]] = None) -> str:
     names = [a for a in (attendees or []) if a]
     if names:
         parts.append("People: " + ", ".join(names[:20]) + ".")
-    terms = glossary()
+    from .terms import known_terms
+    terms = [t for t in known_terms() if t not in names]
     if terms:
         parts.append("Terms: " + ", ".join(terms) + ".")
     return " ".join(parts)[:700]

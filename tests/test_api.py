@@ -929,3 +929,30 @@ def test_voice_check_reports_why_lines_stay_unnamed(client):
     assert r2.status_code == 200
     st = _wait_autotag(client, j["id"])
     assert st["loose"] and st["report"]["loose"]
+
+
+def test_voices_relearned_from_tags_after_they_were_lost(client):
+    from app import autotag, db
+    _only_these_voices()
+    j = upload(client, "dev1-relearn", 40, "diarize=true&speakers=2")
+    client.post(f"/api/jobs/{j['id']}/segments/0", json={"name": "Priscilla"}, headers=H)
+    _wait_autotag(client, j["id"])
+    _only_these_voices()                                   # a redeploy without persistent /data lost them
+    assert not client.get("/api/voices", headers=H).json()["voices"]
+    r = client.post("/api/voices/relearn", headers=H).json()
+    assert "Priscilla" in r["learned"]
+    assert "Priscilla" in [v["name"] for v in client.get("/api/voices", headers=H).json()["voices"]]
+    assert client.post("/api/voices/relearn", headers=H).json()["learned"] == []   # only once
+
+
+def test_names_and_terms_fix_misheard_words(client):
+    from app import terms
+    client.put("/api/glossary", content="CTRIP\nPriscilla\nAleta Planet", headers=H)
+    t = terms.known_terms()
+    assert terms.fix_text("So the C trip dashboard, Pricilla said", t) == "So the CTRIP dashboard, Priscilla said"
+    assert terms.fix_text("the trip was fine, see you", t) == "the trip was fine, see you"
+    assert terms.fix_text("Alita planet pays", t) == "Aleta Planet pays"
+    assert terms.spelled("pricilla") == "Priscilla" and terms.spelled("Speaker 2") == "Speaker 2"
+    tr = {"segments": [{"text": "ask Pricilla about c trip"}]}
+    assert terms.fix_transcript(tr, t) == 1 and tr["segments"][0]["heard"] == "ask Pricilla about c trip"
+    client.put("/api/glossary", content="", headers=H)

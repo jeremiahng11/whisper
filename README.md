@@ -207,6 +207,14 @@ Open a recording on the web page:
   then. Their lines get the name (marked *auto*) instead of *?*. A remembered voice that sounds like someone you
   tagged in that meeting never overrides your tag, and two remembered people with near-identical voices are left
   for you to pick.
+* **Names & terms fix mis-heard words:** after each transcription, on *Redo minutes* and whenever you save Names &
+  terms (all meetings, in the background), words that sound like one of them get your spelling ("C trip" ->
+  CTRIP, "Pricilla" -> Priscilla) in the transcript and minutes; the line keeps what was heard (`heard`). Names of
+  remembered voices count as Names & terms, and a name typed for a speaker takes the spelling from there (🔗 on
+  the web = a name that's in both).
+* **Voices lost, tags kept:** if the voices were lost (e.g. `/data` wasn't persistent on an old deploy), the server
+  learns them again from the lines you tagged when it starts (`POST /api/voices/relearn` does it on demand).
+  `/api/health` shows `voice_prints` - "ok", or why voice prints can't be made.
 * **Voice check line:** under *Who said what* the page shows the last check of that meeting - who it compared
   with, how many lines it named, how many are still unnamed and why (close call between two voices, sounds like
   nobody you've named, too short). *Match more* accepts closer calls for that meeting (`POST /api/jobs/{id}/autotag?loose=true`);

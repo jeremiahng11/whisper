@@ -42,9 +42,11 @@ def stale(job: dict) -> bool:
     """Not yet checked against the voices you have now (and it still has its audio)."""
     if not job or job.get("status") != "done" or not job.get("audio_path") or not os.path.exists(job["audio_path"]):
         return False
-    if voices_signature().startswith("0:"):
+    opts, sig = job.get("options") or {}, voices_signature()
+    if opts.get("recognized_voices") == sig:
         return False
-    return (job.get("options") or {}).get("recognized_voices") != voices_signature()
+    # no remembered voices: still worth one look if you tagged people in this meeting
+    return not sig.startswith("0:") or bool(opts.get("manual_lines"))
 
 
 def status(jid: str) -> dict:
@@ -325,14 +327,56 @@ def after_transcription(jid: str) -> None:
     start(jid)
 
 
+def relearn() -> dict:
+    """Voices lost (e.g. /data wasn't kept on a redeploy) but your tags are still in the meetings: learn each
+    person's voice again from the lines you tagged and the speakers you named. Only for names with no voice now."""
+    have = {n.lower() for n, _, _ in voices._all()}
+    found: dict[str, list] = {}
+    for j in db.list_jobs(100000, "done"):
+        jid, opts = j["id"], j.get("options") or {}
+        names = opts.get("speaker_names") or {}
+        manual = {int(k): v for k, v in (opts.get("manual_lines") or {}).items()}
+        auto = set(opts.get("speaker_auto") or [])
+        if not names:
+            continue
+        tr = worker.load_transcript(jid) or {}
+        segs = tr.get("segments", [])
+        spk = worker.load_json(jid, "speakers.json", {}) or {}
+        cache = worker.load_json(jid, "seg_emb.json", {}) or {}
+        audio = j.get("audio_path")
+        for i, lab in manual.items():
+            who = names.get(lab)
+            if not who or who.lower() in have or i >= len(segs) or segs[i].get("also"):
+                continue
+            e = cache.get(str(i))
+            if e is None and audio and os.path.exists(audio) and segs[i]["end"] - segs[i]["start"] >= 1.2:
+                s = segs[i]
+                e = transcribe.embed_clip(transcribe.load_range(audio, float(s["start"]), min(float(s["end"]), float(s["start"]) + 20)),
+                                          t=float(s["start"]))
+            if e:
+                found.setdefault(who, []).append(e)
+        for lab, who in names.items():                      # whole speakers you named ("Save names")
+            e = (spk.get(lab) or {}).get("embedding")
+            if e and who and who.lower() not in have and lab not in auto:
+                found.setdefault(who, []).append(e)
+    for who, es in found.items():
+        for e in es[:40]:
+            voices.remember(who, e)
+    if found:
+        log.info("re-learned %d voices from your tags: %s", len(found), ", ".join(found))
+    return {"learned": sorted(found), "samples": sum(min(len(v), 40) for v in found.values())}
+
+
 def _sweep() -> None:
     from . import worker as w
+    try:
+        relearn()                                          # voices lost on an old redeploy: back from your tags
+    except Exception as e:                                 # noqa: BLE001
+        log.warning("re-learning voices: %s", e)
     while True:
         time.sleep(60)
         try:
             if w.current_job is not None or db.next_queued() is not None or _running:
-                continue
-            if voices_signature().startswith("0:"):
                 continue
             for j in db.list_jobs(200, "done"):            # newest first, one meeting per minute
                 if stale(j):
