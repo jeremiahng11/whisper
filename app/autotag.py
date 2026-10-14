@@ -9,6 +9,7 @@ Lines you tagged yourself, and lines where two people talk at once, are never ch
 seg_emb.json, so the next tag is quick. GET /api/jobs/{id}/autotag reports progress.
 """
 import json
+import re
 import logging
 import math
 import os
@@ -333,6 +334,8 @@ def start(jid: str, speakers: bool = False, fill: Optional[tuple] = None) -> Non
                     again = _state.get(jid, {}).pop("again", False)
                 if not again:
                     break
+            if speakers and renumber(jid):                 # speakers separated again: 1, 2, 3 ... (no tagging yet)
+                worker.build_outputs(jid)
             _set(jid, state="done", changed=n, at=int(time.time()))
         except Exception as e:                             # noqa: BLE001
             log.warning("auto-tag %s failed: %s", jid, e)
@@ -405,6 +408,60 @@ def fill_gap(jid: str, a: float, b: float) -> int:
     worker.build_outputs(jid)
     log.info("filled %d lines in %s between %.0f and %.0f s", len(new), jid, a, b)
     return len(new)
+
+
+_LAB = re.compile(r"^Speaker (\d+)$")
+
+
+def renumber(jid: str) -> dict:
+    """Speakers numbered 1, 2, 3 ... without gaps (joined or emptied speakers leave holes): every place that holds a
+    label is renamed together - lines, names, tags, voice groups, and "Speaker N" written in the minutes. The order
+    stays the same. Returns {old: new} for the labels that changed."""
+    with job_lock(jid):
+        job = db.get(jid)
+        tr = worker.load_transcript(jid)
+        if not job or not tr:
+            return {}
+        segs = tr.get("segments", [])
+        opts = dict(job.get("options") or {})
+        names = opts.get("speaker_names") or {}
+        merged = opts.get("merged") or {}
+        spk = worker.load_json(jid, "speakers.json", {}) or {}
+        num = lambda l: int(_LAB.match(l).group(1)) if l and _LAB.match(l) else None   # noqa: E731
+        used = {s.get("speaker") for s in segs} | {a for s in segs for a in (s.get("also") or [])}
+        active = sorted({l for l in used | set(names) if num(l) and (l in used or l not in merged)}, key=num)
+        others = sorted({l for l in set(spk) | set(merged) | {s.get("orig") for s in segs} if num(l)} - set(active), key=num)
+        order = active + others
+        m = {old: f"Speaker {i + 1}" for i, old in enumerate(order)}
+        m = {k: v for k, v in m.items() if k != v}
+        if not m:
+            return {}
+        r = lambda l: m.get(l, l)                          # noqa: E731
+        for s in segs:
+            if s.get("speaker"):
+                s["speaker"] = r(s["speaker"])
+            if s.get("orig"):
+                s["orig"] = r(s["orig"])
+            if s.get("also"):
+                s["also"] = [r(a) for a in s["also"]]
+        opts["speaker_names"] = {r(k): v for k, v in names.items()}
+        opts["speaker_auto"] = sorted({r(k) for k in opts.get("speaker_auto") or []})
+        opts["manual_lines"] = {k: r(v) for k, v in (opts.get("manual_lines") or {}).items()}
+        opts["merged"] = {r(k): r(v) for k, v in merged.items()}
+        if opts.get("names_at_summary"):
+            opts["names_at_summary"] = {r(k): v for k, v in opts["names_at_summary"].items()}
+        worker._write(jid, "speakers.json", json.dumps({r(k): v for k, v in spk.items()}))
+        worker._write(jid, "transcript.json", json.dumps(tr, ensure_ascii=False, indent=1))
+        sub = lambda t: re.sub(r"\bSpeaker (\d+)\b", lambda x: m.get(x.group(0), x.group(0)), t)   # noqa: E731
+        p = worker.result_dir(jid) / "summary.md"
+        if p.exists():                                     # "Speaker 15 will send ..." written in the minutes
+            worker._write(jid, "summary.md", sub(p.read_text(encoding="utf-8")))
+        raw = worker.load_json(jid, "actions_raw.json")
+        if raw is not None:
+            worker._write(jid, "actions_raw.json", sub(json.dumps(raw, ensure_ascii=False)))
+        db.update(jid, options=opts)
+    log.info("renumbered speakers in %s: %s", jid, m)
+    return m
 
 
 def merge_same_names(jid: str) -> list[str]:

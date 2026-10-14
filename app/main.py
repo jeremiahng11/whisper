@@ -19,7 +19,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.7.1"
+VERSION = "1.7.2"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -601,6 +601,8 @@ async def name_speakers(jid: str, request: Request):
         o2["speaker_names"], o2["speaker_auto"] = cur, sorted(auto)
         db.update(jid, options=o2)
     joined = autotag.merge_same_names(jid)           # the same name twice = one person: join them
+    if jid not in autotag._running:                  # (a running voice check renumbers when it's done)
+        autotag.renumber(jid)                        # Speaker 1, 2, 3 ... without gaps
     if j["status"] == "done":
         worker.build_outputs(jid)
         if joined:

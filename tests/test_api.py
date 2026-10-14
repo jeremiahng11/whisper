@@ -1110,3 +1110,25 @@ def test_word_fix_also_changes_the_minutes_summary(client):
     md = client.get(f"/api/jobs/{j['id']}/result.md", headers=H).text
     assert "reviewed the DABIN dashboard" in md, md[:400]
     terms.save_corrections({})
+
+
+def test_speakers_renumbered_without_gaps(client):
+    import json
+    from app import autotag, worker, db
+    j = upload(client, "dev1-renum", 40, "diarize=true&speakers=2")
+    jid = j["id"]
+    tr = worker.load_transcript(jid)
+    for s in tr["segments"]:
+        s["speaker"] = {"Speaker 1": "Speaker 5", "Speaker 2": "Speaker 15"}.get(s["speaker"], s["speaker"])
+    worker._write(jid, "transcript.json", json.dumps(tr))
+    worker._write(jid, "summary.md", "### Action items\n- [ ] Speaker 15 - send the plan\n")
+    o = dict(db.get(jid)["options"]); o["speaker_names"] = {"Speaker 5": "James"}; o["manual_lines"] = {"0": "Speaker 5"}
+    db.update(jid, options=o)
+    m = autotag.renumber(jid)
+    assert m["Speaker 5"] == "Speaker 1" and m["Speaker 15"] == "Speaker 2"   # old voice groups move after them
+    segs = worker.load_transcript(jid)["segments"]
+    assert {s["speaker"] for s in segs} == {"Speaker 1", "Speaker 2"}
+    o = db.get(jid)["options"]
+    assert o["speaker_names"] == {"Speaker 1": "James"} and o["manual_lines"] == {"0": "Speaker 1"}
+    assert "Speaker 2 - send the plan" in (worker.result_dir(jid) / "summary.md").read_text()
+    assert autotag.renumber(jid) == {}
