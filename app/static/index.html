@@ -140,7 +140,9 @@ textarea.gl{width:100%;min-height:120px;background:var(--bg);color:var(--ink);bo
         <button class="ghost" id="tagFind" title="Look again for lines that sound like the people you tagged">Find their other lines</button>
         <select id="playRate" title="Playback speed"><option value="1">1x</option><option value="0.85">0.85x</option><option value="0.7">0.7x</option></select>
         <label class="mute" title="Noise reduction and steady volume for listening (the transcript always uses the original)"><input type="checkbox" id="clearAudio" checked> Clearer audio</label>
+        <label class="mute" title="Accept closer calls between voices (more lines filled in, check them)"><input type="checkbox" id="tagLoose"> Match more</label>
         <span class="mute" id="tagMsg"></span></div>
+      <div class="mute" id="tagReport" style="margin:2px 0 8px"></div>
       <div id="tagLines"></div>
       <div class="row"><button class="ghost hidden" id="tagMore">Show more lines</button><span class="mute"><span class="tag me" style="font-size:11px;padding:1px 6px;border-radius:8px;background:var(--accent);color:var(--accent-ink)">✓</span> you picked this line's name &nbsp;·&nbsp; <span style="font-size:11px;padding:1px 6px;border-radius:8px;background:var(--chip)">auto</span> filled in from the same voice - check these &nbsp;·&nbsp; no mark = the speaker separation's guess. Names update right away; the minutes' wording with "Redo minutes".</span></div>
     </div>
@@ -359,9 +361,32 @@ async function tagAlso(sel) {
     refreshAfterTag(i);
   } catch (e) { $("#tagMsg").textContent = "Couldn't save: " + e.message; renderLines(); }
 }
+function tagNamed(label) { return !!(tagSpk.find(x => x.label === label) || {}).name; }
+// the last voice check of this meeting: what it filled in and why the rest is still "?"
+function showReport(st) {
+  const r = st && st.report, el = $("#tagReport");
+  $("#tagLoose").checked = !!(st && st.loose);
+  if (!r) { el.textContent = ""; return; }
+  const when = new Date(r.at * 1000).toLocaleString([], { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+  let t = `Voice check ${when}: `;
+  t += r.people.length ? `compared with ${r.people.slice(0, 6).join(", ")}${r.people.length > 6 ? ` +${r.people.length - 6}` : ""}. ` : "nobody named yet to compare with - tag a line or two per person. ";
+  t += `${r.named_now} line${r.named_now === 1 ? "" : "s"} named by voice`;
+  t += r.unnamed ? `, ${r.unnamed} still unnamed` : ", none left unnamed";
+  const why = [];
+  const close = Object.entries(r.close_to || {}).sort((a, b) => b[1] - a[1]).map(([n, k]) => `${n} (${k})`);
+  if (r.close) why.push(`${r.close} close call${r.close > 1 ? "s" : ""}${close.length ? " - probably " + close.slice(0, 3).join(", ") : ""}${r.loose ? "" : ', try "Match more"'}`);
+  if (r.far) why.push(`${r.far} sound like nobody you've named (a new person? tag one)`);
+  if (r.short) why.push(`${r.short} too short to tell`);
+  el.textContent = t + (why.length ? ". Not filled: " + why.join("; ") + "." : ".");
+}
+$("#tagLoose").onchange = async () => {
+  try { await api(`/api/jobs/${current}/autotag?loose=${$("#tagLoose").checked}`, { method: "POST" }); } catch (e) { $("#tagMsg").textContent = e.message; return; }
+  $("#tagMsg").dataset.moved = 0;
+  followAutotag(current, "");
+};
 function renderLines() {
   const f = $("#tagFilter").value;
-  const rows = tagSegs.map((s, i) => ({ ...s, i })).filter(s => !f || s.speaker === f);
+  const rows = tagSegs.map((s, i) => ({ ...s, i })).filter(s => !f || (f === "__q" ? !tagNamed(s.speaker) && !(s.also || []).length : s.speaker === f));
   $("#tagLines").innerHTML = rows.slice(0, tagShown).map(s => `<div class="line" data-i="${s.i}">
     <button class="ghost play" data-s="${s.start}" data-e="${s.end}" title="Play this line">▶</button>
     <span class="t">${mmss(s.start)}</span>
@@ -424,7 +449,7 @@ async function followAutotag(id, who, known) {
         ? `Finding ${whose} in the meeting… ${st.done}/${st.total} lines` : `Finding ${whose} in the meeting…`;
       continue;
     }
-    if (st.state === "error") { $("#tagMsg").textContent = "Auto-tag: " + st.error; return; }
+    if (st.state === "error") { $("#tagMsg").textContent = "Voice check failed: " + st.error; return; }
     if (st.state === "done") {
       await refreshAfterTag(-1);
       const prev = $("#tagMsg").dataset.moved | 0;
@@ -466,8 +491,10 @@ async function loadSpeakers(id, opening) {
   try {
     const st = await (await api(`/api/jobs/${id}/autotag`)).json();
     tagManual = new Set(st.manual || []); tagAuto = new Set(st.auto || []);
+    showReport(st);
     // voices remembered from other meetings that this one hasn't been checked against yet: name their lines now
     if (!opening) {}
+    else if (st.state === "error") $("#tagMsg").textContent = "Voice check failed: " + st.error;
     else if (st.state === "running") setTimeout(() => followAutotag(id, "", true));
     else if (st.stale) setTimeout(async () => {
       try { await api(`/api/jobs/${id}/autotag`, { method: "POST" }); } catch (e) { return; }
@@ -479,7 +506,7 @@ async function loadSpeakers(id, opening) {
   const longest = {};
   segs.forEach(s => { if (s.speaker && (!longest[s.speaker] || s.end - s.start > longest[s.speaker].end - longest[s.speaker].start)) longest[s.speaker] = s; });
   $("#tagBox").classList.toggle("hidden", !segs.length);
-  $("#tagFilter").innerHTML = '<option value="">All lines</option>' + sp.map(s => `<option value="${esc(s.label)}">Only ${esc(s.name || s.label)}</option>`).join("");
+  $("#tagFilter").innerHTML = '<option value="">All lines</option>' + sp.map(s => `<option value="${esc(s.label)}">Only ${esc(s.name || s.label)}</option>`).join("") + '<option value="__q">Only unnamed (?)</option>';
   renderLines();
   $("#spkBox").classList.toggle("hidden", !sp.length);
   $("#spkList").innerHTML = sp.map(s => `<div class="spk"><button class="ghost play" data-l="${esc(s.label)}" title="Hear them"${longest[s.label] ? "" : " disabled"}>▶</button><span>${esc(s.label)}${s.auto ? '<span class="badge" title="recognised by voice">recognised</span>' : ""}</span>

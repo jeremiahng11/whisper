@@ -915,3 +915,17 @@ def test_new_meeting_is_named_from_remembered_voices(client):
         assert "Wen Hui" in client.get(f"/api/jobs/{b['id']}", headers=H).json()["speaker_names"].values()
     finally:
         settings.autotag_new = False
+
+
+def test_voice_check_reports_why_lines_stay_unnamed(client):
+    _only_these_voices()
+    j = upload(client, "dev1-report", 40, "diarize=true&speakers=2")
+    client.post(f"/api/jobs/{j['id']}/segments/0", json={"name": "Wen Hui"}, headers=H)
+    st = _wait_autotag(client, j["id"])
+    r = st["report"]
+    assert r["lines"] == 8 and "Wen Hui" in r["people"] and not st["loose"]
+    assert r["unnamed"] + r["named_now"] <= r["lines"]
+    r2 = client.post(f"/api/jobs/{j['id']}/autotag?loose=true", headers=H)
+    assert r2.status_code == 200
+    st = _wait_autotag(client, j["id"])
+    assert st["loose"] and st["report"]["loose"]

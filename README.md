@@ -207,6 +207,10 @@ Open a recording on the web page:
   then. Their lines get the name (marked *auto*) instead of *?*. A remembered voice that sounds like someone you
   tagged in that meeting never overrides your tag, and two remembered people with near-identical voices are left
   for you to pick.
+* **Voice check line:** under *Who said what* the page shows the last check of that meeting - who it compared
+  with, how many lines it named, how many are still unnamed and why (close call between two voices, sounds like
+  nobody you've named, too short). *Match more* accepts closer calls for that meeting (`POST /api/jobs/{id}/autotag?loose=true`);
+  *Only unnamed (?)* in the filter lists what's left to tag.
 * **Tag once, the voice follows:** tagging a line names its whole speaker group at once (the speaker separation
   already put that voice's lines together - unless you named that group as someone else yourself). Then a voice
   comparison picks up that person's lines that ended up in other groups. Lines you set show ✓, automatic ones

@@ -19,7 +19,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.5.4"
+VERSION = "1.5.5"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -679,7 +679,7 @@ def _tag(jid: str, idx: int, data: dict) -> dict:
 
 
 @app.post("/api/jobs/{jid}/autotag", dependencies=[Depends(auth)])
-def run_autotag(jid: str):
+def run_autotag(jid: str, loose: Optional[bool] = None):
     """Look again for lines that sound like the people you tagged here or anyone remembered from other meetings."""
     j = _job(jid)
     if j["status"] != "done":
@@ -689,6 +689,11 @@ def run_autotag(jid: str):
     if (not (j.get("options") or {}).get("manual_lines") and not (j.get("options") or {}).get("speaker_names")
             and autotag.voices_signature().startswith("0:")):
         raise HTTPException(400, "tag a line or name a speaker first")
+    if loose is not None:                                  # "Match more": accept closer calls for this meeting
+        with autotag.job_lock(jid):
+            o = dict((db.get(jid) or {}).get("options") or {})
+            o["autotag_loose"] = bool(loose)
+            db.update(jid, options=o)
     autotag.start(jid)
     return autotag.status(jid)
 

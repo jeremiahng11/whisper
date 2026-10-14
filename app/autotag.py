@@ -55,6 +55,8 @@ def status(jid: str) -> dict:
     st["manual"] = sorted(int(k) for k in (opts.get("manual_lines") or {}))
     st["auto"] = sorted(opts.get("auto_lines") or [])
     st["stale"] = stale(j)
+    st["report"] = opts.get("autotag_report")
+    st["loose"] = bool(opts.get("autotag_loose"))
     return st
 
 
@@ -169,9 +171,16 @@ def apply(jid: str) -> int:
             if j2:
                 o2 = dict(j2.get("options") or {})
                 o2["recognized_voices"] = voices_signature()
+                o2["autotag_report"] = {"at": int(time.time()), "lines": len(segs), "named_now": 0, "people": [],
+                                        "unnamed": sum(1 for s in segs if s.get("speaker") not in names),
+                                        "short": 0, "close": 0, "far": 0, "close_to": {}}
                 db.update(jid, options=o2)
         return 0
     thr, margin = settings.autotag_match, settings.autotag_margin
+    if opts.get("autotag_loose"):                          # "Match more" on the web: closer calls are accepted
+        thr, margin = thr - 0.08, 0.0
+    why = {"short": 0, "close": 0, "far": 0}               # why lines were left alone (shown on the web)
+    close_to: dict[str, int] = {}
     # 1. whole groups: the speaker separation often splits one person into two or three groups (noisy room,
     #    long talker). A group whose voice clearly matches a tagged person becomes theirs, all its lines at once.
     group_to: dict[str, str] = {}
@@ -203,6 +212,7 @@ def apply(jid: str) -> int:
             continue
         e = embs.get(str(i))
         if not e:
+            why["short"] += 1
             continue
         sims = sorted(((_cos(e, c), lab) for lab, c in people.items()), reverse=True)
         best, lab = sims[0]
@@ -211,6 +221,11 @@ def apply(jid: str) -> int:
             decide[i] = lab
         else:
             unsure.add(i)
+            if best >= thr:
+                why["close"] += 1
+                close_to[lab] = close_to.get(lab, 0) + 1
+            else:
+                why["far"] += 1
     # write onto the LATEST transcript and settings: you may have tagged more lines while this was running
     changed = 0
     with job_lock(jid):
@@ -260,6 +275,14 @@ def apply(jid: str) -> int:
         opts["speaker_names"] = names2
         opts["speaker_auto"] = sorted(recog)
         opts["recognized_voices"] = voices_signature()
+        unnamed = sum(1 for s in segs if s.get("speaker") not in names2 and not s.get("also"))
+        opts["autotag_report"] = {
+            "at": int(time.time()), "lines": len(segs), "named_now": len(decide), "unnamed": unnamed,
+            "short": why["short"], "close": why["close"], "far": why["far"],
+            "close_to": {(lab[6:] if lab.startswith("voice:") else names2.get(lab, lab)): n for lab, n in close_to.items()},
+            "people": sorted({(lab[6:] if lab.startswith("voice:") else names2.get(lab, lab)) for lab in people}),
+            "loose": bool(opts.get("autotag_loose")),
+        }
         opts["auto_lines"] = sorted(auto - manual)
         db.update(jid, options=opts)
         worker.build_outputs(jid)
