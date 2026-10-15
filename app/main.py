@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.11.3"
+VERSION = "1.11.4"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -609,11 +609,18 @@ async def name_speakers(jid: str, request: Request):
     auto = set(opts.get("speaker_auto") or [])
     spk = worker.load_json(jid, "speakers.json", {}) or {}
     tr0 = worker.load_transcript(jid) or {}
+    was = data.get("was") if isinstance(data.get("was"), dict) else {}
+    skipped = []
     for label, name in names.items():
         label, name = str(label)[:40], terms.spelled(re.sub(r"\s+", " ", str(name or "")).strip()[:60])
         if not re.match(r"^Speaker \d+$", label):
             raise HTTPException(400, f"unknown speaker label {label!r}")
         old = cur.get(label, "")
+        # the page sends what it showed for this speaker ("was"): if the speakers were renumbered or joined since
+        # (another save, a voice check), this label is someone else now - don't rename or clear the wrong person
+        if label in was and (old or "").lower() != (str(was[label] or "")).strip().lower() and name.lower() != old.lower():
+            skipped.append(label)
+            continue
         if old and old.lower() != name.lower():          # "that's not James": James's samples from these lines go
             lines = [i for i, s in enumerate(tr0.get("segments", [])) if s.get("speaker") == label]
             people.unlearn(old, jid, lines + [-1])       # (-1 = the whole speaker's voice print)
@@ -637,6 +644,7 @@ async def name_speakers(jid: str, request: Request):
             autotag.start(jid)                       # their joined voice finds more of their lines
     out = job_out(db.get(jid))
     out["joined"] = joined
+    out["skipped"] = skipped
     return out
 
 

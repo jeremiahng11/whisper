@@ -1127,11 +1127,13 @@ async function loadSpeakers(id, opening) {
   renderLines();
   decorateMinutes();
   $("#spkBox").classList.toggle("hidden", !sp.length);
-  const typing = {};                                 // names typed but not saved yet survive a refresh
-  document.querySelectorAll("#spkList input").forEach(i => { if (i.value.trim() !== (i.dataset.was || "")) typing[i.dataset.l] = i.value; });
-  sp.forEach(s => { if (typing[s.label] !== undefined) s.typed = typing[s.label]; });
+  // names typed but not saved yet survive a refresh - kept by the speaker's own longest line, not the label: a
+  // renumber (after a save or a voice check) gives labels to other people, and the name must stay with its person
+  const typing = {}, keyOf = lab => longest[lab] ? String(Math.round(longest[lab].start * 10)) : "";
+  document.querySelectorAll("#spkList input").forEach(i => { if (i.value.trim() !== (i.dataset.was || "") && i.dataset.k) typing[i.dataset.k] = i.value; });
+  sp.forEach(s => { const k = keyOf(s.label); if (k && typing[k] !== undefined) s.typed = typing[k]; });
   $("#spkList").innerHTML = sp.map(s => `<div class="spk"><button class="ghost play" data-l="${esc(s.label)}" title="Hear them"${longest[s.label] ? "" : " disabled"}>▶</button><span class="who"><i class="dot" style="background:${spkColor(s.label)}"></i>${esc(s.label)}${s.auto ? '<span class="badge" title="recognised by voice">recognised</span>' : ""}</span>
-    <input type="text" data-l="${esc(s.label)}" data-was="${esc(s.name)}" value="${esc(s.typed ?? s.name)}" placeholder="Name">
+    <input type="text" data-l="${esc(s.label)}" data-k="${keyOf(s.label)}" data-was="${esc(s.name)}" value="${esc(s.typed ?? s.name)}" placeholder="Name">
     <span class="mute" title="${esc(s.sample)}">${s.lines === 0 && s.over_lines ? `Only heard talking over someone else (${s.over_lines} line${s.over_lines > 1 ? "s" : ""}): "${esc(s.sample)}"` : `${Math.round(s.seconds / 60) || "<1"} min, "${esc(s.sample)}"`}</span></div>`).join("");
   document.querySelectorAll("#spkList .play").forEach(b => b.onclick = () => {
     const s = longest[b.dataset.l]; if (s) playClip(b, s.start, Math.min(s.end, s.start + 12));
@@ -1149,7 +1151,12 @@ async function saveOneName(inp) {
   $("#spkMsg").textContent = "Saving…";
   try {
     const r = await (await api(`/api/jobs/${id}/speakers`, { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ names: { [lab]: v }, remember: $("#spkRemember").checked }) })).json();
+      body: JSON.stringify({ names: { [lab]: v }, was: { [lab]: inp.dataset.was || "" }, remember: $("#spkRemember").checked }) })).json();
+    if ((r.skipped || []).includes(lab)) {           // the speakers were renumbered meanwhile: show the new list
+      $("#spkMsg").textContent = "The speaker list changed while you typed - please enter the name again.";
+      await refreshAfterTag(-1);
+      return;
+    }
     inp.dataset.was = v;
     const sp = tagSpk.find(x => x.label === lab); if (sp) sp.name = v;
     $("#spkMsg").textContent = r.joined && r.joined.length ? `Joined into one speaker: ${r.joined.join(", ")}.` : `Saved: ${lab} is ${v || "unnamed"}.`;
@@ -1158,9 +1165,15 @@ async function saveOneName(inp) {
   } catch (e) { $("#spkMsg").textContent = "Couldn't save: " + e.message; }
 }
 $("#spkSave").onclick = async () => {
-  const names = {}; document.querySelectorAll("#spkList input").forEach(i => names[i.dataset.l] = i.value.trim());
+  // only the names you changed, each with what the page showed - a stale label (renumbered by an earlier save that
+  // is still finishing) is skipped by the server instead of renaming / clearing someone else
+  await new Promise(r => setTimeout(r, 300));       // let a save started by leaving the box go first
+  const names = {}, was = {};
+  document.querySelectorAll("#spkList input").forEach(i => {
+    if (i.value.trim() !== (i.dataset.was || "")) { names[i.dataset.l] = i.value.trim(); was[i.dataset.l] = i.dataset.was || ""; }
+  });
   const r = await (await api(`/api/jobs/${current}/speakers`, { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ names, remember: $("#spkRemember").checked }) })).json();
+    body: JSON.stringify({ names, was, remember: $("#spkRemember").checked }) })).json();
   await show(current); tab("speakersTab");
   $("#spkMsg").textContent = (r.joined && r.joined.length ? `Joined into one speaker: ${r.joined.join(", ")}. ` : "") + "Saved, minutes updated."; loadVoices();
   if (r.joined && r.joined.length) followAutotag(current, r.joined[0]);

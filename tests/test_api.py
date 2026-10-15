@@ -1395,3 +1395,22 @@ def test_wakeword_voice_samples(client):
     assert sorted(n.split("/")[0] for n in z.namelist()) == ["stop_recording", "wake", "wake", "wake"]
     assert client.delete("/api/wakeword/samples?phrase=wake", headers=H).json()["samples"]["wake"] == 0
     assert client.delete("/api/wakeword/samples", headers=H).json()["total"] == 0
+
+
+def test_name_save_with_stale_label_is_skipped(client):
+    """A save made with the labels the page showed before a renumber must not rename (or clear) someone else."""
+    from app import db
+    _only_these_voices()
+    j = upload(client, "dev1-stale", 40, "diarize=true&speakers=2")
+    jid = j["id"]
+    _wait_autotag(client, jid)
+    names0 = dict(db.get(jid)["options"].get("speaker_names") or {})
+    r = client.post(f"/api/jobs/{jid}/speakers", json={"names": {"Speaker 2": "Tina"}, "was": {"Speaker 2": names0.get("Speaker 2", "")}},
+                    headers=H).json()
+    assert r["skipped"] == [] and db.get(jid)["options"]["speaker_names"]["Speaker 2"] == "Tina"
+    # the page still thinks Speaker 2 is unnamed and sends "" for it: Tina must stay
+    r = client.post(f"/api/jobs/{jid}/speakers", json={"names": {"Speaker 2": ""}, "was": {"Speaker 2": ""}}, headers=H).json()
+    assert r["skipped"] == ["Speaker 2"] and db.get(jid)["options"]["speaker_names"]["Speaker 2"] == "Tina"
+    # same name again is fine (idempotent)
+    r = client.post(f"/api/jobs/{jid}/speakers", json={"names": {"Speaker 2": "TINA"}, "was": {"Speaker 2": ""}}, headers=H).json()
+    assert db.get(jid)["options"]["speaker_names"]["Speaker 2"].lower() == "tina"
