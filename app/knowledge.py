@@ -333,6 +333,10 @@ def _sweep() -> None:
                         busy = True
                         break
                 if not busy:
+                    from . import watchlm
+                    if watchlm.nightly(facts()):
+                        busy = True
+                if not busy:
                     from . import sources
                     for x in sources.listing():      # a new source, or a web page due for its daily check
                         if sources.due(x):

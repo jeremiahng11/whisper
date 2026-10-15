@@ -368,6 +368,7 @@ owners, dates, budgets, terms, and who people are. In the background it reads on
   as tokens) on all the facts, here on this server: plain numpy, nothing extra to install, low priority on half the CPU
   cores (`WATCHAI_THREADS`, longest run `WATCHAI_MINUTES`, default 120). The result shows how many questions it
   answers right, including ones worded in a way it never saw. The watch downloads `GET /api/watch/model/file`.
+  It also trains again by itself between 02:00 and 05:00 when the facts changed (`WATCHAI_NIGHTLY=0`: only by hand).
 
 | | |
 |---|---|

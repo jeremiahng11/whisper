@@ -53,6 +53,7 @@ class Settings:
     autotag_sweep: bool = _bool("AUTOTAG_SWEEP", True)
     people_sweep: bool = _bool("PEOPLE_SWEEP", True)
     watchai_threads: int = int(os.getenv("WATCHAI_THREADS", "0"))    # CPU threads for training the watch AI (0 = half)
+    watchai_nightly: bool = _bool("WATCHAI_NIGHTLY", True)   # retrain the watch model at night when facts changed
     watchai_minutes: float = float(os.getenv("WATCHAI_MINUTES", "120"))  # longest a training run may take
     knowledge_sweep: bool = _bool("KNOWLEDGE_SWEEP", True)   # learn facts from new meetings in the background
     vocab_packs: str = os.getenv("VOCAB_PACKS", "all")       # built-in vocabularies: payments,tech,finance | none

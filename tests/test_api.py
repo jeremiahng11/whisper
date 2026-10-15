@@ -1549,6 +1549,8 @@ def test_watch_model_trains_exports_and_serves(client, tmp_path):
     assert W.detok(W.words("ships on 1 December 2026 - V2-ready.")) == "ships on 1 December 2026 \u2013 V2-ready."
     raw = (tmp_path / "model.owl").read_bytes()
     assert raw[:4] == b"OWL1" and int.from_bytes(raw[4:8], "little") % 4 == 0   # floats stay 4-byte aligned for the watch
+    assert rep["facts_sig"] == watchlm.facts_sig(facts) and ds["sig"] == rep["facts_sig"]
+    assert watchlm.facts_sig(facts[:-1]) != rep["facts_sig"]
     # the API: nothing yet -> 404; too few facts -> 400
     r = client.get("/api/watch/model", headers=H).json()
     assert "training" in r and "status" in r

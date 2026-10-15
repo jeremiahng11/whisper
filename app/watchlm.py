@@ -59,7 +59,13 @@ def make_dataset(facts: list[dict], seed: int = 0) -> dict:
             train.append([q, f["a"]])
     for q in OFF_TOPIC:
         train.append([q, DONT_KNOW])
-    return {"train": train, "test": test, "facts": len(facts)}
+    return {"train": train, "test": test, "facts": len(facts), "sig": facts_sig(facts)}
+
+
+def facts_sig(facts: list[dict]) -> str:
+    """Changes when a question or answer does: the nightly run only trains when there is something new."""
+    rows = sorted([f["q"], f["a"], sorted(f.get("alts") or [])] for f in facts)
+    return hashlib.sha1(json.dumps(rows, ensure_ascii=False).encode()).hexdigest()[:12]
 
 
 # ---------------------------------------------------------------- the training process
@@ -142,7 +148,7 @@ def train(out: Path, max_minutes: float = 120, max_epochs: int = 200, seed: int 
     size = W.export(tmp, q8, cfg, vocab, meta)
     ver = hashlib.sha1(tmp.read_bytes()).hexdigest()[:12]
     tmp.replace(out / "model.owl")
-    report.update(version=ver, size=size, config=cfg, made=meta["made"])
+    report.update(version=ver, size=size, config=cfg, made=meta["made"], facts_sig=ds.get("sig", ""))
     (out / "report.json").write_text(json.dumps(report, ensure_ascii=False))
     _status(out, state="done", step=step, steps=total, loss=report["loss"])
     return report
@@ -199,6 +205,24 @@ def start(facts: list[dict]) -> dict:
 def stop() -> None:
     if _proc is not None and _proc.poll() is None:
         _proc.terminate()
+
+
+def nightly(facts: list[dict]) -> bool:
+    """Called by the knowledge sweep: between 02:00 and 05:00 server time, train again if the facts changed since
+    the last model (WATCHAI_NIGHTLY=0 turns it off). True if it started."""
+    if not settings.watchai_nightly or not 2 <= time.localtime().tm_hour < 5 or len(facts) < 5:
+        return False
+    st = state()
+    if st["training"]:
+        return False
+    if st["model"] and st["model"].get("facts_sig") == facts_sig(facts):
+        return False
+    last = (st.get("status") or {}).get("at") or 0
+    if time.time() - last < 6 * 3600 and (st.get("status") or {}).get("state") in ("error", "stopped"):
+        return False                                  # it failed tonight already: not again and again
+    log.info("nightly watch AI training: the knowledge changed")
+    start(facts)
+    return True
 
 
 def model_file() -> Path | None:
