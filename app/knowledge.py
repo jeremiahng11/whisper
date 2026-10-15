@@ -10,7 +10,10 @@ What uses it:
 - The watch answer pack (watchpack.py): ~150 short spoken questions the watch can answer offline.
 - The watch's own small AI model (watchlm.py): trained on these facts and their other wordings.
 
-Kept in DATA_DIR/knowledge/ (meetings/<job id>.json per meeting, kb.json merged).
+Also learned from your own sources (sources.py): web pages (a whole site section if you like), product sheets,
+price lists, FAQs - PDF, Word, text or pasted. Meeting facts win over a source's facts for the same question.
+
+Kept in DATA_DIR/knowledge/ (meetings/<job id>.json per meeting, sources/, kb.json merged).
 """
 import hashlib
 import json
@@ -24,7 +27,7 @@ from . import db, summarize, worker
 from .config import settings
 
 log = logging.getLogger("knowledge")
-KINDS = ("decision", "action", "date", "fact", "person", "term", "number")
+KINDS = ("decision", "action", "date", "fact", "person", "term", "number", "product", "price", "policy")
 MAX_PER_MEETING = 25
 _lock = threading.RLock()
 status = {"state": "idle", "done": 0, "total": 0, "error": "", "updated": 0.0}
@@ -42,6 +45,23 @@ Meeting: "{title}" on {date}.
 Minutes:
 \"\"\"
 {minutes}
+\"\"\""""
+
+
+DOC_PROMPT = """From this company document, write the facts someone in the company may later ask about:
+products and what they do, prices, specifications, policies, warranty, contacts, opening hours, how-tos.
+Return ONLY a JSON array (at most {n} items) of objects with these keys:
+  "q": a short question a person would say out loud (3-8 words, plain words, no symbols), e.g. "How much is the Round watch",
+  "a": the answer in one short sentence (at most 25 words), with the names, numbers and prices from the document,
+  "kind": one of product, price, policy, fact, date, person, term, number,
+  "topic": 1-4 words naming what it is about (e.g. the product name),
+  "alts": 2-3 other ways to ask the same question (short).
+Only facts clearly stated in the document; skip menus, cookie notices and legal boilerplate.
+Source: "{title}" ({where}).
+
+Document:
+\"\"\"
+{text}
 \"\"\""""
 
 
@@ -168,6 +188,9 @@ def rebuild() -> list[dict]:
                 k = _norm(f["q"])
                 if k not in merged or (f.get("date") or "") >= (merged[k].get("date") or ""):
                     merged[k] = f
+        from . import sources
+        for f in sources.all_facts():                # your documents and pages: meetings win for the same question
+            merged.setdefault(_norm(f["q"]), f)
         for f in _people_facts():
             merged.setdefault(_norm(f["q"]), f)
         ov = overrides()
@@ -255,8 +278,9 @@ def summary() -> dict:
     kinds: dict[str, int] = {}
     for f in fs:
         kinds[f["kind"]] = kinds.get(f["kind"], 0) + 1
+    from . import sources
     learned = len(list((kdir() / "meetings").glob("*.json")))
-    return {"facts": len(fs), "kinds": kinds, "meetings_read": learned, **status}
+    return {"facts": len(fs), "kinds": kinds, "meetings_read": learned, "sources": len(sources.listing()), **status}
 
 
 def learn_all(force: bool = False) -> None:
@@ -266,14 +290,23 @@ def learn_all(force: bool = False) -> None:
             return
         status.update(state="learning", done=0, error="")
     try:
+        from . import sources
         todo = [j for j in db.list_jobs(100000, "done") if force or needs_update(j)]
-        status["total"] = len(todo)
+        srcs = [x["id"] for x in sources.listing() if force or sources.due(x)]
+        status["total"] = len(todo) + len(srcs)
         for j in todo:
             try:
                 learn_meeting(j["id"])
             except Exception as e:                  # noqa: BLE001 - one bad meeting must not stop the rest
                 status["error"] = summarize.explain_llm_error(e)
                 log.warning("knowledge: %s: %s", j["id"], e)
+            status["done"] += 1
+        for sid in srcs:
+            try:
+                sources.learn(sid, force)
+            except Exception as e:                  # noqa: BLE001
+                status["error"] = str(e)[:300]
+                log.warning("knowledge source %s: %s", sid, e)
             status["done"] += 1
         rebuild()
     finally:
@@ -292,11 +325,20 @@ def _sweep() -> None:
     while True:
         try:
             if summarize.enabled() and worker.current_job is None and db.next_queued() is None and status["state"] == "idle":
+                busy = False
                 for j in db.list_jobs(200, "done"):  # one new or changed meeting per pass: keep the server free
                     if needs_update(j):
                         log.info("learning facts from %s", j["id"])
                         learn_meeting(j["id"])
+                        busy = True
                         break
+                if not busy:
+                    from . import sources
+                    for x in sources.listing():      # a new source, or a web page due for its daily check
+                        if sources.due(x):
+                            log.info("learning facts from source %s", x["id"])
+                            sources.learn(x["id"])
+                            break
         except Exception as e:                      # noqa: BLE001
             log.warning("knowledge sweep: %s", e)
         time.sleep(150)

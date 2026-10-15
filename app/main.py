@@ -15,12 +15,12 @@ from typing import Optional
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse, FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
 
-from . import agenda, autotag, chat, db, dynamics, knowledge, login, watchlm, watchpack, people, vocab, redact, render, search, speech, summarize, terms, transcribe, voices, wakeword, worker
+from . import agenda, autotag, chat, db, dynamics, knowledge, login, sources, watchlm, watchpack, people, vocab, redact, render, search, speech, summarize, terms, transcribe, voices, wakeword, worker
 from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.12.0"
+VERSION = "1.12.1"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -814,6 +814,65 @@ async def learn_knowledge(request: Request):
     return {"started": started, **knowledge.summary()}
 
 
+def _learn_source_bg(sid: str, force: bool = False) -> None:
+    def run():
+        try:
+            sources.learn(sid, force)
+        except Exception as e:                       # noqa: BLE001 - shown on the source (state "error")
+            log.warning("source %s: %s", sid, e)
+    if summarize.enabled():
+        threading.Thread(target=run, daemon=True).start()
+
+
+@app.get("/api/knowledge/sources", dependencies=[Depends(auth)])
+def list_sources():
+    """Your web pages, files and texts the knowledge base learns from."""
+    return {"items": sources.listing()}
+
+
+@app.post("/api/knowledge/sources", dependencies=[Depends(auth)], status_code=201)
+async def add_source(request: Request):
+    """{"url": "https://...", "crawl": 20} (the page + up to 20 more under it) or {"text": "...", "title": ""};
+    or a file (PDF, Word, text, Markdown, CSV, HTML) as multipart field "file". Read by the AI in the background."""
+    ctype = request.headers.get("content-type", "")
+    try:
+        if ctype.startswith("multipart/"):
+            form = await request.form()
+            f = form.get("file")
+            if not f or not hasattr(f, "read"):
+                raise ValueError("send the file as the field 'file'")
+            data = await f.read()
+            if len(data) > 30 * 1024 * 1024:
+                raise ValueError("files up to 30 MB")
+            m = sources.add("file", str(form.get("title") or ""), filename=f.filename or "upload.txt", data=data)
+        else:
+            d = await request.json()
+            if d.get("url"):
+                m = sources.add("url", str(d.get("title") or ""), url=str(d["url"]), crawl=int(d.get("crawl") or 0))
+            else:
+                m = sources.add("text", str(d.get("title") or ""), text=str(d.get("text") or ""))
+    except (ValueError, TypeError) as e:
+        raise HTTPException(400, str(e))
+    _learn_source_bg(m["id"])
+    return {k: v for k, v in m.items() if k != "facts"}
+
+
+@app.delete("/api/knowledge/sources/{sid}", dependencies=[Depends(auth)])
+def delete_source(sid: str):
+    if not sources.remove(sid):
+        raise HTTPException(404, "no such source")
+    return {"deleted": sid}
+
+
+@app.post("/api/knowledge/sources/{sid}/refresh", dependencies=[Depends(auth)], status_code=202)
+def refresh_source(sid: str):
+    """Fetch / read it again now (the AI re-reads it even if the text is the same)."""
+    if not sources.get(sid):
+        raise HTTPException(404, "no such source")
+    _learn_source_bg(sid, True)
+    return {"started": summarize.enabled()}
+
+
 @app.put("/api/knowledge/{fid}", dependencies=[Depends(auth)])
 async def fix_fact(fid: str, request: Request):
     """{"a": "the right answer"} or {"hidden": true} (wrong or private fact) or {} (back to what the AI read)."""
@@ -828,9 +887,16 @@ async def fix_fact(fid: str, request: Request):
 
 
 @app.get("/api/watch/pack", dependencies=[Depends(auth)])
-def watch_pack(limit: int = watchpack.MAX_ITEMS):
-    """The watch's offline answers: {"version", "count", "items": [{"id", "q", "say": [phrases], "a", ...}]}."""
-    return watchpack.build(max(1, min(limit, 300)))
+def watch_pack(limit: int = watchpack.MAX_ITEMS, extra: bool = False):
+    """The watch's offline answers: {"version", "count", "items": [{"id", "q", "say": [phrases], "a", ...}]};
+    extra=1 also lists more questions (no answers) for the watch's own model: "extra": [{"id", "q", "say"}]."""
+    return watchpack.build(max(1, min(limit, 300)), extra)
+
+
+@app.get("/api/watch/speech", dependencies=[Depends(auth)])
+def watch_speech_model():
+    """The watch's offline speech model (Espressif MultiNet7 English, ~2.7 MB): hears the pack's questions."""
+    return FileResponse(Path(__file__).parent / "watch_files" / "mn7_en.srm", media_type="application/octet-stream")
 
 
 @app.get("/api/watch/model", dependencies=[Depends(auth)])

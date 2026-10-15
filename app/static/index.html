@@ -437,6 +437,11 @@ ul.replies{margin:4px 0;padding-left:20px;font-size:13.5px}
         <div id="kbNow" class="mute">…</div>
         <div class="row" style="margin-top:8px"><button class="ghost" id="kbLearn">Learn from meetings now</button><input id="kbFind" placeholder="Find a fact…" style="flex:1;max-width:260px"><span class="mute" id="kbMsg"></span></div>
         <div id="kbList" style="margin-top:8px;max-height:320px;overflow:auto"></div>
+        <div class="sub2" style="margin-top:14px">Sources (besides your meetings)</div>
+        <p class="mute" style="margin:0 0 6px">Your website, product pages, price lists, FAQs. Web pages are checked again every day.</p>
+        <div class="row"><input id="srcUrl" placeholder="https://your-site.com/products/" style="flex:1;min-width:200px"><label class="mute">+ pages under it <input id="srcCrawl" type="number" min="0" max="60" value="0" style="width:56px"></label><button class="ghost" id="srcAddUrl">Add page</button></div>
+        <div class="row" style="margin-top:6px"><input type="file" id="srcFile" accept=".pdf,.docx,.txt,.md,.csv,.html,.htm" class="hidden"><button class="ghost" id="srcAddFile">Add a file (PDF, Word, text)</button><button class="ghost" id="srcPaste">Paste text</button><span class="mute" id="srcMsg"></span></div>
+        <div id="srcList" style="margin-top:6px"></div>
         <div id="wmNow" class="mute" style="margin-top:12px">…</div>
         <div class="row" style="margin-top:8px"><button id="wmTrain">Build watch AI</button><button class="danger hidden" id="wmStop">Stop</button><a class="hidden" id="wmFile" href="#">Download model</a><span class="mute" id="wmMsg"></span></div>
       </div>
@@ -1338,7 +1343,7 @@ async function loadKb() {
     const k = await (await api("/api/knowledge?limit=300" + (q ? "&q=" + encodeURIComponent(q) : ""))).json();
     const kinds = Object.entries(k.kinds || {}).map(([a, n]) => `${n} ${a}${n > 1 ? "s" : ""}`).join(", ");
     const pack = await (await api("/api/watch/pack")).json();
-    $("#kbNow").innerHTML = `<b>${k.facts}</b> facts from ${k.meetings_read} meetings${kinds ? " (" + esc(kinds) + ")" : ""}. ` +
+    $("#kbNow").innerHTML = `<b>${k.facts}</b> facts from ${k.meetings_read} meetings${k.sources ? " and " + k.sources + " sources" : ""}${kinds ? " (" + esc(kinds) + ")" : ""}. ` +
       `The watch can answer <b>${pack.count}</b> of them offline.` +
       (k.state === "learning" ? `<br>Reading meetings… ${k.done} of ${k.total}` : "") + (k.error ? `<br>Last problem: ${esc(k.error)}` : "");
     $("#kbList").innerHTML = k.items.map(f => `<div class="row" style="gap:6px;align-items:flex-start;padding:4px 0;border-bottom:1px solid var(--line,#eee)" data-id="${f.id}">
@@ -1366,6 +1371,30 @@ async function loadKb() {
     if (w.training || k.state === "learning") kbTimer = setTimeout(loadKb, 5000);
   } catch (e) { $("#kbNow").textContent = "Not available on this server version."; }
 }
+async function loadSources() {
+  try {
+    const r = await (await api("/api/knowledge/sources")).json();
+    $("#srcList").innerHTML = r.items.map(x => `<div class="row" style="gap:6px;padding:3px 0" data-id="${x.id}">
+      <div style="flex:1">${x.kind === "url" ? `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.title)}</a>` : esc(x.title)}
+      <span class="mute"> · ${x.state === "reading" ? "reading…" : x.state === "new" ? "waiting" : x.state === "error" ? "problem: " + esc(x.error) : x.facts + " facts"}${x.pages ? " · " + x.pages + " pages" : ""}</span></div>
+      <button class="ghost srcRe" style="padding:2px 8px">Read again</button><button class="ghost srcDel" style="padding:2px 8px">Remove</button></div>`).join("") || '<span class="mute">None yet.</span>';
+    document.querySelectorAll(".srcRe").forEach(b => b.onclick = async () => { await api(`/api/knowledge/sources/${b.parentNode.dataset.id}/refresh`, { method: "POST" }); setTimeout(loadSources, 800); });
+    document.querySelectorAll(".srcDel").forEach(b => b.onclick = async () => { if (!confirm("Remove this source and its facts?")) return; await api("/api/knowledge/sources/" + b.parentNode.dataset.id, { method: "DELETE" }); loadSources(); loadKb(); });
+    if (r.items.some(x => x.state === "reading" || x.state === "new")) setTimeout(() => { loadSources(); loadKb(); }, 5000);
+  } catch (e) { $("#srcList").textContent = ""; }
+}
+async function addSource(body, isForm) {
+  $("#srcMsg").textContent = "Adding…";
+  try {
+    await api("/api/knowledge/sources", isForm ? { method: "POST", body } : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    $("#srcMsg").textContent = "Added - the AI reads it in the background.";
+  } catch (e) { $("#srcMsg").textContent = "Not added: " + e.message; }
+  loadSources();
+}
+$("#srcAddUrl").onclick = () => { const u = $("#srcUrl").value.trim(); if (u) { addSource({ url: u, crawl: +$("#srcCrawl").value || 0 }); $("#srcUrl").value = ""; } };
+$("#srcAddFile").onclick = () => $("#srcFile").click();
+$("#srcFile").onchange = () => { const f = $("#srcFile").files[0]; if (!f) return; const fd = new FormData(); fd.append("file", f); addSource(fd, true); $("#srcFile").value = ""; };
+$("#srcPaste").onclick = () => { const t = prompt("Paste the text (product info, FAQ, policy…):"); if (t && t.trim()) addSource({ text: t }); };
 $("#kbFind").oninput = () => { clearTimeout(kbTimer); kbTimer = setTimeout(loadKb, 300); };
 $("#kbLearn").onclick = async () => {
   try { const r = await (await api("/api/knowledge/learn", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).json();
@@ -1386,7 +1415,7 @@ $("#wmFile").onclick = async (e) => {
 $("#logout").onclick = async () => { await fetch("/api/logout", { method: "POST" }); location.href = "/login"; };
 (async () => {
   try { SESSION = await (await fetch("/api/session")).json(); } catch (e) {}
-  loadAccount(); loadWake(); loadKb(); loadGlossary(); loadVoices(); load(); loadDevices();
+  loadAccount(); loadWake(); loadKb(); loadSources(); loadGlossary(); loadVoices(); load(); loadDevices();
 })();
 $("#refresh").onclick = load;
 

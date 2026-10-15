@@ -358,6 +358,9 @@ owners, dates, budgets, terms, and who people are. In the background it reads on
 (`KNOWLEDGE_SWEEP=0` turns that off); **Account > Watch AI > Learn from meetings now** reads them all.
 
 - **Ask** (all meetings) gets the facts that match the question, next to the meeting excerpts.
+- **Sources** besides meetings: a web page (and up to 60 pages under it - a product section), a PDF / Word / text /
+  Markdown / CSV file, or pasted text. Read the same way; web pages are fetched again daily and re-read only when
+  their text changed. Meeting facts win when both answer the same question.
 - **Fix / Hide** a fact on the Account page; your fix survives re-reading, a hidden fact is used nowhere.
 - **The watch's offline answers**: `GET /api/watch/pack` gives ~150 short spoken questions (letters only, numbers as
   words, for Espressif MultiNet on the watch) with their answers.
@@ -371,7 +374,9 @@ owners, dates, budgets, terms, and who people are. In the background it reads on
 | `GET /api/knowledge?q=` | facts (all, or the best matches for a question) + counts |
 | `POST /api/knowledge/learn` `{"all": true}` | read new/changed (or all) meetings in the background |
 | `PUT /api/knowledge/{id}` | `{"a": "..."}` fix, `{"hidden": true}` hide, `{}` undo |
-| `GET /api/watch/pack` | offline answer pack for the watch |
+| `GET /api/watch/pack?extra=1` | offline answer pack for the watch (+ more questions for its own model) |
+| `GET /api/watch/speech` | the watch's offline speech model (Espressif MultiNet7 English, 2.7 MB, once) |
+| `GET` / `POST /api/knowledge/sources`, `DELETE`, `POST .../{id}/refresh` | your web pages, files and texts |
 | `GET /api/watch/model`, `POST` / `DELETE /api/watch/model/train`, `GET /api/watch/model/file` | the watch model |
 
 Train by hand (same thing the button runs): `python -m app.watchlm train $DATA_DIR/watchai` (reads `dataset.json` there).

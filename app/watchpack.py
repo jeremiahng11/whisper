@@ -42,7 +42,12 @@ def phrase(q: str) -> str:
     return " ".join(words)
 
 
-def build(limit: int = MAX_ITEMS) -> dict:
+MAX_PHRASES = 300                                   # what MultiNet7 takes in all
+
+
+def build(limit: int = MAX_ITEMS, extra: bool = False) -> dict:
+    """extra: also the next questions without their answers ("extra": [{"q", "say"}]) - the watch's own model
+    answers those, so the watch can hear up to 300 questions while storing only the pack's answers."""
     facts = knowledge.facts()
     # people first (they're asked about most, up to a quarter of the pack), then the newest of everything else
     people = [f for f in facts if f.get("kind") == "person"][: limit // 4]
@@ -57,5 +62,22 @@ def build(limit: int = MAX_ITEMS) -> dict:
         seen.update(say[:2])
         items.append({"id": f["id"], "q": f["q"], "say": say[:2], "a": f["a"][:240], "kind": f.get("kind", "fact"),
                       "date": f.get("date") or ""})
-    ver = hashlib.sha1(json.dumps(items, sort_keys=True).encode()).hexdigest()[:12]
-    return {"version": ver, "count": len(items), "items": items}
+    more = []
+    if extra:
+        used = {it["id"] for it in items}
+        room = MAX_PHRASES - sum(len(it["say"]) for it in items)
+        for f in people + rest:
+            if room <= 0:
+                break
+            if f["id"] in used:
+                continue
+            say = [p for p in dict.fromkeys(phrase(x) for x in [f["q"]] + (f.get("alts") or [])) if p and p not in seen][:1]
+            if say:
+                seen.update(say)
+                more.append({"id": f["id"], "q": f["q"], "say": say})
+                room -= 1
+    out = {"count": len(items), "items": items}
+    if extra:
+        out["extra"] = more
+    out["version"] = hashlib.sha1(json.dumps(out, sort_keys=True).encode()).hexdigest()[:12]
+    return out

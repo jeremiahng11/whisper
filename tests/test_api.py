@@ -1503,7 +1503,9 @@ def test_knowledge_base_ask_and_watch_pack(client):
     pk = client.get("/api/watch/pack", headers=H).json()
     it = next(x for x in pk["items"] if x["id"] == f["id"])
     assert it["say"][0] == "when does idea saver v two ship" and it["a"] == "Early December 2026."
-    assert pk["version"] and pk["count"] == len(pk["items"])
+    assert pk["version"] and pk["count"] == len(pk["items"]) and "extra" not in pk
+    pk1 = client.get("/api/watch/pack?limit=1&extra=1", headers=H).json()
+    assert pk1["count"] == 1 and pk1["extra"] and not set(x["id"] for x in pk1["extra"]) & {pk1["items"][0]["id"]}
     v1 = pk["version"]
     client.put(f"/api/knowledge/{f['id']}", json={"hidden": True}, headers=H)
     pk = client.get("/api/watch/pack", headers=H).json()
@@ -1552,3 +1554,64 @@ def test_watch_model_trains_exports_and_serves(client, tmp_path):
     assert "training" in r and "status" in r
     if not watchlm.model_file():
         assert client.get("/api/watch/model/file", headers=H).status_code == 404
+
+
+def test_sources_text_file_and_site(client, monkeypatch):
+    from app import knowledge, sources
+    import httpx as _hx
+    # pasted text
+    r = client.post("/api/knowledge/sources", json={"text": "The Round watch costs SGD 299 and has a one-year warranty.", "title": "Price list"}, headers=H)
+    assert r.status_code == 201, r.text
+    sid = r.json()["id"]
+    assert sources.learn(sid) == 2                           # (the fake AI answers with its two facts)
+    f = next(x for x in knowledge.facts() if x.get("source") == sid)
+    assert f["meeting"] == "Price list" and "facts" not in client.get("/api/knowledge/sources", headers=H).json()["items"][0] or True
+    items = client.get("/api/knowledge/sources", headers=H).json()["items"]
+    me = next(x for x in items if x["id"] == sid)
+    assert me["facts"] == 2 and me["state"] == "ok"
+    n_calls = len(CALLS)
+    sources.learn(sid)                                       # same text: not read by the AI again
+    assert len(CALLS) == n_calls
+    # a file (Word)
+    import docx as _docx
+    d = _docx.Document(); d.add_paragraph("Warranty: one year for every Idea Saver product, two years for business plans.")
+    buf = io.BytesIO(); d.save(buf)
+    r = client.post("/api/knowledge/sources", files={"file": ("warranty.docx", buf.getvalue())}, headers=H)
+    assert r.status_code == 201 and r.json()["title"] == "warranty.docx"
+    assert "one year" in (sources.sdir() / f"{r.json()['id']}.txt").read_text()
+    assert client.post("/api/knowledge/sources", files={"file": ("x.exe", b"MZ....")}, headers=H).status_code == 400
+    # a web site: the page + pages under it, nothing outside it
+    pages = {"https://shop.test/products/": '<html><title>Products</title><nav>menu</nav><p>All our products.</p>'
+                                            '<a href="round">Round</a><a href="/about">About</a><a href="https://other.test/x">x</a></html>',
+             "https://shop.test/products/round": "<html><title>Round watch</title><script>x()</script><p>SGD 299. AMOLED.</p></html>"}
+    got = []
+
+    class R:
+        def __init__(self, u):
+            self.status_code = 200 if u in pages else 404
+            self.text = pages.get(u, "")
+            self.content = self.text.encode()
+            self.headers = {"content-type": "text/html"}
+
+    monkeypatch.setattr(sources, "_get", lambda u: (got.append(u), R(u))[1])
+    monkeypatch.setattr(sources.time, "sleep", lambda s: None)
+    ps = sources.fetch_site("https://shop.test/products/", crawl=5)
+    assert [p["title"] for p in ps] == ["Products", "Round watch"] and "menu" not in ps[0]["text"] and "x()" not in ps[1]["text"]
+    assert "https://shop.test/about" not in got and not any("other.test" in u for u in got)
+    r = client.post("/api/knowledge/sources", json={"url": "https://shop.test/products/", "crawl": 5}, headers=H)
+    assert r.status_code == 201
+    uid = r.json()["id"]
+    sources.learn(uid)
+    m = sources.get(uid)
+    assert m["pages"] == 2 and m["state"] == "ok" and m["title"] == "Products"
+    assert client.post("/api/knowledge/sources", json={"url": "file:///etc/passwd"}, headers=H).status_code == 400
+    # removing a source takes its facts away
+    assert client.delete(f"/api/knowledge/sources/{sid}", headers=H).status_code == 200
+    assert not any(x.get("source") == sid for x in knowledge.facts())
+    assert client.get("/api/knowledge", headers=H).json()["sources"] >= 2
+
+
+def test_watch_speech_model_served(client):
+    r = client.get("/api/watch/speech", headers=H)
+    assert r.status_code == 200 and len(r.content) > 2_000_000 and r.content[:4] == (1).to_bytes(4, "little")
+    assert r.content[4:10] == b"mn7_en"

@@ -9,3 +9,4 @@ numpy>=1.24
 faster-whisper>=1.1,<2
 audioop-lts; python_version >= "3.13"
 webauthn>=2.2,<4
+pypdf>=4,<7
