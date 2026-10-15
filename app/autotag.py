@@ -38,7 +38,7 @@ def job_lock(jid: str) -> threading.Lock:
         return _job_locks.setdefault(jid, threading.Lock())
 
 
-RULES = "r3"          # bump when the matching rules change: every meeting is checked again
+RULES = "r4"          # bump when the matching rules change: every meeting is checked again
 
 
 # ---------------------------------------------------------------- pitch: a cheap, strong check against mix-ups
@@ -284,6 +284,19 @@ def apply(jid: str) -> int:
     #    long talker). A group whose voice clearly matches a tagged person becomes theirs, all its lines at once.
     who = lambda lab: lab[6:] if lab.startswith("voice:") else names.get(lab, "")   # noqa: E731
     pp = {lab: _person_pitch(who(lab)) for lab in people if who(lab)}
+    # speakers named by voice alone (recognised, never confirmed by you) whose pitch can't be that person's: unnamed
+    unname = set()
+    for lab in set(opts.get("speaker_auto") or []) & set(names):
+        ph = pp.get(lab) or _person_pitch(names.get(lab, ""))
+        if not ph:
+            continue
+        ls = sorted((i for i, s in enumerate(segs) if s.get("speaker") == lab and not s.get("also") and i not in manual),
+                    key=lambda i: -(segs[i]["end"] - segs[i]["start"]))[:6]
+        gp = [p for p in _line_pitch(jid, job, segs, ls).values() if p] if ls else []
+        if len(gp) >= 2 and not pitch_ok(ph, float(np.median(gp))):
+            unname.add(lab)
+            people.pop(lab, None)
+            pp.pop(lab, None)
     has_lines = {s.get("speaker") for s in segs}
     group_to: dict[str, str] = {}
     for g, info in spk.items():
@@ -374,6 +387,10 @@ def apply(jid: str) -> int:
         auto = set(opts.get("auto_lines") or [])
         names2 = dict(opts.get("speaker_names") or {})
         recog = set(opts.get("speaker_auto") or [])
+        for lab in unname:
+            if lab in recog:                               # still only recognised (you didn't name it meanwhile)
+                names2.pop(lab, None)
+                recog.discard(lab)
 
         def real(lab: str) -> str:
             if not lab.startswith("voice:"):

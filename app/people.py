@@ -190,6 +190,7 @@ def relearn_person(name: str) -> dict:
     for j in db.list_jobs(100000, "done"):
         if name.lower() in {(n or "").lower() for n in ((j.get("options") or {}).get("speaker_names") or {}).values()}:
             added += top_up(j["id"], per_person=12)
+    clean_samples(name)
     return {"name": name, "samples": sample_count(name), "relearned": name in r.get("learned", []),
             "added": added}
 
@@ -235,11 +236,57 @@ def forget(name: str) -> None:
 def similarity(emb: list, centroid: list, samp: list) -> float:
     """How much a voice sounds like a person: their average voice, or (better) the 3 closest of their samples -
     a person sounds different on a call, across a room or when tired; the samples cover that."""
-    best = voices._cos(emb, centroid) if centroid else -1.0
+    c = voices._cos(emb, centroid) if centroid else -1.0
+    best = c
     if samp:
         sims = sorted((voices._cos(emb, s) for s in samp), reverse=True)[:3]
-        best = max(best, sum(sims) / len(sims))
+        top = sum(sims) / len(sims)
+        # the samples can lift a match a little above their average voice, never far: a few wrong samples (someone
+        # else's lines once tagged as them) would otherwise make anyone "sound like" a person with many samples
+        best = max(c, min(top, c + 0.10)) if centroid else top
     return best
+
+
+def clean_samples(name: str) -> int:
+    """Drop the samples that can't be this person: a pitch far from their usual one (a woman's line kept as a man's
+    voice, or the reverse), or a voice print far from all their others. Rebuilds their voice. Returns how many went."""
+    from . import autotag
+    with db._lock:
+        rows = db._conn.execute("SELECT rowid, job_id, seg, embedding FROM voice_samples WHERE lower(name)=lower(?)",
+                                (name,)).fetchall()
+    if len(rows) < 6:
+        return 0
+    embs = [np.array(json.loads(r["embedding"]), dtype=float) for r in rows]
+    drop = set()
+    # 1. pitch: the lines the samples came from
+    hz = {}
+    for r in rows:
+        if r["seg"] is not None and r["seg"] >= 0 and r["job_id"]:
+            j = db.get(r["job_id"])
+            tr = worker.load_transcript(r["job_id"]) if j else None
+            if j and tr:
+                hz[r["rowid"]] = autotag._line_pitch(r["job_id"], j, tr.get("segments", []), [int(r["seg"])]).get(int(r["seg"]), 0)
+    vals = [v for v in hz.values() if v]
+    if len(vals) >= 5:
+        med = float(np.median(vals))
+        drop |= {rid for rid, v in hz.items() if v and not autotag.pitch_ok(med, v)}
+    # 2. voice print: far from the middle of the rest
+    keep = [e for r, e in zip(rows, embs) if r["rowid"] not in drop]
+    if len(keep) >= 5:
+        mid = np.median(np.stack(keep), axis=0)
+        mid /= np.linalg.norm(mid) or 1.0
+        for r, e in zip(rows, embs):
+            if float(e @ mid / (np.linalg.norm(e) or 1.0)) < 0.30:
+                drop.add(r["rowid"])
+    if len(drop) > len(rows) // 2:            # most of them disagree: can't tell who's who - leave it to you
+        return 0
+    if drop:
+        with db._lock:
+            db._conn.execute("DELETE FROM voice_samples WHERE rowid IN (%s)" % ",".join("?" * len(drop)), list(drop))
+            db._conn.commit()
+        rebuild_voice(name)
+        log.info("removed %d samples that weren't %s", len(drop), name)
+    return len(drop)
 
 
 # ---------------------------------------------------------------- how they sound
@@ -510,6 +557,9 @@ def _sig(name: str) -> str:
     return f"{len(lines)}:{len({ln['job'] for ln in lines})}"
 
 
+_cleaned: dict[str, float] = {}
+
+
 def _sweep() -> None:
     from . import autotag
     time.sleep(90)
@@ -538,6 +588,13 @@ def _sweep() -> None:
                         dynamics.write_note(j["id"])
                         busy = True
                         break
+                if not busy:                                # samples that can't be theirs: once a day per person
+                    for n in [v["name"] for v in voices.list_voices()]:
+                        if time.time() - _cleaned.get(n.lower(), 0) > 86400:
+                            _cleaned[n.lower()] = time.time()
+                            if clean_samples(n):
+                                busy = True
+                            break
                 for n in ([] if busy else all_names()):
                     p = get(n)
                     if not p or p.get("sig") != _sig(n):

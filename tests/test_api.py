@@ -1444,3 +1444,23 @@ def test_pitch_veto_undoes_a_wrong_join(client, monkeypatch):
     assert all(tr["segments"][i]["speaker"] == "Speaker 2" for i in moved)
     assert "Speaker 2" not in (db.get(jid)["options"].get("merged") or {})
     assert autotag.pitch_ok(120, 130) and not autotag.pitch_ok(120, 210) and autotag.pitch_ok(0, 210)
+
+
+def test_samples_cannot_lift_a_far_voice():
+    from app import people
+    c = [1.0, 0.0, 0.0]
+    far = [0.3, 0.954, 0.0]                                 # 0.3 like their average voice
+    samp = [[0.3, 0.954, 0.0]] * 3                          # ... but identical to three wrong samples
+    assert people.similarity(far, c, samp) <= 0.41
+
+
+def test_clean_samples_drops_other_pitch(client, monkeypatch):
+    from app import autotag, db, people
+    j = upload(client, "dev1-clean", 40, "diarize=true&speakers=2")
+    people.forget("Zed")
+    for i in range(8):
+        people.add_sample("Zed", [1.0, 0.1 * (i % 3), 0.0, 0.0], j["id"], i)
+    monkeypatch.setattr(autotag, "_line_pitch", lambda jid, job, segs, idxs: {k: (120.0 if k < 6 else 225.0) for k in idxs})
+    assert people.clean_samples("Zed") == 2
+    assert people.sample_count("Zed") == 6
+    people.forget("Zed")
