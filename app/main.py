@@ -15,12 +15,12 @@ from typing import Optional
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse, FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
 
-from . import agenda, autotag, chat, db, dynamics, login, people, vocab, redact, render, search, speech, summarize, terms, transcribe, voices, wakeword, worker
+from . import agenda, autotag, chat, db, dynamics, knowledge, login, watchlm, watchpack, people, vocab, redact, render, search, speech, summarize, terms, transcribe, voices, wakeword, worker
 from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.11.8"
+VERSION = "1.12.0"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -32,6 +32,7 @@ async def lifespan(app: FastAPI):
     worker.start()
     autotag.start_sweeper()
     people.start_sweeper()
+    knowledge.start_sweeper()
     if speech.tts_available():                       # load the voices now, not on the first spoken answer
         import threading
         threading.Thread(target=speech.warm_voices, daemon=True).start()
@@ -503,6 +504,7 @@ def delete_job(jid: str):
         raise HTTPException(409, "job is running")
     worker.delete_job_files(j)
     db.delete(jid)
+    knowledge.forget_meeting(jid)
     return {"deleted": jid}
 
 
@@ -584,6 +586,10 @@ async def ask(request: Request):
         who = [n for n in people.all_names() if re.search(r"\b" + re.escape(n) + r"\b", q, re.I)]
         if who:                                      # "what does Priscilla usually raise?"
             context += "\n\nWhat Oracle Minutes knows about these people from all meetings:\n" + people.context_for(who, 3000)
+    if data.get("scope") == "meetings":
+        kb = knowledge.context_for(q)                # short facts learned from all meetings (the knowledge base)
+        if kb:
+            context += "\n\n" + kb
     return chat.start(clean, context, bool(data.get("best")), system)
 
 
@@ -784,6 +790,76 @@ async def edit_line(jid: str, idx: int, request: Request):
     if learned:
         worker.refresh_terms_everywhere()            # the same mistake in your other meetings
     return {"index": idx, "text": text, "learned": [{"heard": h, "right": r} for h, r in learned]}
+
+
+# ---------------------------------------------------------------- knowledge base (facts from all meetings)
+@app.get("/api/knowledge", dependencies=[Depends(auth)])
+def get_knowledge(q: str = "", limit: int = 500):
+    """What the knowledge base knows: {"facts": n, "kinds", "meetings_read", "state", ..., "items": [...]}.
+    ?q= returns the facts best matching a question."""
+    items = knowledge.find(q, min(limit, 50)) if q else knowledge.facts()[: max(1, min(limit, 5000))]
+    return {**knowledge.summary(), "items": items}
+
+
+@app.post("/api/knowledge/learn", dependencies=[Depends(auth)], status_code=202)
+async def learn_knowledge(request: Request):
+    """Read the meetings that are new or changed (or all of them with {"all": true}) in the background."""
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not summarize.enabled():
+        raise HTTPException(400, "SUMMARY_BACKEND is none - no LLM configured")
+    started = knowledge.start_learning(bool((data or {}).get("all")))
+    return {"started": started, **knowledge.summary()}
+
+
+@app.put("/api/knowledge/{fid}", dependencies=[Depends(auth)])
+async def fix_fact(fid: str, request: Request):
+    """{"a": "the right answer"} or {"hidden": true} (wrong or private fact) or {} (back to what the AI read)."""
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(400, "body must be JSON")
+    if not re.fullmatch(r"[0-9a-f]{8}", fid):
+        raise HTTPException(400, "bad fact id")
+    knowledge.set_override(fid, str(data.get("a") or "") or None, bool(data.get("hidden")))
+    return {"ok": True, **knowledge.summary()}
+
+
+@app.get("/api/watch/pack", dependencies=[Depends(auth)])
+def watch_pack(limit: int = watchpack.MAX_ITEMS):
+    """The watch's offline answers: {"version", "count", "items": [{"id", "q", "say": [phrases], "a", ...}]}."""
+    return watchpack.build(max(1, min(limit, 300)))
+
+
+@app.get("/api/watch/model", dependencies=[Depends(auth)])
+def watch_model():
+    """The watch's own AI model: {"training": bool, "status": {...progress}, "model": {version, size, scores...} | null}."""
+    return watchlm.state()
+
+
+@app.post("/api/watch/model/train", dependencies=[Depends(auth)], status_code=202)
+def train_watch_model():
+    """Train it again from the knowledge base (background, low priority; minutes to an hour or two)."""
+    try:
+        return watchlm.start(knowledge.facts())
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete("/api/watch/model/train", dependencies=[Depends(auth)])
+def stop_watch_model():
+    watchlm.stop()
+    return watchlm.state()
+
+
+@app.get("/api/watch/model/file", dependencies=[Depends(auth)])
+def watch_model_file():
+    p = watchlm.model_file()
+    if not p:
+        raise HTTPException(404, "no model trained yet")
+    return FileResponse(p, media_type="application/octet-stream", filename="oracle_watch.owl")
 
 
 @app.get("/api/wakeword", dependencies=[Depends(auth)])

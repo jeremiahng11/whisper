@@ -22,7 +22,7 @@ from pathlib import Path
 from .config import settings
 
 STARTER = Path(__file__).parent / "wakeword_starter"
-STARTER_MANIFEST = {"models": [{"id": "wake", "label": "Hey Oracle", "file": "wake.tflite", "cutoff": 0.995, "window": 12, "arena": 30000}, {"id": "start_meeting", "label": "Start meeting", "file": "start_meeting.tflite", "cutoff": 0.97, "window": 5, "arena": 30000}, {"id": "voice_memo", "label": "Voice memo", "file": "voice_memo.tflite", "cutoff": 0.85, "window": 5, "arena": 30000}, {"id": "stop_recording", "label": "Stop recording", "file": "stop_recording.tflite", "cutoff": 0.89, "window": 5, "arena": 30000}, {"id": "mark_this", "label": "Mark this", "file": "mark_this.tflite", "cutoff": 0.84, "window": 5, "arena": 30000}]}
+STARTER_MANIFEST = {"models": [{"id": "wake", "label": "Hey Oracle", "file": "wake.tflite", "cutoff": 0.99, "window": 8, "arena": 30000}, {"id": "start_meeting", "label": "Start meeting", "file": "start_meeting.tflite", "cutoff": 0.98, "window": 5, "arena": 30000}, {"id": "voice_memo", "label": "Voice memo", "file": "voice_memo.tflite", "cutoff": 0.93, "window": 5, "arena": 30000}, {"id": "stop_recording", "label": "Stop recording", "file": "stop_recording.tflite", "cutoff": 0.99, "window": 5, "arena": 30000}, {"id": "mark_this", "label": "Mark this", "file": "mark_this.tflite", "cutoff": 0.86, "window": 5, "arena": 30000}]}
 COMMANDS = {"wake", "start_meeting", "voice_memo", "stop_recording", "mark_this"}
 FILE_OK = re.compile(r"^[A-Za-z0-9_.-]{1,64}\.tflite$")
 MAX_FILE = 1024 * 1024

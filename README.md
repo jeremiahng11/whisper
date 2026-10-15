@@ -351,6 +351,31 @@ DELETE /api/files/notes/Inbox.md?device=ID&base_rev=N   -> {"rev","deleted":true
 `hash` is 32-bit FNV-1a (hex). The last 20 versions of each file are kept in the `file_history` table.
 If both sides changed a file, the device keeps its version and saves the server's next to it as "(server copy)".
 
+## Watch AI: company knowledge (1.12)
+
+Oracle Minutes reads every finished meeting once more and keeps short **facts** (question + answer): decisions,
+owners, dates, budgets, terms, and who people are. In the background it reads one new or changed meeting at a time
+(`KNOWLEDGE_SWEEP=0` turns that off); **Account > Watch AI > Learn from meetings now** reads them all.
+
+- **Ask** (all meetings) gets the facts that match the question, next to the meeting excerpts.
+- **Fix / Hide** a fact on the Account page; your fix survives re-reading, a hidden fact is used nowhere.
+- **The watch's offline answers**: `GET /api/watch/pack` gives ~150 short spoken questions (letters only, numbers as
+  words, for Espressif MultiNet on the watch) with their answers.
+- **The watch's own AI model**: **Build watch AI** trains a small transformer (esp32-ai style, ~2-4 MB int8, whole words
+  as tokens) on all the facts, here on this server: plain numpy, nothing extra to install, low priority on half the CPU
+  cores (`WATCHAI_THREADS`, longest run `WATCHAI_MINUTES`, default 120). The result shows how many questions it
+  answers right, including ones worded in a way it never saw. The watch downloads `GET /api/watch/model/file`.
+
+| | |
+|---|---|
+| `GET /api/knowledge?q=` | facts (all, or the best matches for a question) + counts |
+| `POST /api/knowledge/learn` `{"all": true}` | read new/changed (or all) meetings in the background |
+| `PUT /api/knowledge/{id}` | `{"a": "..."}` fix, `{"hidden": true}` hide, `{}` undo |
+| `GET /api/watch/pack` | offline answer pack for the watch |
+| `GET /api/watch/model`, `POST` / `DELETE /api/watch/model/train`, `GET /api/watch/model/file` | the watch model |
+
+Train by hand (same thing the button runs): `python -m app.watchlm train $DATA_DIR/watchai` (reads `dataset.json` there).
+
 ## Development
 
 ```bash

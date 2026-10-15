@@ -52,6 +52,9 @@ class Settings:
     autotag_new: bool = _bool("AUTOTAG_NEW", True)       # new meetings: name lines of voices already remembered
     autotag_sweep: bool = _bool("AUTOTAG_SWEEP", True)
     people_sweep: bool = _bool("PEOPLE_SWEEP", True)
+    watchai_threads: int = int(os.getenv("WATCHAI_THREADS", "0"))    # CPU threads for training the watch AI (0 = half)
+    watchai_minutes: float = float(os.getenv("WATCHAI_MINUTES", "120"))  # longest a training run may take
+    knowledge_sweep: bool = _bool("KNOWLEDGE_SWEEP", True)   # learn facts from new meetings in the background
     vocab_packs: str = os.getenv("VOCAB_PACKS", "all")       # built-in vocabularies: payments,tech,finance | none
     admin_id: str = os.getenv("ADMIN_ID", "").strip()        # web page sign-in (both set = sign-in required)
     admin_pass: str = os.getenv("ADMIN_PASS", "")

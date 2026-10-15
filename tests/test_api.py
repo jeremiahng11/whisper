@@ -17,6 +17,7 @@ os.environ["DIARIZER"] = "fake"
 os.environ["AUTOTAG_NEW"] = "0"          # tested on their own below (they'd change other tests' meetings)
 os.environ["AUTOTAG_SWEEP"] = "0"
 os.environ["PEOPLE_SWEEP"] = "0"
+os.environ["KNOWLEDGE_SWEEP"] = "0"
 
 import pytest
 from fastapi.testclient import TestClient
@@ -40,6 +41,11 @@ def fake_chat(messages, best=False):
     SYSTEMS.append(messages[0]["content"] if messages[0]["role"] == "system" else "")
     if FAIL["on"]:
         raise RuntimeError("LLM is down")
+    if "write the facts someone" in messages[-1]["content"]:
+        return ('Here you go:\n```json\n[{"q": "When does Idea Saver V2 ship?", "a": "End of November 2026.", "kind": "date", '
+                '"topic": "Idea Saver V2", "alts": ["Idea Saver V2 ship date", "V2 launch date"]},'
+                '{"q": "Who owns the rollback plan", "a": "San owns it.", "kind": "action", "topic": "rollback", "alts": [],},'
+                '{"q": "x", "a": "too short a question"}]\n```')
     if "as JSON" in messages[-1]["content"]:
         return '```json\n[{"task": "ship V1", "owner": "Speaker 1", "due": "2026-10-09"}]\n```'
     if "pinyin" in messages[-1]["content"].lower() or messages[0]["content"].startswith("You answer questions"):
@@ -1464,3 +1470,85 @@ def test_clean_samples_drops_other_pitch(client, monkeypatch):
     assert people.clean_samples("Zed") == 2
     assert people.sample_count("Zed") == 6
     people.forget("Zed")
+
+
+def test_knowledge_base_ask_and_watch_pack(client):
+    from app import knowledge, watchpack
+    j = upload(client, "dev1-kb", 20)
+    n = knowledge.learn_meeting(j["id"])
+    assert n == 2                                            # the too-short question is dropped
+    kb = client.get("/api/knowledge", headers=H).json()
+    assert kb["facts"] >= 2 and kb["meetings_read"] >= 1
+    f = next(x for x in kb["items"] if x["q"].startswith("When does Idea Saver"))
+    assert f["date"] and f["job"] == j["id"] and f["alts"] == ["Idea Saver V2 ship date", "V2 launch date"]
+    assert not knowledge.needs_update(db_get(j["id"]))       # read once until the minutes change
+    hits = client.get("/api/knowledge?q=when is the V2 launch", headers=H).json()["items"]
+    assert hits and hits[0]["id"] == f["id"]
+    # Ask over all meetings gets the facts too
+    r = client.post("/api/ask", json={"scope": "meetings", "messages": [{"role": "user", "content": "Idea Saver V2 ship date?"}]}, headers=H)
+    for _ in range(200):
+        if client.get(f"/api/ask/{r.json()['id']}", headers=H).json()["status"] != "pending":
+            break
+        time.sleep(0.05)
+    assert "company knowledge base" in SYSTEMS[-1] and "End of November 2026" in SYSTEMS[-1]
+    # your correction sticks; a hidden fact is gone
+    assert client.put(f"/api/knowledge/{f['id']}", json={"a": "Early December 2026."}, headers=H).status_code == 200
+    knowledge.learn_meeting(j["id"])
+    f2 = next(x for x in knowledge.facts() if x["id"] == f["id"])
+    assert f2["a"] == "Early December 2026." and f2["edited"]
+    # the watch pack: speakable phrases, numbers as words
+    assert watchpack.phrase("When does Idea Saver V2 ship?") == "when does idea saver v two ship"
+    assert watchpack.phrase("Q4 revenue 2026") == "q four revenue two zero two six"
+    assert watchpack.phrase("Hi") == ""
+    pk = client.get("/api/watch/pack", headers=H).json()
+    it = next(x for x in pk["items"] if x["id"] == f["id"])
+    assert it["say"][0] == "when does idea saver v two ship" and it["a"] == "Early December 2026."
+    assert pk["version"] and pk["count"] == len(pk["items"])
+    v1 = pk["version"]
+    client.put(f"/api/knowledge/{f['id']}", json={"hidden": True}, headers=H)
+    pk = client.get("/api/watch/pack", headers=H).json()
+    assert f["id"] not in [x["id"] for x in pk["items"]] and pk["version"] != v1
+    client.put(f"/api/knowledge/{f['id']}", json={}, headers=H)
+    assert any(x["id"] == f["id"] for x in knowledge.facts())
+    client.delete(f"/api/jobs/{j['id']}", headers=H)
+    assert not any(x.get("job") == j["id"] for x in knowledge.facts())
+
+
+def db_get(jid):
+    from app import db
+    return db.get(jid)
+
+
+def test_knowledge_parse_tolerant():
+    from app import knowledge
+    assert knowledge.parse_facts("no json here") == []
+    assert knowledge.parse_facts('[{"q": "What is the budget", "a": "SGD 20k", "kind": "weird"}]')[0]["kind"] == "fact"
+    assert knowledge.parse_facts('<think>hmm</think>[{"q": "What is the budget", "a": "SGD 20k",}]')[0]["a"] == "SGD 20k"
+
+
+def test_watch_model_trains_exports_and_serves(client, tmp_path):
+    import json as _json
+    from app import watchlm, watchlm_core as W
+    facts = [{"q": f"Who is {n}", "a": f"{n} is the {r}.", "kind": "person", "topic": n, "alts": [f"Tell me about {n}", f"What does {n} do"]}
+             for n, r in [("Ryan", "Group CEO"), ("Ella", "Chief Legal Officer"), ("Tina", "Head of Finance"), ("San", "IT lead")]]
+    facts.append({"q": "When does the Round watch ship", "a": "The Round watch ships on 1 December 2026 - V2-ready.", "kind": "date",
+                  "topic": "Round watch", "alts": ["Round watch ship date", "Round watch launch"]})
+    ds = watchlm.make_dataset(facts)
+    assert ds["test"] and not set(q for q, _ in ds["test"]) & set(q for q, _ in ds["train"])   # held back = never trained on
+    assert ["Who is Ryan", "Ryan is the Group CEO."] in ds["train"] and any(a == watchlm.DONT_KNOW for _, a in ds["train"])
+    (tmp_path / "dataset.json").write_text(_json.dumps(ds))
+    rep = watchlm.train(tmp_path, max_minutes=3, max_epochs=600,
+                        config={"d": 48, "layers": 2, "heads": 2, "ffn": 96, "seq": 40})
+    assert rep["trained_on"] >= 80, rep
+    q8, cfg, vocab, head = W.load(tmp_path / "model.owl")
+    assert cfg["d"] == 48 and head["dont_know"] == watchlm.DONT_KNOW and rep["version"]
+    p = W.dequantize(q8)
+    assert W.generate(p, cfg, vocab, "Who is RYAN?") == "Ryan is the Group CEO."    # punctuation and case don't matter
+    assert W.detok(W.words("ships on 1 December 2026 - V2-ready.")) == "ships on 1 December 2026 \u2013 V2-ready."
+    raw = (tmp_path / "model.owl").read_bytes()
+    assert raw[:4] == b"OWL1" and int.from_bytes(raw[4:8], "little") % 4 == 0   # floats stay 4-byte aligned for the watch
+    # the API: nothing yet -> 404; too few facts -> 400
+    r = client.get("/api/watch/model", headers=H).json()
+    assert "training" in r and "status" in r
+    if not watchlm.model_file():
+        assert client.get("/api/watch/model/file", headers=H).status_code == 404

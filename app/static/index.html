@@ -431,6 +431,15 @@ ul.replies{margin:4px 0;padding-left:20px;font-size:13.5px}
         <div id="wwVoice" class="mute" style="margin-top:6px"></div>
         <div class="row" style="margin-top:10px"><input type="file" id="wwFile" accept=".zip" class="hidden"><button class="ghost" id="wwUp">Upload a trained set (.zip)</button><button class="danger hidden" id="wwReset">Back to the starter</button><span class="mute" id="wwMsg"></span></div>
       </div>
+      <div class="block">
+        <div class="sub2">Watch AI (company knowledge)</div>
+        <p class="mute" style="margin:0 0 8px">Short facts learned from all your meetings: what was decided, who owns what, dates, budgets, who people are. Ask uses them; the watch gets the most useful ones as offline answers, and its own small AI model is trained on all of them here on this server.</p>
+        <div id="kbNow" class="mute">…</div>
+        <div class="row" style="margin-top:8px"><button class="ghost" id="kbLearn">Learn from meetings now</button><input id="kbFind" placeholder="Find a fact…" style="flex:1;max-width:260px"><span class="mute" id="kbMsg"></span></div>
+        <div id="kbList" style="margin-top:8px;max-height:320px;overflow:auto"></div>
+        <div id="wmNow" class="mute" style="margin-top:12px">…</div>
+        <div class="row" style="margin-top:8px"><button id="wmTrain">Build watch AI</button><button class="danger hidden" id="wmStop">Stop</button><a class="hidden" id="wmFile" href="#">Download model</a><span class="mute" id="wmMsg"></span></div>
+      </div>
       <details class="block"><summary class="sub2" style="cursor:pointer;margin:0">API key (scripts, or this server without sign-in)</summary>
         <p class="mute">The key this server was set up with (API_KEY). Kept in this browser only. Not needed when you're signed in.</p>
         <div class="row"><input id="key" type="password" placeholder="API key" autocomplete="off" style="flex:1;max-width:420px"><button id="saveKey">Save key</button></div>
@@ -1321,10 +1330,63 @@ $("#wwReset").onclick = async () => {
   if (!confirm("Go back to the starter wake word on the watch?")) return;
   await api("/api/wakeword", { method: "DELETE" }); loadWake();
 };
+// ---------------------------------------------------------------- Watch AI: knowledge base, answer pack, model
+let kbTimer = null;
+async function loadKb() {
+  try {
+    const q = $("#kbFind").value.trim();
+    const k = await (await api("/api/knowledge?limit=300" + (q ? "&q=" + encodeURIComponent(q) : ""))).json();
+    const kinds = Object.entries(k.kinds || {}).map(([a, n]) => `${n} ${a}${n > 1 ? "s" : ""}`).join(", ");
+    const pack = await (await api("/api/watch/pack")).json();
+    $("#kbNow").innerHTML = `<b>${k.facts}</b> facts from ${k.meetings_read} meetings${kinds ? " (" + esc(kinds) + ")" : ""}. ` +
+      `The watch can answer <b>${pack.count}</b> of them offline.` +
+      (k.state === "learning" ? `<br>Reading meetings… ${k.done} of ${k.total}` : "") + (k.error ? `<br>Last problem: ${esc(k.error)}` : "");
+    $("#kbList").innerHTML = k.items.map(f => `<div class="row" style="gap:6px;align-items:flex-start;padding:4px 0;border-bottom:1px solid var(--line,#eee)" data-id="${f.id}">
+      <div style="flex:1"><b>${esc(f.q)}?</b> ${esc(f.a)}${f.edited ? ' <span class="mute">(your fix)</span>' : ""}<br><span class="mute">${esc(f.kind)}${f.meeting ? " · " + esc(f.meeting) : ""}${f.date ? " · " + esc(f.date) : ""}</span></div>
+      <button class="ghost kbFix" style="padding:2px 8px">Fix</button><button class="ghost kbHide" style="padding:2px 8px">Hide</button></div>`).join("") || '<span class="mute">Nothing yet.</span>';
+    document.querySelectorAll(".kbFix").forEach(b => b.onclick = async () => {
+      const id = b.parentNode.dataset.id, f = k.items.find(x => x.id === id);
+      const a = prompt("The right answer:", f.a); if (a === null) return;
+      await api("/api/knowledge/" + id, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ a }) }); loadKb();
+    });
+    document.querySelectorAll(".kbHide").forEach(b => b.onclick = async () => {
+      if (!confirm("Hide this fact (wrong or private)? Ask, the watch and the next model won't use it.")) return;
+      await api("/api/knowledge/" + b.parentNode.dataset.id, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ hidden: true }) }); loadKb();
+    });
+    const w = await (await api("/api/watch/model")).json();
+    const st = w.status || {}, m = w.model;
+    let t = m ? `Watch model <b>${esc(m.version)}</b> (${(m.size / 1048576).toFixed(1)} MB, made ${esc(m.made)}, ${m.facts} facts): answers <b>${m.trained_on}%</b> of the questions it learned` +
+      (m.reworded !== null ? ` and <b>${m.reworded}%</b> asked in other words` : "") + "." : "No watch model yet.";
+    if (w.training) t += `<br>Training… ${st.state === "testing" ? "testing it" : `step ${st.step || 0} of ${st.steps || "?"}` + (st.eta_s ? `, about ${dur(st.eta_s)} left` : "")}`;
+    else if (st.state === "error") t += `<br>The last training failed: ${esc((st.error || "").slice(-200))}`;
+    $("#wmNow").innerHTML = t;
+    $("#wmTrain").classList.toggle("hidden", w.training); $("#wmStop").classList.toggle("hidden", !w.training);
+    $("#wmFile").classList.toggle("hidden", !m);
+    clearTimeout(kbTimer);
+    if (w.training || k.state === "learning") kbTimer = setTimeout(loadKb, 5000);
+  } catch (e) { $("#kbNow").textContent = "Not available on this server version."; }
+}
+$("#kbFind").oninput = () => { clearTimeout(kbTimer); kbTimer = setTimeout(loadKb, 300); };
+$("#kbLearn").onclick = async () => {
+  try { const r = await (await api("/api/knowledge/learn", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).json();
+    $("#kbMsg").textContent = r.started ? "Reading the new and changed meetings…" : "Already up to date or busy."; } catch (e) { $("#kbMsg").textContent = e.message; }
+  loadKb();
+};
+$("#wmTrain").onclick = async () => {
+  try { await api("/api/watch/model/train", { method: "POST" }); $("#wmMsg").textContent = "Started - it runs in the background at low priority."; }
+  catch (e) { $("#wmMsg").textContent = "Not started: " + e.message; }
+  loadKb();
+};
+$("#wmStop").onclick = async () => { await api("/api/watch/model/train", { method: "DELETE" }); loadKb(); };
+$("#wmFile").onclick = async (e) => {
+  e.preventDefault();
+  const b = await (await api("/api/watch/model/file")).blob();
+  const a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = "oracle_watch.owl"; a.click();
+};
 $("#logout").onclick = async () => { await fetch("/api/logout", { method: "POST" }); location.href = "/login"; };
 (async () => {
   try { SESSION = await (await fetch("/api/session")).json(); } catch (e) {}
-  loadAccount(); loadWake(); loadGlossary(); loadVoices(); load(); loadDevices();
+  loadAccount(); loadWake(); loadKb(); loadGlossary(); loadVoices(); load(); loadDevices();
 })();
 $("#refresh").onclick = load;
 
