@@ -45,13 +45,51 @@ def phrase(q: str) -> str:
 MAX_PHRASES = 300                                   # what MultiNet7 takes in all
 
 
+# ---------------------------------------------------------------- spoken answers (read out offline)
+def voice_tag(answer: str) -> str:
+    return hashlib.sha1(answer.encode()).hexdigest()[:8]
+
+
+def voice_dir():
+    from .config import settings
+    d = settings.data_dir / "watchai" / "voice"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def voice_file(fid: str):
+    """The answer of fact `fid` read out (16 kHz IMA ADPCM WAV, ~8 KB a second), made once with the server's
+    voice (Piper) and kept until the answer changes. None if there is no such fact or no voice on this server."""
+    from . import speech
+    if not re.fullmatch(r"[0-9a-f]{8}", fid or "") or not speech.tts_available():
+        return None
+    f = next((x for x in knowledge.facts() if x["id"] == fid), None)
+    if not f:
+        return None
+    a = f["a"][:240]
+    p = voice_dir() / f"{fid}-{voice_tag(a)}.wav"
+    if not p.exists():
+        for old in voice_dir().glob(f"{fid}-*.wav"):  # the answer changed: the old recording goes
+            old.unlink(missing_ok=True)
+        data = speech.wav_to_ima_adpcm(speech.tts(a))
+        tmp = p.with_suffix(".tmp")
+        tmp.write_bytes(data)
+        tmp.replace(p)
+    return p
+
+
 def build(limit: int = MAX_ITEMS, extra: bool = False) -> dict:
     """extra: also the next questions without their answers ("extra": [{"q", "say"}]) - the watch's own model
     answers those, so the watch can hear up to 300 questions while storing only the pack's answers."""
+    from . import speech
     facts = knowledge.facts()
-    # people first (they're asked about most, up to a quarter of the pack), then the newest of everything else
-    people = [f for f in facts if f.get("kind") == "person"][: limit // 4]
-    rest = sorted((f for f in facts if f.get("kind") != "person"), key=lambda f: f.get("date") or "", reverse=True)
+    voice = speech.tts_available()
+    # what you ask most comes first, then people (up to a quarter of the pack), then the newest of everything else
+    often = sorted((f for f in facts if f.get("asked")), key=lambda f: -f["asked"])
+    oid = {f["id"] for f in often}
+    people = [f for f in facts if f.get("kind") == "person" and f["id"] not in oid][: limit // 4]
+    rest = sorted((f for f in facts if f.get("kind") != "person" and f["id"] not in oid), key=lambda f: f.get("date") or "", reverse=True)
+    people = often + people
     items, seen = [], set()
     for f in people + rest:
         if len(items) >= limit:
@@ -62,6 +100,8 @@ def build(limit: int = MAX_ITEMS, extra: bool = False) -> dict:
         seen.update(say[:2])
         items.append({"id": f["id"], "q": f["q"], "say": say[:2], "a": f["a"][:240], "kind": f.get("kind", "fact"),
                       "date": f.get("date") or ""})
+        if voice:
+            items[-1]["voice"] = voice_tag(f["a"][:240])
     more = []
     if extra:
         used = {it["id"] for it in items}

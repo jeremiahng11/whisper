@@ -194,6 +194,7 @@ def rebuild() -> list[dict]:
         for f in _people_facts():
             merged.setdefault(_norm(f["q"]), f)
         ov = overrides()
+        byq = _asked_by_fact()
         out = []
         for f in sorted(merged.values(), key=lambda f: (f.get("date") or ""), reverse=True):
             f["id"] = fact_id(f["q"])
@@ -202,9 +203,17 @@ def rebuild() -> list[dict]:
                 continue
             if o.get("a"):
                 f["a"], f["edited"] = o["a"], True
+            a = byq.get(f["id"])
+            if a:                                   # your own wordings of this question, and how often you ask it
+                have = {_norm(x) for x in [f["q"]] + (f.get("alts") or [])}
+                mine = [w for w in a["wordings"] if _norm(w) not in have][-4:]
+                f["alts"] = (f.get("alts") or []) + mine
+                f["asked"] = a["n"]
             out.append(f)
         facts = out
-        (kdir() / "kb.json").write_text(json.dumps(facts, ensure_ascii=False))
+        tmp = kdir() / f"kb.{threading.get_ident()}.tmp"     # readers never see half a file
+        tmp.write_text(json.dumps(facts, ensure_ascii=False))
+        tmp.replace(kdir() / "kb.json")
         status["updated"] = time.time()
         return facts
 
@@ -251,6 +260,10 @@ def _words(s: str) -> set[str]:
 
 def find(q: str, limit: int = 12) -> list[dict]:
     """Facts that share the most words with the question (question, other wordings, topic and answer)."""
+    return [f for _, f in find_scored(q, limit)]
+
+
+def find_scored(q: str, limit: int = 12) -> list[tuple[int, dict]]:
     want = _words(q)
     if not want:
         return []
@@ -262,7 +275,69 @@ def find(q: str, limit: int = 12) -> list[dict]:
         if s:
             scored.append((s, f.get("date") or "", f))
     scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
-    return [f for _, _, f in scored[:limit]]
+    return [(sc, f) for sc, _, f in scored[:limit]]
+
+
+# ---------------------------------------------------------------- the questions you actually ask
+# Every question asked (Ask on the web or the watch, and the watch's offline questions) is kept. When it clearly
+# matches one fact (most of its words, and well ahead of the next best), your wording joins that fact's other
+# wordings: the watch model learns how you ask, the pack hears it, and the most-asked facts come first.
+MAX_ASKED = 3000
+
+
+def _asked_path() -> Path:
+    return kdir() / "asked.json"
+
+
+def asked() -> list[dict]:
+    try:
+        return json.loads(_asked_path().read_text())
+    except (OSError, ValueError):
+        return []
+
+
+def link_question(q: str) -> str:
+    """The fact this question is about, if that's clear ("" if not)."""
+    words = _words(q)
+    if len(words) < 2:
+        return ""
+    hits = find_scored(q, 2)
+    if not hits:
+        return ""
+    top, f = hits[0]
+    shared = len(words & _words(f["q"] + " " + " ".join(f.get("alts") or []) + " " + (f.get("topic") or "")))
+    second = hits[1][0] if len(hits) > 1 else 0
+    if shared >= 2 and shared * 2 >= len(words) and top >= second + 2:
+        return f["id"]
+    return ""
+
+
+def note_question(q: str, where: str = "ask", fid: str = "") -> str:
+    """Remember a question you asked; returns the fact id it was linked to ("" if none)."""
+    q = _clean_text(q, 160).rstrip("?").strip()
+    if len(q) < 4:
+        return ""
+    with _lock:
+        fid = fid if fid and any(f["id"] == fid for f in facts()) else link_question(q)
+        log_ = asked()
+        log_.append({"q": q, "at": time.time(), "where": where, "fact": fid})
+        tmp = _asked_path().with_suffix(f".{threading.get_ident()}.tmp")
+        tmp.write_text(json.dumps(log_[-MAX_ASKED:], ensure_ascii=False))
+        tmp.replace(_asked_path())
+    if fid:
+        rebuild()
+    return fid
+
+
+def _asked_by_fact() -> dict[str, dict]:
+    out: dict[str, dict] = {}
+    for a in asked():
+        if a.get("fact"):
+            o = out.setdefault(a["fact"], {"n": 0, "wordings": []})
+            o["n"] += 1
+            if a.get("where") != "watch" and _norm(a["q"]) not in [_norm(w) for w in o["wordings"]]:
+                o["wordings"].append(a["q"])
+    return out
 
 
 def context_for(q: str, limit: int = 2500) -> str:
@@ -280,7 +355,9 @@ def summary() -> dict:
         kinds[f["kind"]] = kinds.get(f["kind"], 0) + 1
     from . import sources
     learned = len(list((kdir() / "meetings").glob("*.json")))
-    return {"facts": len(fs), "kinds": kinds, "meetings_read": learned, "sources": len(sources.listing()), **status}
+    ak = asked()
+    return {"facts": len(fs), "kinds": kinds, "meetings_read": learned, "sources": len(sources.listing()),
+            "asked": len(ak), "asked_linked": sum(1 for a in ak if a.get("fact")), **status}
 
 
 def learn_all(force: bool = False) -> None:

@@ -369,6 +369,12 @@ owners, dates, budgets, terms, and who people are. In the background it reads on
   cores (`WATCHAI_THREADS`, longest run `WATCHAI_MINUTES`, default 120). The result shows how many questions it
   answers right, including ones worded in a way it never saw. The watch downloads `GET /api/watch/model/file`.
   It also trains again by itself between 02:00 and 05:00 when the facts changed (`WATCHAI_NIGHTLY=0`: only by hand).
+  With more facts it trains a bigger model (1,500+ facts: d=192), as long as the watch can hold it (4.5 MB).
+- **Learns how you ask** (1.13): every question you ask (Ask on the web or the watch, and the watch's offline
+  questions) is kept; when it clearly matches one fact, your wording becomes one of that fact's wordings (the watch
+  model trains on it, the watch can hear it) and the facts you ask most come first in the watch pack.
+- **Spoken answers offline** (1.13): the pack's answers are read out once with the server's voice (Piper) and the
+  watch keeps them (IMA ADPCM, ~8 KB a second) to say the answer without the internet.
 
 | | |
 |---|---|
@@ -376,6 +382,8 @@ owners, dates, budgets, terms, and who people are. In the background it reads on
 | `POST /api/knowledge/learn` `{"all": true}` | read new/changed (or all) meetings in the background |
 | `PUT /api/knowledge/{id}` | `{"a": "..."}` fix, `{"hidden": true}` hide, `{}` undo |
 | `GET /api/watch/pack?extra=1` | offline answer pack for the watch (+ more questions for its own model) |
+| `GET /api/watch/voice/{id}` | a pack answer read out (WAV, made once) |
+| `POST /api/watch/asked` | `{"items": [{"id", "q"}]}` questions asked on the watch offline |
 | `GET /api/watch/speech` | the watch's offline speech model (Espressif MultiNet7 English, 2.7 MB, once) |
 | `GET` / `POST /api/knowledge/sources`, `DELETE`, `POST .../{id}/refresh` | your web pages, files and texts |
 | `GET /api/watch/model`, `POST` / `DELETE /api/watch/model/train`, `GET /api/watch/model/file` | the watch model |

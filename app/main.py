@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.12.3"
+VERSION = "1.13.0"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -586,6 +586,9 @@ async def ask(request: Request):
         who = [n for n in people.all_names() if re.search(r"\b" + re.escape(n) + r"\b", q, re.I)]
         if who:                                      # "what does Priscilla usually raise?"
             context += "\n\nWhat Oracle Minutes knows about these people from all meetings:\n" + people.context_for(who, 3000)
+    if not data.get("recording") and not data.get("task"):
+        last = next((m["content"] for m in reversed(clean) if m["role"] == "user"), "")
+        threading.Thread(target=knowledge.note_question, args=(last, "ask"), daemon=True).start()   # learn your wording
     if data.get("scope") == "meetings":
         kb = knowledge.context_for(q)                # short facts learned from all meetings (the knowledge base)
         if kb:
@@ -891,6 +894,30 @@ def watch_pack(limit: int = watchpack.MAX_ITEMS, extra: bool = False):
     """The watch's offline answers: {"version", "count", "items": [{"id", "q", "say": [phrases], "a", ...}]};
     extra=1 also lists more questions (no answers) for the watch's own model: "extra": [{"id", "q", "say"}]."""
     return watchpack.build(max(1, min(limit, 300)), extra)
+
+
+@app.get("/api/watch/voice/{fid}", dependencies=[Depends(auth)])
+def watch_voice(fid: str):
+    """A pack answer read out (IMA ADPCM WAV), for the watch to play offline. Made on first request, then kept."""
+    p = watchpack.voice_file(fid)
+    if not p:
+        raise HTTPException(404, "no such answer, or no voice (TTS) on this server")
+    return FileResponse(p, media_type="audio/wav")
+
+
+@app.post("/api/watch/asked", dependencies=[Depends(auth)])
+async def watch_asked(request: Request):
+    """The questions asked on the watch while offline: {"items": [{"id": "<fact id>", "q": "who is ryan"}]}."""
+    try:
+        d = await request.json()
+    except Exception:
+        raise HTTPException(400, "body must be JSON")
+    n = 0
+    for it in (d.get("items") or [])[:200]:
+        if isinstance(it, dict) and it.get("q"):
+            knowledge.note_question(str(it["q"]), "watch", str(it.get("id") or ""))
+            n += 1
+    return {"noted": n}
 
 
 @app.get("/api/watch/speech", dependencies=[Depends(auth)])

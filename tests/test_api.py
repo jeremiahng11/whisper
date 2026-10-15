@@ -1622,3 +1622,45 @@ def test_watch_speech_model_served(client):
     r = client.get("/api/watch/speech", headers=H)
     assert r.status_code == 200 and len(r.content) > 2_000_000 and r.content[:4] == (1).to_bytes(4, "little")
     assert r.content[4:10] == b"mn7_en"
+
+
+def test_learns_your_questions_and_speaks_answers(client, monkeypatch):
+    from app import knowledge, speech, watchpack, watchlm_core as W
+    j = upload(client, "dev1-asked", 20)
+    knowledge.learn_meeting(j["id"])
+    f = next(x for x in knowledge.facts() if x["q"].startswith("When does Idea Saver"))
+    n0 = f.get("asked", 0)                                       # (earlier tests asked about it on the web too)
+    # a clear match: your wording joins the fact, it's counted, and the pack puts it first
+    assert knowledge.note_question("so when will the idea saver v2 actually ship?", "ask") == f["id"]
+    assert knowledge.note_question("what's the weather like") == ""            # no fact: kept, not linked
+    f2 = next(x for x in knowledge.facts() if x["id"] == f["id"])
+    assert "so when will the idea saver v2 actually ship" in f2["alts"] and f2["asked"] == n0 + 1
+    r = client.post("/api/watch/asked", json={"items": [{"id": f["id"], "q": "when does idea saver v two ship"}]}, headers=H)
+    assert r.json()["noted"] == 1
+    f3 = next(x for x in knowledge.facts() if x["id"] == f["id"])
+    assert f3["asked"] == n0 + 2 and "when does idea saver v two ship" not in f3["alts"]   # the watch's phrase is no new wording
+    assert client.get("/api/watch/pack", headers=H).json()["items"][0]["id"] == f["id"]
+    k = client.get("/api/knowledge", headers=H).json()
+    assert k["asked"] >= 3 and k["asked_linked"] >= 2
+    # Ask on the web is noted too (in the background)
+    client.post("/api/ask", json={"scope": "meetings", "messages": [{"role": "user", "content": "who owns the rollback plan then"}]}, headers=H)
+    for _ in range(100):
+        if any(a["q"] == "who owns the rollback plan then" for a in knowledge.asked()):
+            break
+        time.sleep(0.05)
+    assert any(a["q"] == "who owns the rollback plan then" and a["fact"] for a in knowledge.asked())
+    # spoken answers: made once, kept, the pack says which recording goes with which answer
+    monkeypatch.setattr(speech, "tts_available", lambda: True)
+    made = []
+    monkeypatch.setattr(speech, "tts", lambda text, lang="en": (made.append(text), speech.to_wav16k(__import__("numpy").zeros(16000), 16000))[1])
+    pk = client.get("/api/watch/pack", headers=H).json()
+    it = next(x for x in pk["items"] if x["id"] == f["id"])
+    assert it["voice"] == watchpack.voice_tag(it["a"])
+    r = client.get(f"/api/watch/voice/{f['id']}", headers=H)
+    assert r.status_code == 200 and r.content[:4] == b"RIFF" and r.content[20:22] == b"\x11\x00"   # IMA ADPCM
+    client.get(f"/api/watch/voice/{f['id']}", headers=H)
+    assert made == [it["a"]]                                                    # cached
+    assert client.get("/api/watch/voice/00000000", headers=H).status_code == 404
+    # model size grows with the facts, within what the watch can hold
+    assert W.config_for(100, 300)["d"] == 160 and W.config_for(2000, 3000)["d"] == 192
+    assert all(W.weight_bytes(W.config_for(n, 6000)) <= W.WATCH_BUDGET for n in (10, 2000, 5000, 20000))

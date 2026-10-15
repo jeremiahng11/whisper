@@ -80,6 +80,28 @@ def default_config(vocab_size: int) -> dict:
     return {"vocab": vocab_size, "d": 160, "layers": 6, "heads": 5, "ffn": 432, "seq": 96, "rope_theta": 10000.0}
 
 
+def weight_bytes(cfg: dict) -> int:
+    """What the watch must hold for this model: int8 weights + a float scale per row (the file, about)."""
+    d, f, L, V = cfg["d"], cfg["ffn"], cfg["layers"], cfg["vocab"]
+    per_layer = 4 * d * d + 3 * d * f + 4 * (3 * d + d + 2 * f + d) + 8 * d
+    return V * d + 4 * V + L * per_layer + 4 * d
+
+
+# bigger models for more facts (they answer reworded questions better), as long as the watch can hold them:
+# (d, layers, heads, ffn, from this many facts)
+SIZES = [(160, 6, 5, 432, 0), (192, 6, 6, 512, 1500), (224, 6, 7, 608, 4000), (256, 8, 8, 704, 8000)]
+WATCH_BUDGET = 4_500_000                           # bytes of PSRAM for the weights (the watch frees the speech model for it)
+
+
+def config_for(n_facts: int, vocab_size: int, budget: int = WATCH_BUDGET) -> dict:
+    best = default_config(vocab_size)
+    for d, L, H, f, need in SIZES:
+        c = {**best, "d": d, "layers": L, "heads": H, "ffn": f}
+        if n_facts >= need and weight_bytes(c) <= budget:
+            best = c
+    return best
+
+
 def init_params(cfg: dict, seed: int = 0) -> dict:
     rng = np.random.default_rng(seed)
     d, f, L = cfg["d"], cfg["ffn"], cfg["layers"]

@@ -1345,9 +1345,10 @@ async function loadKb() {
     const pack = await (await api("/api/watch/pack")).json();
     $("#kbNow").innerHTML = `<b>${k.facts}</b> facts from ${k.meetings_read} meetings${k.sources ? " and " + k.sources + " sources" : ""}${kinds ? " (" + esc(kinds) + ")" : ""}. ` +
       `The watch can answer <b>${pack.count}</b> of them offline.` +
+      (k.asked ? `<br>You've asked ${k.asked} questions; ${k.asked_linked} matched a fact and taught it your wording.` : "") +
       (k.state === "learning" ? `<br>Reading meetings… ${k.done} of ${k.total}` : "") + (k.error ? `<br>Last problem: ${esc(k.error)}` : "");
     $("#kbList").innerHTML = k.items.map(f => `<div class="row" style="gap:6px;align-items:flex-start;padding:4px 0;border-bottom:1px solid var(--line,#eee)" data-id="${f.id}">
-      <div style="flex:1"><b>${esc(f.q)}?</b> ${esc(f.a)}${f.edited ? ' <span class="mute">(your fix)</span>' : ""}<br><span class="mute">${esc(f.kind)}${f.meeting ? " · " + esc(f.meeting) : ""}${f.date ? " · " + esc(f.date) : ""}</span></div>
+      <div style="flex:1"><b>${esc(f.q)}?</b> ${esc(f.a)}${f.edited ? ' <span class="mute">(your fix)</span>' : ""}<br><span class="mute">${esc(f.kind)}${f.meeting ? " · " + esc(f.meeting) : ""}${f.date ? " · " + esc(f.date) : ""}${f.asked ? " · asked " + f.asked + "×" : ""}</span></div>
       <button class="ghost kbFix" style="padding:2px 8px">Fix</button><button class="ghost kbHide" style="padding:2px 8px">Hide</button></div>`).join("") || '<span class="mute">Nothing yet.</span>';
     document.querySelectorAll(".kbFix").forEach(b => b.onclick = async () => {
       const id = b.parentNode.dataset.id, f = k.items.find(x => x.id === id);

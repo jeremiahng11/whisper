@@ -81,8 +81,8 @@ def train(out: Path, max_minutes: float = 120, max_epochs: int = 200, seed: int 
 
     ds = json.loads((out / "dataset.json").read_text())
     pairs = ds["train"]
-    vocab = W.Vocab.build([q for q, _ in pairs + ds["test"]], [a for _, a in pairs])
-    cfg = {**W.default_config(len(vocab.itos)), **(config or {})}
+    vocab = W.Vocab.build([q for q, _ in pairs + ds["test"]], [a for _, a in pairs], max_size=6000)
+    cfg = {**W.config_for(ds["facts"], len(vocab.itos)), **(config or {})}   # bigger with more facts
     T = cfg["seq"]
     seqs = []
     for q, a in pairs:
