@@ -17,6 +17,8 @@ import threading
 import time
 from typing import Optional
 
+import numpy as np
+
 from . import db, transcribe, voices, worker
 from .config import settings
 
@@ -36,11 +38,61 @@ def job_lock(jid: str) -> threading.Lock:
         return _job_locks.setdefault(jid, threading.Lock())
 
 
+RULES = "r2"          # bump when the matching rules change: every meeting is checked again
+
+
+# ---------------------------------------------------------------- pitch: a cheap, strong check against mix-ups
+# Voice prints can call a woman's voice a man's (or the reverse) when the room is noisy or one of them has few
+# samples. Pitch can't: typical speaking pitch differs by ~1.7x between low and high voices. A line or a whole
+# speaker group is never given to a person whose usual pitch is far from theirs.
+PITCH_RATIO = 1.35
+
+
+def _line_pitch(jid: str, job: dict, segs: list, idxs: list[int]) -> dict[int, float]:
+    """Median pitch (Hz) of these lines, cached in seg_pitch.json. 0 = not enough voiced audio to tell."""
+    from . import people as _people
+    cache = worker.load_json(jid, "seg_pitch.json", {}) or {}
+    path = job.get("audio_path")
+    changed = False
+    out = {}
+    for i in idxs:
+        k = str(i)
+        if k not in cache:
+            p = 0.0
+            if path and os.path.exists(path) and i < len(segs):
+                s = segs[i]
+                try:
+                    f0 = _people.pitch_track(transcribe.load_range(path, s["start"], min(s["end"], s["start"] + 12)))
+                    if len(f0) >= 12:
+                        p = float(np.median(f0))
+                except Exception:                          # noqa: BLE001
+                    p = 0.0
+            cache[k] = round(p, 1)
+            changed = True
+        out[i] = cache[k]
+    if changed:
+        worker._write(jid, "seg_pitch.json", json.dumps(cache))
+    return out
+
+
+def _person_pitch(name: str) -> float:
+    from . import people as _people
+    p = (_people.get(name) or {}).get("voice") or {}
+    return float(p.get("pitch_hz") or 0)
+
+
+def pitch_ok(person_hz: float, hz: float) -> bool:
+    if not person_hz or not hz:
+        return True                                        # can't tell: no veto
+    r = hz / person_hz
+    return 1 / PITCH_RATIO <= r <= PITCH_RATIO
+
+
 def voices_signature() -> str:
     """Changes whenever a voice is added, learned more or forgotten."""
     with db._lock:
         r = db._conn.execute("SELECT COUNT(*) AS n, COALESCE(MAX(updated_at), 0) AS t FROM voices").fetchone()
-    return f"{r['n']}:{round(float(r['t']), 3)}"
+    return f"{r['n']}:{round(float(r['t']), 3)}:{RULES}"
 
 
 def stale(job: dict) -> bool:
@@ -205,14 +257,26 @@ def apply(jid: str) -> int:
     close_to: dict[str, int] = {}
     # 1. whole groups: the speaker separation often splits one person into two or three groups (noisy room,
     #    long talker). A group whose voice clearly matches a tagged person becomes theirs, all its lines at once.
+    who = lambda lab: lab[6:] if lab.startswith("voice:") else names.get(lab, "")   # noqa: E731
+    pp = {lab: _person_pitch(who(lab)) for lab in people if who(lab)}
+    has_lines = {s.get("speaker") for s in segs}
     group_to: dict[str, str] = {}
     for g, info in spk.items():
         e = (info or {}).get("embedding")
         if not e or g in people or g in merged or (names.get(g) and g not in (opts.get("speaker_auto") or [])):
             continue
-        sims = sorted(((_cos(e, c), lab) for lab, c in people.items()), reverse=True)
+        glines = sorted((i for i, s in enumerate(segs) if (s.get("orig") or s.get("speaker")) == g and not s.get("also")),
+                        key=lambda i: -(segs[i]["end"] - segs[i]["start"]))[:6]
+        gp = [p for p in _line_pitch(jid, job, segs, glines).values() if p] if glines else []
+        ghz = float(np.median(gp)) if len(gp) >= 2 else 0.0
+        sims = sorted(((_cos(e, c), lab) for lab, c in people.items() if pitch_ok(pp.get(lab, 0), ghz)), reverse=True)
+        if not sims:
+            continue
         second = sims[1][0] if len(sims) > 1 else -1.0
-        if sims[0][0] >= settings.autotag_group and sims[0][0] - second >= 0.05:
+        # the separation already heard this group as a different person from someone talking under their own
+        # label here: only a very close voice overrides that
+        need = max(settings.autotag_group, 0.65) if sims[0][1] in has_lines else settings.autotag_group
+        if sims[0][0] >= need and sims[0][0] - second >= 0.05:
             group_to[g] = sims[0][1]
     # the diarizer's speakers count as "someone else" unless they sound like a tagged person (then they're them)
     others = {}
@@ -248,6 +312,28 @@ def apply(jid: str) -> int:
                 close_to[lab] = close_to.get(lab, 0) + 1
             else:
                 why["far"] += 1
+    # earlier runs may have joined a whole group to someone it can't be (before the pitch check): undo that join
+    unmerge = set()
+    for g, lab in (opts.get("merged") or {}).items():
+        if lab in pp:
+            glines = sorted((i for i, s in enumerate(segs) if s.get("orig") == g and not s.get("also")),
+                            key=lambda i: -(segs[i]["end"] - segs[i]["start"]))[:6]
+            gp = [p for p in _line_pitch(jid, job, segs, glines).values() if p] if glines else []
+            if len(gp) >= 2 and not pitch_ok(pp[lab], float(np.median(gp))):
+                unmerge.add(g)
+                for i, s in enumerate(segs):
+                    if s.get("orig") == g and i not in manual:
+                        unsure.add(i)
+                        decide.pop(i, None)
+    # pitch veto: a line never goes to someone whose usual pitch is far from the line's (a woman's voice to a man)
+    check = [i for i, lab in decide.items() if pp.get(lab)]
+    if check:
+        lp = _line_pitch(jid, job, segs, check)
+        for i in check:
+            if not pitch_ok(pp[decide[i]], lp.get(i, 0)):
+                unsure.add(i)
+                why["far"] += 1
+                del decide[i]
     # write onto the LATEST transcript and settings: you may have tagged more lines while this was running
     changed = 0
     with job_lock(jid):
@@ -288,6 +374,8 @@ def apply(jid: str) -> int:
             auto.add(i)
         merged_now = dict(opts.get("merged") or {})
         merged_now.update(group_to)
+        for g in unmerge:
+            merged_now.pop(g, None)
         for i in unsure:
             if i in auto and i < len(segs) and segs[i].get("speaker") in people:
                 auto.discard(i)                            # no longer sure: not marked as auto
@@ -298,9 +386,11 @@ def apply(jid: str) -> int:
                     segs[i]["speaker"] = o
                     changed += 1
         worker._write(jid, "transcript.json", json.dumps(tr, ensure_ascii=False, indent=1))
-        if group_to:
+        if group_to or unmerge:
             m = dict(opts.get("merged") or {})
             m.update(group_to)
+            for g in unmerge:
+                m.pop(g, None)
             opts["merged"] = m
         opts["speaker_names"] = names2
         opts["speaker_auto"] = sorted(recog)

@@ -141,6 +141,11 @@ def top_up(jid: str, per_person: int = 8) -> int:
                 continue
             if not is_sure and similarity(e, known[key], allsamp.get(key, [])) < strict:
                 continue                                    # named by voice but not clearly them: not a sample
+            if not is_sure:                                 # and never a voice of a very different pitch
+                ph = autotag._person_pitch(who)
+                lp = autotag._line_pitch(jid, job, segs, [r[0]]).get(r[0], 0) if ph else 0
+                if not autotag.pitch_ok(ph, lp):
+                    continue
             add_sample(who, e, jid, r[0])
             have.setdefault(key, set()).add(r[0])
             allsamp.setdefault(key, []).append(e)

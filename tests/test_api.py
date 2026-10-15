@@ -1414,3 +1414,33 @@ def test_name_save_with_stale_label_is_skipped(client):
     # same name again is fine (idempotent)
     r = client.post(f"/api/jobs/{jid}/speakers", json={"names": {"Speaker 2": "TINA"}, "was": {"Speaker 2": ""}}, headers=H).json()
     assert db.get(jid)["options"]["speaker_names"]["Speaker 2"].lower() == "tina"
+
+
+def test_pitch_veto_undoes_a_wrong_join(client, monkeypatch):
+    """A whole speaker group joined to a man by voice print, but it's a woman's pitch: the join is undone and the
+    lines go back to their own speaker."""
+    import json
+    from app import autotag, db, worker
+    _only_these_voices()
+    j = upload(client, "dev1-pitch", 40, "diarize=true&speakers=2")
+    jid = j["id"]
+    _wait_autotag(client, jid)
+    client.post(f"/api/jobs/{jid}/speakers", json={"names": {"Speaker 1": "Jer"}, "remember": False}, headers=H)
+    tr = worker.load_transcript(jid)
+    moved = []
+    for i, s in enumerate(tr["segments"]):
+        if s.get("speaker") == "Speaker 2":
+            s["orig"], s["speaker"] = "Speaker 2", "Speaker 1"
+            moved.append(i)
+    assert moved
+    worker._write(jid, "transcript.json", json.dumps(tr))
+    o = dict(db.get(jid)["options"])
+    o.update(merged={"Speaker 2": "Speaker 1"}, auto_lines=moved, manual_lines={})
+    db.update(jid, options=o)
+    monkeypatch.setattr(autotag, "_person_pitch", lambda name: 120.0 if name == "Jer" else 0.0)
+    monkeypatch.setattr(autotag, "_line_pitch", lambda jid_, job, segs, idxs: {i: (215.0 if i in moved else 118.0) for i in idxs})
+    autotag.apply(jid)
+    tr = worker.load_transcript(jid)
+    assert all(tr["segments"][i]["speaker"] == "Speaker 2" for i in moved)
+    assert "Speaker 2" not in (db.get(jid)["options"].get("merged") or {})
+    assert autotag.pitch_ok(120, 130) and not autotag.pitch_ok(120, 210) and autotag.pitch_ok(0, 210)
