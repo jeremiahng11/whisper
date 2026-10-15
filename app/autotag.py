@@ -38,7 +38,7 @@ def job_lock(jid: str) -> threading.Lock:
         return _job_locks.setdefault(jid, threading.Lock())
 
 
-RULES = "r2"          # bump when the matching rules change: every meeting is checked again
+RULES = "r3"          # bump when the matching rules change: every meeting is checked again
 
 
 # ---------------------------------------------------------------- pitch: a cheap, strong check against mix-ups
@@ -75,10 +75,32 @@ def _line_pitch(jid: str, job: dict, segs: list, idxs: list[int]) -> dict[int, f
     return out
 
 
+_pp_cache: dict[str, tuple[float, float]] = {}
+
+
 def _person_pitch(name: str) -> float:
+    """Their usual speaking pitch: from the People profile, else measured on the lines their voice samples came from."""
     from . import people as _people
-    p = (_people.get(name) or {}).get("voice") or {}
-    return float(p.get("pitch_hz") or 0)
+    p = float(((_people.get(name) or {}).get("voice") or {}).get("pitch_hz") or 0)
+    if p or not name:
+        return p
+    hit = _pp_cache.get(name.lower())
+    if hit and time.time() - hit[1] < 3600:
+        return hit[0]
+    with db._lock:
+        rows = db._conn.execute("SELECT job_id, seg FROM voice_samples WHERE lower(name)=lower(?) AND seg >= 0 "
+                                "ORDER BY created DESC LIMIT 10", (name,)).fetchall()
+    vals = []
+    for r in rows:
+        j = db.get(r["job_id"])
+        tr = worker.load_transcript(r["job_id"]) if j else None
+        if j and tr:
+            v = _line_pitch(r["job_id"], j, tr.get("segments", []), [int(r["seg"])]).get(int(r["seg"]), 0)
+            if v:
+                vals.append(v)
+    p = float(np.median(vals)) if len(vals) >= 3 else 0.0
+    _pp_cache[name.lower()] = (p, time.time())
+    return p
 
 
 def pitch_ok(person_hz: float, hz: float) -> bool:
@@ -224,12 +246,14 @@ def apply(jid: str) -> int:
             people[lab] = c
     # people the server already knows from other meetings: they count too, even if nobody was tagged here
     tagged = dict(people)
+    remembered: set[str] = set()                           # known only from OTHER meetings (other room, other mic)
     in_meeting = {names[lab] for lab in people if lab in names}
     for lab, n in names.items():                           # named here (e.g. recognised), no sample of its own
         if lab not in people and n in known:
             if any(_cos(known[n], c) >= settings.autotag_group for c in tagged.values()):
                 continue                                   # you tagged that voice as someone else here
             people[lab] = _norm(known[n])
+            remembered.add(lab)
             in_meeting.add(n)
     for n, v in known.items():
         if n in in_meeting or n in names.values():
@@ -237,6 +261,7 @@ def apply(jid: str) -> int:
         if any(_cos(v, c) >= settings.autotag_group for c in tagged.values()):
             continue                                       # sounds like someone you tagged here: yours wins
         people["voice:" + n] = _norm(v)               # becomes a speaker of this meeting if they're heard
+        remembered.add("voice:" + n)
     if not people:
         if embs and not any(embs.values()) and transcribe.embed_error:
             raise RuntimeError("voice comparison isn't working on the server: " + transcribe.embed_error)
@@ -276,6 +301,8 @@ def apply(jid: str) -> int:
         # the separation already heard this group as a different person from someone talking under their own
         # label here: only a very close voice overrides that
         need = max(settings.autotag_group, 0.65) if sims[0][1] in has_lines else settings.autotag_group
+        if sims[0][1] in remembered:                       # a voice from another meeting: the stricter bar
+            need = max(need, settings.voice_match)
         if sims[0][0] >= need and sims[0][0] - second >= 0.05:
             group_to[g] = sims[0][1]
     # the diarizer's speakers count as "someone else" unless they sound like a tagged person (then they're them)
@@ -303,7 +330,7 @@ def apply(jid: str) -> int:
         sims = sorted(((_cos(e, c), lab) for lab, c in people.items()), reverse=True)
         best, lab = sims[0]
         rival = max([x for x, _ in sims[1:]] + [_cos(e, v) for v in others.values()] + [-1.0])
-        if best >= thr and best - rival >= margin:
+        if best >= (max(thr, settings.voice_match - 0.05) if lab in remembered else thr) and best - rival >= margin:
             decide[i] = lab
         else:
             unsure.add(i)
