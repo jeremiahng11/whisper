@@ -428,6 +428,7 @@ ul.replies{margin:4px 0;padding-left:20px;font-size:13.5px}
         <div class="sub2">Watch wake word</div>
         <p class="mute" style="margin:0 0 8px">What the Idea Saver Round listens for. It checks for a new set every few hours (or Settings &gt; Hey Oracle on the watch). Train one with <code>training/wakeword/run.sh</code>, then upload <code>oracle_wakeword.zip</code> here.</p>
         <div id="wwNow" class="mute">…</div>
+        <div id="wwVoice" class="mute" style="margin-top:6px"></div>
         <div class="row" style="margin-top:10px"><input type="file" id="wwFile" accept=".zip" class="hidden"><button class="ghost" id="wwUp">Upload a trained set (.zip)</button><button class="danger hidden" id="wwReset">Back to the starter</button><span class="mute" id="wwMsg"></span></div>
       </div>
       <details class="block"><summary class="sub2" style="cursor:pointer;margin:0">API key (scripts, or this server without sign-in)</summary>
@@ -1285,6 +1286,13 @@ async function loadWake() {
     $("#wwNow").innerHTML = `<b>"${esc(wake ? wake.label : "?")}"</b> ${m.source === "starter" ? "(the starter set, also built into the watch)" : "(yours" + (m.uploaded_at ? ", uploaded " + when(m.uploaded_at) : "") + ")"}` +
       (cmds.length ? `<br>Commands: ${cmds.map(c => esc(c.label)).join(", ")}` : "<br>No offline commands yet.");
     $("#wwReset").classList.toggle("hidden", m.source === "starter");
+    const v = await (await api("/api/wakeword/samples")).json();
+    const names = { wake: "Hey Oracle", start_meeting: "Start meeting", voice_memo: "Voice memo", stop_recording: "Stop recording", mark_this: "Mark this" };
+    $("#wwVoice").innerHTML = v.total
+      ? `Your voice: ${Object.entries(v.samples).filter(([, n]) => n).map(([k, n]) => `${esc(names[k] || k)} ${n}`).join(", ")} clips - used the next time you run <code>run.sh</code>. <a href="#" id="wwVoiceClear">Clear</a>`
+      : "Your voice: no clips yet. On the watch: Settings &gt; wake word &gt; Teach my voice.";
+    const c = $("#wwVoiceClear");
+    if (c) c.onclick = async (e) => { e.preventDefault(); if (confirm("Delete all your voice clips?")) { await api("/api/wakeword/samples", { method: "DELETE" }); loadWake(); } };
   } catch (e) { $("#wwNow").textContent = "Not available on this server version."; }
 }
 $("#wwUp").onclick = () => $("#wwFile").click();

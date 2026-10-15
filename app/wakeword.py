@@ -133,3 +133,53 @@ def install(uploads: dict[str, bytes]) -> dict:
 def reset() -> dict:
     shutil.rmtree(_dir(), ignore_errors=True)
     return manifest()
+
+
+# ---------------------------------------------------------------- your voice ("Teach my voice" on the watch)
+# The watch records you saying each phrase (about 20 x "Hey Oracle", 8 x each command) and sends the clips here.
+# The training kit fetches them (GET /api/wakeword/samples.zip) and trains with them, so the models know your voice.
+SAMPLE_MAX = 400 * 1024
+
+
+def _samples_dir() -> Path:
+    return settings.data_dir / "wakeword_samples"
+
+
+def add_sample(mid: str, data: bytes) -> dict:
+    if mid not in COMMANDS:
+        raise ValueError(f"unknown phrase {mid!r}")
+    if not (1000 < len(data) <= SAMPLE_MAX) or data[:4] != b"RIFF" or data[8:12] != b"WAVE":
+        raise ValueError("send a short WAV clip")
+    d = _samples_dir() / mid
+    d.mkdir(parents=True, exist_ok=True)
+    name = f"{int(time.time() * 1000)}.wav"
+    (d / name).write_bytes(data)
+    return samples_summary()
+
+
+def samples_summary() -> dict:
+    out = {}
+    for mid in sorted(COMMANDS):
+        d = _samples_dir() / mid
+        out[mid] = len(list(d.glob("*.wav"))) if d.exists() else 0
+    return {"samples": out, "total": sum(out.values())}
+
+
+def samples_zip() -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for mid in sorted(COMMANDS):
+            d = _samples_dir() / mid
+            for f in sorted(d.glob("*.wav")) if d.exists() else []:
+                z.write(f, f"{mid}/{f.name}")
+    return buf.getvalue()
+
+
+def clear_samples(mid: str | None = None) -> dict:
+    if mid:
+        if mid not in COMMANDS:
+            raise ValueError(f"unknown phrase {mid!r}")
+        shutil.rmtree(_samples_dir() / mid, ignore_errors=True)
+    else:
+        shutil.rmtree(_samples_dir(), ignore_errors=True)
+    return samples_summary()

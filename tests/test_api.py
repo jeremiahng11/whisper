@@ -1376,3 +1376,22 @@ def test_wakeword_models_for_the_watch(client):
     assert r.status_code == 400 and "no wake word" in r.json()["detail"]
     assert client.get("/api/wakeword", headers=H).json()["version"] == m2["version"]
     assert client.delete("/api/wakeword", headers=H).json()["source"] == "starter"
+
+
+def test_wakeword_voice_samples(client):
+    import io
+    import struct
+    import zipfile
+    pcm = b"\x00\x01" * 16000
+    wav = b"RIFF" + struct.pack("<I", 36 + len(pcm)) + b"WAVEfmt " + struct.pack("<IHHIIHH", 16, 1, 1, 16000, 32000, 2, 16) + \
+        b"data" + struct.pack("<I", len(pcm)) + pcm
+    for _ in range(3):
+        assert client.post("/api/wakeword/samples/wake", content=wav, headers=H).status_code == 200
+    r = client.post("/api/wakeword/samples/stop_recording", content=wav, headers=H).json()
+    assert r["samples"]["wake"] == 3 and r["samples"]["stop_recording"] == 1 and r["total"] == 4
+    assert client.post("/api/wakeword/samples/bogus", content=wav, headers=H).status_code == 400
+    assert client.post("/api/wakeword/samples/wake", content=b"nope", headers=H).status_code == 400
+    z = zipfile.ZipFile(io.BytesIO(client.get("/api/wakeword/samples.zip", headers=H).content))
+    assert sorted(n.split("/")[0] for n in z.namelist()) == ["stop_recording", "wake", "wake", "wake"]
+    assert client.delete("/api/wakeword/samples?phrase=wake", headers=H).json()["samples"]["wake"] == 0
+    assert client.delete("/api/wakeword/samples", headers=H).json()["total"] == 0

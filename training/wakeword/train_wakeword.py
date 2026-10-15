@@ -20,6 +20,7 @@ Note: the background / negative datasets have mixed licences, several non-commer
 for personal use; train with your own noise data before putting them in a product.
 """
 import argparse
+import io
 import json
 import os
 import random
@@ -132,6 +133,41 @@ def prepare_data(quick: bool):
         (d / ".done").write_text("ok")
 
 
+# ---------------------------------------------------------------- your voice (from the watch's "Teach my voice")
+VOICE = WORK / "my_voice"
+
+
+def fetch_voice(zip_path: str | None):
+    """Your clips: from --voice <zip>, else from Oracle Minutes (ORACLE_URL + ORACLE_KEY). 16 kHz PCM in VOICE/<id>/."""
+    data = None
+    if zip_path:
+        data = Path(zip_path).read_bytes()
+    elif os.environ.get("ORACLE_URL") and os.environ.get("ORACLE_KEY"):
+        import requests
+        r = requests.get(os.environ["ORACLE_URL"].rstrip("/") + "/api/wakeword/samples.zip",
+                         headers={"X-API-Key": os.environ["ORACLE_KEY"]}, timeout=120)
+        if r.status_code == 200:
+            data = r.content
+        else:
+            log("could not fetch your voice clips:", r.status_code)
+    if not data:
+        return {}
+    shutil.rmtree(VOICE, ignore_errors=True)
+    raw = WORK / "my_voice_raw"
+    shutil.rmtree(raw, ignore_errors=True)
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        z.extractall(raw)
+    counts = {}
+    for f in sorted(raw.glob("*/*.wav")):
+        d = VOICE / f.parent.name
+        d.mkdir(parents=True, exist_ok=True)
+        to_wav16k(f, d / f.name)                  # the watch sends IMA ADPCM: training wants plain PCM
+        counts[f.parent.name] = counts.get(f.parent.name, 0) + 1
+    shutil.rmtree(raw, ignore_errors=True)
+    log("your voice:", counts)
+    return counts
+
+
 # ---------------------------------------------------------------- one model
 def speak(texts: list[str], out: Path, n: int, quick: bool):
     """n clips of the texts (cycled), many voices and speeds."""
@@ -202,6 +238,29 @@ def train_one(m: dict, quick: bool) -> dict:
              {"training": ("train", 2, 10), "validation": ("validation", 1, 10), "testing": ("test", 1, 1)})
     features(base / "nearmiss", base / "near_features",
              {"training": ("train", 1, 10), "validation": ("validation", 1, 10), "testing": ("test", 1, 1)})
+    mine, others = VOICE / mid, base / "my_voice_others"
+    voice_feats = []
+    if mine.exists() and len(list(mine.glob("*.wav"))) >= 5:
+        # your own takes: each one many times with different rooms / noise, and weighted up
+        shutil.rmtree(base / "my_features", ignore_errors=True)          # new clips may have come in
+        features(mine, base / "my_features",
+                 {"training": ("train", 25, 10), "validation": ("validation", 3, 10), "testing": ("test", 3, 1)})
+        voice_feats.append({"features_dir": str(base / "my_features"), "sampling_weight": 3.0, "penalty_weight": 1.5,
+                            "truth": True, "truncation_strategy": "truncate_start", "type": "mmap"})
+        # you saying the OTHER phrases: must not trigger this one
+        shutil.rmtree(others, ignore_errors=True)
+        others.mkdir(parents=True)
+        for f in VOICE.glob("*/*.wav"):
+            if f.parent.name != mid:
+                shutil.copy(f, others / f"{f.parent.name}_{f.name}")
+        if len(list(others.glob("*.wav"))) >= 5:
+            shutil.rmtree(base / "my_other_features", ignore_errors=True)
+            features(others, base / "my_other_features",
+                     {"training": ("train", 10, 10), "validation": ("validation", 2, 10), "testing": ("test", 2, 1)})
+            voice_feats.append({"features_dir": str(base / "my_other_features"), "sampling_weight": 2.0,
+                                "penalty_weight": 2.0, "truth": False, "truncation_strategy": "truncate_start",
+                                "type": "mmap"})
+        log(f"   with {len(list(mine.glob('*.wav')))} clips of your voice")
     neg = DATA / "negative_datasets"
     cfg = {
         "window_step_ms": 10,
@@ -219,7 +278,7 @@ def train_one(m: dict, quick: bool) -> dict:
              "truncation_strategy": "random", "type": "mmap"},
             {"features_dir": str(neg / "dinner_party_eval"), "sampling_weight": 0.0, "penalty_weight": 1.0,
              "truth": False, "truncation_strategy": "split", "type": "mmap"},
-        ],
+        ] + voice_feats,
         "training_steps": [steps],
         "positive_class_weight": [1],
         "negative_class_weight": [20],
@@ -279,12 +338,14 @@ def main():
     ap.add_argument("--only", action="append", help="train only these ids (repeat); the rest are kept from /out")
     ap.add_argument("--quick", action="store_true", help="tiny test run to check the setup")
     ap.add_argument("--no-upload", action="store_true")
+    ap.add_argument("--voice", help="zip of your voice clips (default: fetched from Oracle Minutes)")
     a = ap.parse_args()
     random.seed(1)
     spec = yaml.safe_load(Path(a.phrases).read_text())["models"]
     if not any(m["id"] == "wake" for m in spec):
         raise SystemExit("phrases.yaml needs a model with id: wake")
     prepare_data(a.quick)
+    fetch_voice(a.voice)
     done = {}
     old = OUT / "wake.json"
     if old.exists():

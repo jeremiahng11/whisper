@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.11.2"
+VERSION = "1.11.3"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -814,6 +814,36 @@ async def put_wakeword(request: Request):
         raise HTTPException(400, str(e))
     except Exception as e:                       # noqa: BLE001  (a broken zip)
         raise HTTPException(400, f"could not read the upload: {e}")
+
+
+@app.post("/api/wakeword/samples/{mid}", dependencies=[Depends(auth)])
+async def add_wake_sample(mid: str, request: Request):
+    """One clip of you saying a phrase (WAV body), from the watch's "Teach my voice"."""
+    data = await request.body()
+    try:
+        return wakeword.add_sample(mid, data)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/wakeword/samples", dependencies=[Depends(auth)])
+def wake_samples():
+    return wakeword.samples_summary()
+
+
+@app.get("/api/wakeword/samples.zip", dependencies=[Depends(auth)])
+def wake_samples_zip():
+    """All your clips, for the training kit."""
+    return Response(wakeword.samples_zip(), media_type="application/zip",
+                    headers={"Content-Disposition": 'attachment; filename="my_voice_samples.zip"'})
+
+
+@app.delete("/api/wakeword/samples", dependencies=[Depends(auth)])
+def clear_wake_samples(phrase: Optional[str] = Query(None)):
+    try:
+        return wakeword.clear_samples(phrase)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 @app.delete("/api/wakeword", dependencies=[Depends(auth)])
