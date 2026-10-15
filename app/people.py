@@ -341,15 +341,21 @@ def their_lines(name: str) -> list[dict]:
         labs = {lab for lab, n in names.items() if (n or "").lower() == low}
         if not labs:
             continue
+        o = j.get("options") or {}
+        manual = {int(k) for k in (o.get("manual_lines") or {})}
+        auto_lines = set(o.get("auto_lines") or [])
+        recognised = set(o.get("speaker_auto") or [])
         tr = worker.load_transcript(j["id"]) or {}
         for i, s in enumerate(tr.get("segments", [])):
             if s.get("speaker") in labs and not s.get("also"):
+                # sure = you confirmed it (✓) or named its whole speaker yourself; not a guess by voice
+                sure = i in manual or (s.get("speaker") not in recognised and i not in auto_lines)
                 out.append({"job": j["id"], "title": j.get("title") or j["filename"], "when": j["created_at"],
                             "external": bool((j.get("options") or {}).get("external",
                                              (j.get("options") or {}).get("template") in ("client", "external", "partner"))),
                             "i": i, "start": s["start"], "end": s["end"], "text": s.get("text", ""),
                             "words": len(s.get("words") or []) or len((s.get("text") or "").split()),
-                            "audio": j.get("audio_path")})
+                            "audio": j.get("audio_path"), "sure": sure})
     return out
 
 
@@ -462,7 +468,9 @@ def build(name: str, with_note: bool = True) -> dict:
         m = meetings.setdefault(ln["job"], {"id": ln["job"], "title": ln["title"], "when": ln["when"], "seconds": 0})
         m["seconds"] += max(0.0, ln["end"] - ln["start"])
     clips = []
-    for ln in sorted(lines, key=lambda x: -(x["end"] - x["start"]))[:24]:   # their longest lines
+    sure = [ln for ln in lines if ln.get("sure")]
+    ref = sure if len(sure) >= 3 else lines                # how they sound: from lines you named, not voice guesses
+    for ln in sorted(ref, key=lambda x: -(x["end"] - x["start"]))[:24]:   # their longest lines
         if ln["audio"] and ln["end"] - ln["start"] >= 2:
             try:
                 clips.append(transcribe.load_range(ln["audio"], ln["start"], min(ln["end"], ln["start"] + 15)))
@@ -471,13 +479,15 @@ def build(name: str, with_note: bool = True) -> dict:
     voice = voice_stats(clips)
     lang = language_stats(lines)
     old = get(name) or {}
-    sig = f"{len(lines)}:{len(meetings)}"
+    sig = f"v2:{len(lines)}:{len(meetings)}"
     note, note_sig = old.get("note", ""), old.get("note_sig", "")
-    grew = not note_sig or len(lines) >= 1.2 * int(note_sig.split(":")[0] or 0) or note_sig.split(":")[1] != str(len(meetings))
+    ns = note_sig.split(":")[-2:] if note_sig else []
+    grew = len(ns) != 2 or not ns[0].isdigit() or len(lines) >= 1.2 * int(ns[0]) or ns[1] != str(len(meetings))
     if with_note and grew:
         note = ai_note(name, lines, lang, voice) or note
         note_sig = sig if note else note_sig
-    longest = max((ln for ln in lines if ln["audio"]), key=lambda x: x["end"] - x["start"], default=None)
+    # "Hear them": their longest line that you named or confirmed - never one the server only guessed by voice
+    longest = max((ln for ln in (sure or lines) if ln["audio"]), key=lambda x: x["end"] - x["start"], default=None)
     ext = [m for m in meetings if any(ln["external"] for ln in lines if ln["job"] == m)]
     split = {"external_meetings": len(ext), "internal_meetings": len(meetings) - len(ext),
              "external_share": None, "internal_share": None}
@@ -554,7 +564,7 @@ def context_for(names: list[str], limit: int = 1800) -> str:
 
 def _sig(name: str) -> str:
     lines = their_lines(name)
-    return f"{len(lines)}:{len({ln['job'] for ln in lines})}"
+    return f"v2:{len(lines)}:{len({ln['job'] for ln in lines})}"
 
 
 _cleaned: dict[str, float] = {}
