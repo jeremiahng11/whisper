@@ -345,5 +345,10 @@ def _sweep() -> None:
 
 
 def start_sweeper() -> None:
+    from . import sources
+    try:
+        sources.reset_stale()
+    except Exception as e:                          # noqa: BLE001
+        log.warning("sources: %s", e)
     if settings.knowledge_sweep:
         threading.Thread(target=_sweep, daemon=True).start()

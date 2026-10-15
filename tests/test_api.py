@@ -1581,9 +1581,9 @@ def test_sources_text_file_and_site(client, monkeypatch):
     assert "one year" in (sources.sdir() / f"{r.json()['id']}.txt").read_text()
     assert client.post("/api/knowledge/sources", files={"file": ("x.exe", b"MZ....")}, headers=H).status_code == 400
     # a web site: the page + pages under it, nothing outside it
-    pages = {"https://shop.test/products/": '<html><title>Products</title><nav>menu</nav><p>All our products.</p>'
+    pages = {"https://shop.test/products/": '<html><title>Products</title><nav>menu</nav><p>All our products: watches, note takers and the Oracle Minutes server, built and supported in Singapore.</p>'
                                             '<a href="round">Round</a><a href="/about">About</a><a href="https://other.test/x">x</a></html>',
-             "https://shop.test/products/round": "<html><title>Round watch</title><script>x()</script><p>SGD 299. AMOLED.</p></html>"}
+             "https://shop.test/products/round": "<html><title>Round watch</title><script>x()</script><p>SGD 299. AMOLED screen, offline voice notes, one-year warranty, works with Oracle Minutes.</p></html>"}
     got = []
 
     class R:
@@ -1605,6 +1605,11 @@ def test_sources_text_file_and_site(client, monkeypatch):
     m = sources.get(uid)
     assert m["pages"] == 2 and m["state"] == "ok" and m["title"] == "Products"
     assert client.post("/api/knowledge/sources", json={"url": "file:///etc/passwd"}, headers=H).status_code == 400
+    pages["https://shop.test/app"] = "<html><title>App</title><div id=root></div><script>render()</script></html>"
+    aid = client.post("/api/knowledge/sources", json={"url": "https://shop.test/app"}, headers=H).json()["id"]
+    with pytest.raises(ValueError):
+        sources.learn(aid)
+    assert sources.get(aid)["state"] == "error" and "almost no text" in sources.get(aid)["error"]
     # removing a source takes its facts away
     assert client.delete(f"/api/knowledge/sources/{sid}", headers=H).status_code == 200
     assert not any(x.get("source") == sid for x in knowledge.facts())

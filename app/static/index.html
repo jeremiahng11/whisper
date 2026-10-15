@@ -1376,11 +1376,11 @@ async function loadSources() {
     const r = await (await api("/api/knowledge/sources")).json();
     $("#srcList").innerHTML = r.items.map(x => `<div class="row" style="gap:6px;padding:3px 0" data-id="${x.id}">
       <div style="flex:1">${x.kind === "url" ? `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.title)}</a>` : esc(x.title)}
-      <span class="mute"> · ${x.state === "reading" ? "reading…" : x.state === "new" ? "waiting" : x.state === "error" ? "problem: " + esc(x.error) : x.facts + " facts"}${x.pages ? " · " + x.pages + " pages" : ""}</span></div>
+      <span class="mute"> · ${x.state === "reading" ? "reading" + (x.progress ? " " + esc(x.progress) : "") + "… (the AI reads one thing at a time: meetings first)" : x.state === "new" || x.state === "changed" ? "waiting for the AI" : x.state === "error" ? "problem: " + esc(x.error) : x.facts + " facts"}${x.pages ? " · " + x.pages + " pages" : ""}</span></div>
       <button class="ghost srcRe" style="padding:2px 8px">Read again</button><button class="ghost srcDel" style="padding:2px 8px">Remove</button></div>`).join("") || '<span class="mute">None yet.</span>';
     document.querySelectorAll(".srcRe").forEach(b => b.onclick = async () => { await api(`/api/knowledge/sources/${b.parentNode.dataset.id}/refresh`, { method: "POST" }); setTimeout(loadSources, 800); });
     document.querySelectorAll(".srcDel").forEach(b => b.onclick = async () => { if (!confirm("Remove this source and its facts?")) return; await api("/api/knowledge/sources/" + b.parentNode.dataset.id, { method: "DELETE" }); loadSources(); loadKb(); });
-    if (r.items.some(x => x.state === "reading" || x.state === "new")) setTimeout(() => { loadSources(); loadKb(); }, 5000);
+    if (r.items.some(x => ["reading", "new", "changed"].includes(x.state))) setTimeout(() => { loadSources(); loadKb(); }, 5000);
   } catch (e) { $("#srcList").textContent = ""; }
 }
 async function addSource(body, isForm) {

@@ -238,6 +238,18 @@ def add(kind: str, title: str = "", url: str = "", text: str = "", filename: str
     return m
 
 
+def reset_stale() -> None:
+    """At start-up: a source left "reading" by a restart is read again."""
+    for p in sdir().glob("*.json"):
+        try:
+            m = json.loads(p.read_text())
+            if m.get("state") == "reading":
+                m.update(state="changed", progress="")
+                _save(m)
+        except (OSError, ValueError):
+            pass
+
+
 def remove(sid: str) -> bool:
     if not get(sid):
         return False
@@ -253,6 +265,8 @@ def remove(sid: str) -> bool:
 def due(m: dict) -> bool:
     if m.get("state") in ("new", "changed"):
         return True
+    if m.get("state") == "reading" and time.time() - (m.get("since") or 0) > 3600 and not _lock(m["id"]).locked():
+        return True                                 # the server restarted while reading it: start again
     return m.get("kind") == "url" and time.time() - (m.get("fetched") or 0) > REFETCH_S
 
 
@@ -278,12 +292,15 @@ def _learn(sid: str, force: bool) -> int:
     m = get(sid)
     if not m:
         return 0
-    m["state"] = "reading"
+    m.update(state="reading", since=time.time(), progress="fetching" if m["kind"] == "url" else "")
     _save(m)
     try:
         if m["kind"] == "url":
             pages = fetch_site(m["url"], m.get("crawl", 0))
             text = "\n\n".join(f"## {p['title']}\n{p['url']}\n\n{p['text']}" for p in pages)[:MAX_TEXT]
+            if sum(len(p["text"]) for p in pages) < 150:
+                raise ValueError("that page has almost no text for the server to read (the site builds it in the "
+                                 "browser) - add its product pages one by one, a PDF, or paste the text")
             (sdir() / f"{sid}.txt").write_text(text)
             m["pages"] = len(pages)
             if pages and (not m.get("title") or m["title"].startswith(urlparse(m["url"]).netloc)):
@@ -299,7 +316,10 @@ def _learn(sid: str, force: bool) -> int:
             return len(m.get("facts") or [])
         date = time.strftime("%Y-%m-%d")
         facts, seen = [], set()
-        for part in _chunks(text):
+        parts = _chunks(text)
+        for i, part in enumerate(parts):
+            m["progress"] = f"part {i + 1} of {len(parts)}"   # (the AI may be busy with your meetings first)
+            _save(m)
             prompt = knowledge.DOC_PROMPT.format(n=PER_CHUNK, title=m["title"], where=m.get("url") or m.get("filename") or "pasted",
                                                  text=part)
             for f in knowledge.parse_facts(summarize.chat([{"role": "system", "content": "You extract facts from documents as JSON."},
@@ -310,7 +330,7 @@ def _learn(sid: str, force: bool) -> int:
                 seen.add(k)
                 f.update(job="", source=sid, date=date, meeting=m["title"])
                 facts.append(f)
-        m.update(facts=facts, sig=sig, state="ok", error="")
+        m.update(facts=facts, sig=sig, state="ok", error="", progress="")
     except Exception as e:                          # noqa: BLE001
         m.update(state="error", error=summarize.explain_llm_error(e) if not isinstance(e, ValueError) else str(e))
         _save(m)
