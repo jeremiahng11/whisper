@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.13.2"
+VERSION = "1.13.3"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -549,6 +549,30 @@ def search_context(q: str) -> str:
     return "Excerpts from the user's meetings (best matches first):\n\"\"\"\n" + "\n\n".join(lines) + "\n\"\"\""
 
 
+COMPANY_NOTE = ("Below is what the user's company knowledge base knows (learned from their meetings, website, product "
+                "documents and the people they work with). When the question is about the company, its people, products, "
+                "services or meetings, answer from it (it is more current than your own knowledge) and keep the answer "
+                "short. If it doesn't cover the question, answer normally and say it isn't in the company notes.")
+
+
+def company_context(q: str, limit: int = 4500) -> str:
+    """Facts, people and (when facts are few) meeting excerpts matching the question - or "" if nothing matches."""
+    parts = []
+    kb = knowledge.context_for(q, 2500)
+    if kb:
+        parts.append(kb)
+    who = [n for n in people.all_names() if re.search(r"\b" + re.escape(n) + r"\b", q, re.I)]
+    if who:
+        pc = people.context_for(who, 1200)
+        if pc:
+            parts.append("About these people (from all meetings):\n" + pc)
+    if len(knowledge.find(q, 4)) < 2 and search.search(q, 1):
+        parts.append(search_context(q)[:1500])
+    if not parts:
+        return ""
+    return (COMPANY_NOTE + "\n\n" + "\n\n".join(parts))[:limit]
+
+
 @app.post("/api/ask", dependencies=[Depends(auth)], status_code=202)
 async def ask(request: Request):
     """{"messages": [...]} -> {"id", "status": "pending"}; poll GET /api/ask/{id}.
@@ -593,6 +617,13 @@ async def ask(request: Request):
         kb = knowledge.context_for(q)                # short facts learned from all meetings (the knowledge base)
         if kb:
             context += "\n\n" + kb
+    elif not data.get("recording") and data.get("task") != "email":
+        # any other question (the watch's "Hey Oracle ...", Ask on the web): your company's knowledge goes along when
+        # something matches - people, products, services, decisions - so "what is Aleta Planet" or "who is Ryan"
+        # is answered from your meetings, website and documents instead of the AI's general knowledge
+        company = company_context(q)
+        if company:
+            context += ("\n\n" if context else "") + company
     return chat.start(clean, context, bool(data.get("best")), system)
 
 

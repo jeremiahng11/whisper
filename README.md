@@ -357,7 +357,9 @@ Oracle Minutes reads every finished meeting once more and keeps short **facts** 
 owners, dates, budgets, terms, and who people are. In the background it reads one new or changed meeting at a time
 (`KNOWLEDGE_SWEEP=0` turns that off); **Account > Watch AI > Learn from meetings now** reads them all.
 
-- **Ask** (all meetings) gets the facts that match the question, next to the meeting excerpts.
+- **Ask** (all meetings) gets the facts that match the question, next to the meeting excerpts. Since 1.13.3 every
+  other question too (the watch's "Hey Oracle ...", Ask on the web): when facts, people or meetings match, they go
+  along, so "what is Aleta Planet" or "who is Ryan" is answered from your own knowledge.
 - **Sources** besides meetings: a web page (and up to 60 pages under it - a product section), a PDF / Word / text /
   Markdown / CSV file, or pasted text. Read the same way; web pages are fetched again daily and re-read only when
   their text changed. Meeting facts win when both answer the same question.

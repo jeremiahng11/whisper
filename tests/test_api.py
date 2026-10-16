@@ -1676,3 +1676,23 @@ def test_wrong_wakeup_clips_kept(client):
     assert client.post("/api/wakeword/samples/bogus", content=wav_bytes(2), headers=H).status_code == 400
     client.delete("/api/wakeword/samples?phrase=not_wake", headers=H)
     assert client.get("/api/wakeword/samples", headers=H).json()["samples"]["not_wake"] == 0
+
+
+def test_any_question_uses_company_knowledge(client):
+    from app import knowledge
+    knowledge.note_question  # (module loaded)
+    src = client.post("/api/knowledge/sources", json={"text": "Aleta Planet is a Singapore payment services provider and Banking-as-a-Service platform.", "title": "About us"}, headers=H).json()
+    from app import sources
+    sources.learn(src["id"])
+    facts = knowledge.facts()
+    assert facts
+    def ask(text):
+        r = client.post("/api/ask", json={"messages": [{"role": "system", "content": "You are the watch."}, {"role": "user", "content": text}]}, headers=H)
+        for _ in range(200):
+            if client.get(f"/api/ask/{r.json()['id']}", headers=H).json()["status"] != "pending":
+                break
+            time.sleep(0.05)
+        return SYSTEMS[-1]
+    sysmsg = ask("When does the Idea Saver V2 ship?")         # no scope, no meeting words: still finds the fact
+    assert sysmsg.startswith("You are the watch.") and "company knowledge base" in sysmsg and "Idea Saver V2" in sysmsg
+    assert "company knowledge base" not in ask("tell me a joke about cats")   # nothing matches: plain answer
