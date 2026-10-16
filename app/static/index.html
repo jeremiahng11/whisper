@@ -742,13 +742,37 @@ async function showPerson(name, refresh) {
   $("#pview").innerHTML = `<h3>${esc(p.name)}</h3><div class="mute">Last heard ${p.last_seen ? when(p.last_seen) : "never"}</div>
     <div class="facts">${facts.map(([a, b]) => `<div><b>${esc(a)}</b><span>${esc(b)}</span></div>`).join("")}</div>
     ${!p.samples && p.lines ? `<p class="mute">No voice samples yet. They're taken in the background (when the server is free) from lines you ✓ confirmed or speakers you named in Who's speaking, 2.5 s or longer and not talking over someone. Press <b>Re-learn voice</b> to take them now.</p>` : ""}
-    <div class="row">${p.sample ? '<button class="ghost" id="pPlay">▶ Hear them</button>' : ""}<button class="ghost" id="pRefresh">Update now</button><button class="ghost" id="pRelearn" title="Rebuild their voice only from lines named as them now - use it after correcting lines that were someone else">Re-learn voice</button><button class="danger" id="pForget">Forget this voice</button></div>
+    <div class="row">${p.sample ? '<button class="ghost" id="pPlay">▶ Hear them</button><button class="ghost" id="pNotThem" title="That clip is someone else: stop using it for them">✕ Not them</button>' : ""}<button class="ghost" id="pRefresh">Update now</button><button class="ghost" id="pRelearn" title="Rebuild their voice only from lines named as them now - use it after correcting lines that were someone else">Re-learn voice</button><button class="danger" id="pForget">Forget this voice</button></div>
     ${pitch}
     ${chips("Words they use more than others", l.words)}${chips("Phrases", l.phrases)}${chips("Names & terms they use", l.terms)}${chips("Mixes in", mix)}
     ${p.note ? `<div class="block pnote"><div class="sub2">AI note</div>${md(p.note)}</div>` : `<p class="mute" style="margin-top:14px">${p.lines < 8 ? "An AI note is written once they have a few more named lines." : "The AI note is being written in the background - open them again in a minute."}</p>`}
+    ${p.samples ? `<details id="pSamp" style="margin-top:12px"><summary>Voice samples (${p.samples}) - play them, remove any that aren't ${esc(p.name)}</summary><div id="pSampList" class="mute">Loading…</div></details>` : ""}
     <div class="sub2" style="margin-top:14px">Meetings</div><div class="pmeet">${p.meetings.map(m => `<div data-id="${m.id}"><span>${esc(m.title)}</span><span class="mute">${shortWhen(m.when)}, ${mins(m.seconds)}</span></div>`).join("")}</div>`;
   document.querySelectorAll(".pmeet div").forEach(d => d.onclick = () => show(d.dataset.id));
   if ($("#pPlay")) { $("#pPlay").dataset.label = "▶ Hear them"; $("#pPlay").onclick = () => playClip($("#pPlay"), p.sample.start, p.sample.end, p.sample.job); }
+  const notThem = async (job, i, what) => {
+    if (!confirm(`${what} isn't ${name}? It won't be used for ${name} any more (their voice is rebuilt without it).`)) return false;
+    await api(`/api/people/${encodeURIComponent(name)}/not-them`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ job, i }) });
+    return true;
+  };
+  if ($("#pNotThem")) $("#pNotThem").onclick = async () => {
+    if (p.sample.i === undefined) { alert("Update now first (this profile is from an older version)."); return; }
+    if (await notThem(p.sample.job, p.sample.i, "That clip")) showPerson(name);
+  };
+  if ($("#pSamp")) $("#pSamp").ontoggle = async () => {
+    if (!$("#pSamp").open || $("#pSamp").dataset.loaded) return;
+    $("#pSamp").dataset.loaded = "1";
+    const r = await (await api(`/api/people/${encodeURIComponent(name)}/samples`)).json();
+    $("#pSampList").innerHTML = r.items.map((x, k) => `<div class="row" style="gap:6px;padding:2px 0" data-k="${k}">
+      ${x.start !== null ? '<button class="ghost sPlay" style="padding:2px 8px">▶</button>' : ""}
+      <span style="flex:1">"${esc(x.text)}" <span class="mute">${esc(x.title)}${x.when ? ", " + shortWhen(x.when) : ""}</span></span>
+      ${x.i >= 0 ? '<button class="ghost sDel" style="padding:2px 8px">✕ Not them</button>' : ""}</div>`).join("") || "None.";
+    document.querySelectorAll("#pSampList .sPlay").forEach(b => { const x = r.items[+b.parentNode.dataset.k]; b.dataset.label = "▶"; b.onclick = () => playClip(b, x.start, Math.min(x.end, x.start + 15), x.job); });
+    document.querySelectorAll("#pSampList .sDel").forEach(b => b.onclick = async () => {
+      const x = r.items[+b.parentNode.dataset.k];
+      if (await notThem(x.job, x.i, "This sample")) b.parentNode.remove();
+    });
+  };
   $("#pRefresh").onclick = () => showPerson(name, true);
   $("#pRelearn").onclick = async () => {
     if (!confirm(`Rebuild ${name}'s voice from the lines named as ${name} now? Samples from lines that were someone else are dropped.`)) return;

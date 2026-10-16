@@ -1912,7 +1912,9 @@ def test_company_essentials_on_the_watch(client, monkeypatch):
     assert r["answer"]["a"].startswith("Aleta Adventure cards")   # (products / product)
     assert client.get("/api/knowledge", params={"q": "flibbert quasar nebula"}, headers=H).json()["answer"] is None
     n = len(CALLS)
-    r = client.post("/api/ask", json={"prompt": "Who is our CTO?"}, headers=H).json()   # at once, no AI
+    resp = client.post("/api/ask", json={"prompt": "Who is our CTO?"}, headers=H)   # at once, no AI
+    assert resp.status_code == 200
+    r = resp.json()
     assert r["status"] == "done" and r["answer"].startswith("Jeremiah Ng") and len(CALLS) == n
     core.build()                                             # nothing changed: the AI isn't asked again
     assert len(CALLS) == n and not core.needs_update()
@@ -2060,8 +2062,9 @@ def test_ask_waits_and_voice_is_ready(client, monkeypatch):
     monkeypatch.setattr(speech, "tts_available", lambda: True)
     made = []
     monkeypatch.setattr(speech, "tts", lambda text, lang="en": (made.append(text), speech.to_wav16k(__import__("numpy").zeros(1600, "<i2"), 16000))[1])
-    r = client.post("/api/ask?wait=5", json={"prompt": "tell me a short joke", "speak": True}, headers=H).json()
-    assert r["status"] == "done" and r["answer"]                # answered in the same reply (no polling)
+    resp = client.post("/api/ask?wait=5", json={"prompt": "tell me a short joke", "speak": True}, headers=H)
+    r = resp.json()
+    assert r["status"] == "done" and r["answer"] and resp.status_code == 200   # (the watch reads an answer only with 200)                # answered in the same reply (no polling)
     import threading
     for _ in range(100):
         if chat.spoken(r["answer"], "en", True):
@@ -2096,3 +2099,19 @@ def test_failed_summaries_retried_when_llm_is_back(client, monkeypatch):
     assert worker.retry_failed_summaries() >= 1
     assert db.get(jid)["status"] == "queued" and queued
     db.update(jid, status="done", summary_error="")
+
+
+def test_person_not_them(client):
+    from app import db, people, worker
+    n, ln = next(((x, people.their_lines(x)[0]) for x in people.all_names() if people.their_lines(x)), (None, None))
+    assert n, "the earlier tests name speakers"
+    with db._lock:
+        db._conn.execute("INSERT INTO voice_samples (name, embedding, job_id, seg, created) VALUES (?,?,?,?,?)",
+                         (n, "[0.1, 0.2]", ln["job"], ln["i"], 1.0))
+        db._conn.commit()
+    items = client.get(f"/api/people/{n}/samples", headers=H).json()["items"]
+    assert any(x["job"] == ln["job"] and x["i"] == ln["i"] for x in items)
+    r = client.post(f"/api/people/{n}/not-them", json={"job": ln["job"], "i": ln["i"]}, headers=H).json()
+    assert r["removed"] >= 1
+    assert not any(x["job"] == ln["job"] and x["i"] == ln["i"] for x in people.their_lines(n))
+    assert not any(x["job"] == ln["job"] and x["i"] == ln["i"] for x in client.get(f"/api/people/{n}/samples", headers=H).json()["items"])

@@ -179,6 +179,25 @@ def get_model():
         return _model
 
 
+_quick_model = None
+
+
+def get_quick_model():
+    """STT_MODEL (e.g. "small"): a smaller model of its own for short spoken questions - quicker, and it doesn't wait
+    for a meeting being transcribed with the main model. "" = the main model."""
+    global _quick_model
+    if not settings.stt_model or settings.stt_model == settings.whisper_model:
+        return get_model()
+    with _model_lock:
+        if _quick_model is None:
+            from faster_whisper import WhisperModel
+            device, compute = _device_and_compute()
+            log.info("loading quick whisper model %s for spoken questions", settings.stt_model)
+            _quick_model = WhisperModel(settings.stt_model, device=device, compute_type=compute,
+                                        cpu_threads=settings.whisper_threads, download_root=str(settings.model_dir))
+        return _quick_model
+
+
 def model_loaded() -> bool:
     return _model is not None
 
@@ -206,7 +225,7 @@ def _run(audio: np.ndarray, offset: float, language: Optional[str], prompt: str,
             progress(min(1.0, (offset + end) / total) if total else 1.0, "transcribing")
             t = end
         return segs, language or settings.default_language or "en", 1.0
-    model = get_model()
+    model = get_quick_model() if getattr(quick, "on", False) else get_model()
     kwargs = dict(
         language=language or settings.default_language or None,
         beam_size=settings.whisper_beam,

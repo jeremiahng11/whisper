@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.17.2"
+VERSION = "1.17.3"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -593,7 +593,10 @@ async def ask(request: Request, wait: float = 0):
     r = _ask_start(data)
     if data.get("speak"):
         chat.speak_when_done(r["id"])
-    return await _wait_answer(r, wait)
+    r = await _wait_answer(r, wait)
+    if r.get("status") != "pending":                 # answered already: 200 (the watch takes an answer only with 200)
+        return JSONResponse(r, status_code=200)
+    return r
 
 
 async def _wait_answer(r: dict, wait: float) -> dict:
@@ -1474,6 +1477,29 @@ def get_person(name: str):
         threading.Thread(target=people.build, args=(name,), daemon=True).start()
     p = dict(p, samples=people.sample_count(name))     # live: samples are added in the background
     return p
+
+
+@app.get("/api/people/{name}/samples", dependencies=[Depends(auth)])
+def person_samples(name: str):
+    """The voice samples kept for this person and the line each came from (to play, and remove wrong ones)."""
+    if name.lower() not in {n.lower() for n in people.all_names()}:
+        raise HTTPException(404, "no such person")
+    return {"items": people.sample_list(name)}
+
+
+@app.post("/api/people/{name}/not-them", dependencies=[Depends(auth)])
+async def person_not_them(name: str, request: Request):
+    """{"job": "<meeting id>", "i": <line>} - that clip isn't them: not used for them any more (Hear them, their
+    profile and voice), and the voice samples taken from it go. Their profile is rebuilt in the background."""
+    d = await body_extra(request)
+    jid, i = str(d.get("job") or ""), d.get("i")
+    if not jid or not isinstance(i, int):
+        raise HTTPException(400, "send {'job': ..., 'i': <line number>}")
+    if name.lower() not in {n.lower() for n in people.all_names()}:
+        raise HTTPException(404, "no such person")
+    removed = people.not_them(name, jid, i)
+    prof = people.build(name, with_note=False)
+    return {"removed": removed, "samples": people.sample_count(name), "sample": prof.get("sample")}
 
 
 @app.post("/api/people/{name}/relearn", dependencies=[Depends(auth)])

@@ -332,10 +332,63 @@ def _tokens(text: str) -> list[str]:
     return [w.lower() for w in WORD.findall(text or "")]
 
 
+def _notme_path():
+    return settings.data_dir / "people_not_them.json"
+
+
+def not_them_lines(name: str) -> set[str]:
+    """Lines you said aren't this person ("<job>:<line>"), though their meeting names them."""
+    try:
+        return set(json.loads(_notme_path().read_text()).get(name.lower(), []))
+    except (OSError, ValueError):
+        return set()
+
+
+def not_them(name: str, job_id: str, line: int) -> int:
+    """'That clip isn't them': the line is no longer used for this person (Hear them, their profile, their voice),
+    and the voice samples taken from it are dropped. Returns how many samples were removed."""
+    with db._lock:
+        try:
+            d = json.loads(_notme_path().read_text())
+        except (OSError, ValueError):
+            d = {}
+        lst = set(d.get(name.lower(), []))
+        lst.add(f"{job_id}:{int(line)}")
+        d[name.lower()] = sorted(lst)
+        tmp = _notme_path().with_suffix(".tmp")
+        tmp.write_text(json.dumps(d))
+        tmp.replace(_notme_path())
+    return unlearn(name, job_id, [int(line)])
+
+
+def sample_list(name: str, limit: int = 80) -> list[dict]:
+    """The voice samples kept for this person, with the line each came from: [{"job", "i", "start", "end",
+    "text", "title", "when"}] (newest first)."""
+    with db._lock:
+        rows = db._conn.execute("SELECT job_id, seg, created FROM voice_samples WHERE lower(name)=lower(?) "
+                                "ORDER BY created DESC LIMIT ?", (name, limit)).fetchall()
+    out, trs = [], {}
+    for r in rows:
+        jid, seg = r["job_id"], r["seg"]
+        if not jid or seg is None or seg < 0:
+            out.append({"job": jid or "", "i": -1, "start": None, "end": None, "text": "(their whole voice in that meeting)",
+                        "title": (db.get(jid) or {}).get("title", "") if jid else "", "when": r["created"]})
+            continue
+        if jid not in trs:
+            trs[jid] = (worker.load_transcript(jid) or {}).get("segments", [])
+        segs = trs[jid]
+        sg = segs[seg] if 0 <= seg < len(segs) else {}
+        j = db.get(jid) or {}
+        out.append({"job": jid, "i": seg, "start": sg.get("start"), "end": sg.get("end"), "text": (sg.get("text") or "")[:160],
+                    "title": j.get("title") or j.get("filename") or "", "when": j.get("created_at") or r["created"]})
+    return out
+
+
 def their_lines(name: str) -> list[dict]:
     """Every line this person said (named or tagged as them), newest meetings first."""
     out = []
     low = name.lower()
+    skip = not_them_lines(name)
     for j in db.list_jobs(100000, "done"):
         names = (j.get("options") or {}).get("speaker_names") or {}
         labs = {lab for lab, n in names.items() if (n or "").lower() == low}
@@ -347,6 +400,8 @@ def their_lines(name: str) -> list[dict]:
         recognised = set(o.get("speaker_auto") or [])
         tr = worker.load_transcript(j["id"]) or {}
         for i, s in enumerate(tr.get("segments", [])):
+            if f"{j['id']}:{i}" in skip:
+                continue                            # you said this line isn't them
             if s.get("speaker") in labs and not s.get("also"):
                 # sure = you confirmed it (✓) or named its whole speaker yourself; not a guess by voice
                 sure = i in manual or (s.get("speaker") not in recognised and i not in auto_lines)
@@ -500,7 +555,7 @@ def build(name: str, with_note: bool = True) -> dict:
         if allt > 0:
             split[f"{kind}_share"] = round(100 * mine / allt)
     prof = {"name": name, "lines": len(lines), "split": split,
-            "sample": {"job": longest["job"], "start": longest["start"], "end": min(longest["end"], longest["start"] + 15),
+            "sample": {"job": longest["job"], "i": longest["i"], "start": longest["start"], "end": min(longest["end"], longest["start"] + 15),
                        "text": longest["text"][:200]} if longest else None, "meetings": sorted(meetings.values(), key=lambda m: -m["when"]),
             "talk_seconds": round(sum(m["seconds"] for m in meetings.values())),
             "last_seen": max((m["when"] for m in meetings.values()), default=None),

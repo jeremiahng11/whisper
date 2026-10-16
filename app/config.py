@@ -32,6 +32,7 @@ class Settings:
     whisper_compute: str = os.getenv("WHISPER_COMPUTE", "auto")     # auto -> int8 on CPU, float16 on GPU
     whisper_threads: int = _int("WHISPER_THREADS", 0)               # 0 = all cores
     whisper_beam: int = _int("WHISPER_BEAM", 5)
+    stt_model: str = os.getenv("STT_MODEL", "")      # short spoken questions (/api/stt): e.g. "small" - quicker
     default_language: str = os.getenv("DEFAULT_LANGUAGE", "")       # "" = auto-detect, e.g. "en"
     initial_prompt: str = os.getenv("INITIAL_PROMPT", "")           # vocabulary hints: names, products, jargon
     region: str = os.getenv("REGION", "").strip().lower()           # "sg" = Singapore: mixed English/Singlish/Mandarin/Malay
