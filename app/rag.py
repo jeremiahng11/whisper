@@ -53,7 +53,8 @@ def embed(texts: list[str], query: bool = False, timeout: float = 60) -> list[li
         model = settings.ollama_embed_model
         pre = ("search_query: " if query else "search_document: ") if "nomic" in model else ""
         body = {"model": model, "input": [pre + t for t in texts]}
-        r = httpx.post(f"{settings.ollama_url}/api/embed", json=body, timeout=timeout)
+        from . import summarize
+        r = summarize._ollama_post("/api/embed", json=body, timeout=timeout)
         if r.status_code == 404 and settings.ollama_auto_pull:
             from . import summarize
             threading.Thread(target=summarize.ensure_ollama_model, args=(model,), daemon=True).start()

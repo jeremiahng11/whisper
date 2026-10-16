@@ -608,6 +608,10 @@ def _sweep() -> None:
         except Exception as e:                      # noqa: BLE001 - the embedding model may still be downloading
             log.info("rag: %s", e)
         try:
+            worker.retry_failed_summaries()         # minutes that failed while the AI couldn't be reached
+        except Exception as e:                      # noqa: BLE001
+            log.info("summary retry: %s", e)
+        try:
             if summarize.enabled() and worker.current_job is None and db.next_queued() is None and status["state"] == "idle":
                 busy = False
                 for j in db.list_jobs(200, "done"):  # one new or changed meeting per pass: keep the server free

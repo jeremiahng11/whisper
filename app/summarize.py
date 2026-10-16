@@ -351,6 +351,69 @@ def strip_thinking(text: str) -> str:
     return text.strip()
 
 
+# ---------------------------------------------------------------- where Ollama is
+# OLLAMA_URL first; when that name doesn't resolve or nothing answers there (a renamed container, a different Docker
+# network after a redeploy), the usual places are tried - the "ollama" service, the Docker host (where a published
+# port 11434 is reachable) - and the first that answers is used until it stops answering.
+_where: dict = {"url": "", "at": 0.0}
+_where_lock = threading.Lock()
+
+
+def _docker_host_ips() -> list[str]:
+    out = []
+    try:                                            # the container's default gateway = the Docker host
+        for line in open("/proc/net/route").read().splitlines()[1:]:
+            f = line.split()
+            if len(f) > 2 and f[1] == "00000000":
+                g = int(f[2], 16)
+                out.append(".".join(str((g >> (8 * i)) & 255) for i in range(4)))
+    except (OSError, ValueError):
+        pass
+    return out + ["172.17.0.1"]
+
+
+def _answers(url: str) -> bool:
+    try:
+        return httpx.get(f"{url}/api/tags", timeout=2).status_code == 200
+    except Exception:                               # noqa: BLE001
+        return False
+
+
+def ollama_url() -> str:
+    conf = settings.ollama_url.rstrip("/")
+    with _where_lock:
+        if _where["url"] and time.time() - _where["at"] < 300:
+            return _where["url"]
+        tried = [conf, "http://ollama:11434", "http://host.docker.internal:11434"] + \
+                [f"http://{ip}:11434" for ip in _docker_host_ips()]
+        for u in dict.fromkeys(tried):
+            if _answers(u):
+                if u != conf:
+                    log.warning("Ollama isn't at OLLAMA_URL=%s - using %s (set OLLAMA_URL to that)", conf, u)
+                _where.update(url=u, at=time.time())
+                return u
+        _where.update(url="", at=0.0)
+        return conf                                 # nothing answered: the error says where it looked
+
+
+def ollama_found() -> str:
+    """Where Ollama was found ("" if not checked or nowhere)."""
+    return _where["url"]
+
+
+def _ollama_post(path: str, **kw) -> httpx.Response:
+    url = ollama_url()
+    try:
+        return httpx.post(f"{url}{path}", **kw)
+    except (httpx.ConnectError, httpx.ConnectTimeout):
+        with _where_lock:
+            _where.update(url="", at=0.0)           # look again (once) - it may have moved
+        url2 = ollama_url()
+        if url2 == url:
+            raise
+        return httpx.post(f"{url2}{path}", **kw)
+
+
 def _ollama_chat(messages: list[dict], retry: bool = True, model: str = "", ctx: int = 0) -> str:
     model = model or settings.ollama_model
     body = {
@@ -370,7 +433,7 @@ def _ollama_chat(messages: list[dict], retry: bool = True, model: str = "", ctx:
                     m["content"] = str(m.get("content", "")) + " /no_think"
                     break
             body["messages"] = msgs
-    r = httpx.post(f"{settings.ollama_url}/api/chat", json=body, timeout=settings.llm_timeout_s)
+    r = _ollama_post("/api/chat", json=body, timeout=settings.llm_timeout_s)
     if retry and r.status_code == 404 and "not found" in r.text.lower() and model == settings.ollama_model_fast \
             and model != settings.ollama_model:
         # the quick model isn't downloaded yet: this answer comes from the main model, the quick one downloads
@@ -415,7 +478,7 @@ def llm_status() -> str:
     backend = settings.summary_backend.lower()
     try:
         if backend == "ollama":
-            httpx.get(f"{settings.ollama_url}/api/tags", timeout=3).raise_for_status()
+            httpx.get(f"{ollama_url()}/api/tags", timeout=3).raise_for_status()
         status = "ok"
     except Exception as e:                                   # noqa: BLE001
         status = explain_llm_error(e)
@@ -430,8 +493,10 @@ def explain_llm_error(e: Exception) -> str:
         where = settings.ollama_url
         low = msg.lower()
         if "name or service not known" in low or "nodename nor servname" in low or "temporary failure in name resolution" in low:
-            return (f"can't find the Ollama server '{where}' - set OLLAMA_URL to an address the container can reach, "
-                    "e.g. http://host.docker.internal:11434 (Ollama on the same machine) or http://<server-ip>:11434")
+            return (f"can't find the Ollama server '{where}' (that name doesn't exist on this server's network; also tried "
+                    "http://ollama:11434 and the Docker host on port 11434) - set OLLAMA_URL in Oracle Minutes' "
+                    "environment to an address it can reach, e.g. http://<GMK LAN IP>:11434 if Ollama publishes port "
+                    "11434, or put both containers on the same Coolify network and use http://<ollama container name>:11434")
         if "connection refused" in low or "connect" in low:
             return (f"Ollama at '{where}' refused the connection - is Ollama running, and listening on 0.0.0.0 "
                     "(OLLAMA_HOST=0.0.0.0) if it is outside this container?")
@@ -490,13 +555,13 @@ def ensure_ollama_model(want: str = "") -> None:
         return
     with _pull_lock:
         try:
-            tags = httpx.get(f"{settings.ollama_url}/api/tags", timeout=10).json().get("models", [])
+            tags = httpx.get(f"{ollama_url()}/api/tags", timeout=10).json().get("models", [])
             names = {m.get("name") for m in tags} | {m.get("model") for m in tags}
             want = want or settings.ollama_model
             if want in names or f"{want}:latest" in names:
                 return
             log.info("pulling ollama model %s ...", want)
-            r = httpx.post(f"{settings.ollama_url}/api/pull", json={"model": want, "stream": False}, timeout=None)
+            r = httpx.post(f"{ollama_url()}/api/pull", json={"model": want, "stream": False}, timeout=None)
             r.raise_for_status()
             log.info("ollama model %s ready", want)
         except Exception as e:

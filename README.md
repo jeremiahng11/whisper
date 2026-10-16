@@ -385,6 +385,10 @@ owners, dates, budgets, terms, and who people are. In the background it reads on
   other fact to treat it the same. The watch model learns the essentials and your pages/research first; meeting facts
   fill the rest (meeting questions are answered online). Find a fact shows the answer when one fact clearly answers
   it, and **Ask Oracle** asks the AI.
+- **Finds Ollama by itself** (1.17.2): when `OLLAMA_URL` doesn't resolve or answer, the server tries
+  `http://ollama:11434`, `http://host.docker.internal:11434` and the Docker host on port 11434, uses the first that
+  answers and logs which (set `OLLAMA_URL` to it). Minutes that failed because the AI couldn't be reached are written
+  again by themselves once it answers.
 - **Quicker spoken questions** (1.17.1): `/api/stt` decodes greedily without word times; `POST /api/ask?wait=N` and
   `GET /api/ask/{id}?wait=N` (up to 15 s) reply as soon as the answer is ready; `"speak": true` makes the answer's
   voice as soon as it's ready, so the watch's `/api/tts` request finds it waiting.

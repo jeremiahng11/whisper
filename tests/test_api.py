@@ -584,7 +584,7 @@ def test_llm_error_explained(monkeypatch):
     from app import summarize
     monkeypatch.setattr(summarize.settings, "summary_backend", "ollama")
     msg = summarize.explain_llm_error(Exception("[Errno -2] Name or service not known"))
-    assert "OLLAMA_URL" in msg and "host.docker.internal" in msg
+    assert "OLLAMA_URL" in msg and "11434" in msg
 
 
 def test_strip_thinking():
@@ -2072,3 +2072,27 @@ def test_ask_waits_and_voice_is_ready(client, monkeypatch):
     assert w.status_code == 200 and len(made) == n               # the voice was ready: not made again
     g = client.get(f"/api/ask/{r['id']}?wait=1", headers=H).json()
     assert g["status"] == "done"
+
+
+def test_ollama_found_elsewhere(monkeypatch):
+    from app import summarize
+    monkeypatch.setattr(summarize.settings, "ollama_url", "http://no-such-ollama:11434")
+    summarize._where.update(url="", at=0.0)
+    monkeypatch.setattr(summarize, "_answers", lambda u: u == "http://host.docker.internal:11434")
+    assert summarize.ollama_url() == "http://host.docker.internal:11434"
+    summarize._where.update(url="", at=0.0)
+
+
+def test_failed_summaries_retried_when_llm_is_back(client, monkeypatch):
+    from app import db, summarize, worker
+    jobs = db.list_jobs(5, "done")
+    if not jobs:
+        return
+    jid = jobs[0]["id"]
+    db.update(jid, summary_error="can't find the Ollama server 'http://x:11434'")
+    monkeypatch.setattr(summarize, "llm_status", lambda: "ok")
+    queued = []
+    monkeypatch.setattr(worker, "wake", lambda: queued.append(1))
+    assert worker.retry_failed_summaries() >= 1
+    assert db.get(jid)["status"] == "queued" and queued
+    db.update(jid, status="done", summary_error="")

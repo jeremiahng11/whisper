@@ -179,7 +179,7 @@ def run_summary(jid: str) -> None:
         _write(jid, "actions_raw.json", json.dumps(acts, ensure_ascii=False, indent=1))
     except Exception as e:
         log.warning("summary failed for %s: %s", jid, e)
-        db.update(jid, summary_error=str(e)[:500])
+        db.update(jid, summary_error=summarize.explain_llm_error(e)[:500])
 
 
 def process(job: dict) -> None:
@@ -354,3 +354,31 @@ def start() -> None:
 def stop() -> None:
     _stop.set()
     _wake.set()
+
+
+_REACH = ("ollama", "name or service", "refused", "timed out", "timeout", "connect", "unreachable", "502", "503")
+
+
+def retry_failed_summaries(limit: int = 20) -> int:
+    """Meetings whose minutes failed because the AI couldn't be reached are written again once it answers (at most
+    once every 6 hours each). Returns how many were queued."""
+    if not summarize.enabled() or summarize.llm_status() != "ok":
+        return 0
+    n = 0
+    now = time.time()
+    for j in db.list_jobs(500, "done"):
+        err = (j.get("summary_error") or "").lower()
+        if not err or not any(k in err for k in _REACH):
+            continue
+        opts = dict(j.get("options") or {})
+        if now - float(opts.get("summary_retry_at") or 0) < 6 * 3600:
+            continue
+        opts.update(summarize=True, resummarize=True, summary_retry_at=now)
+        db.update(j["id"], status="queued", stage="summary queued", progress=0, options=opts)
+        n += 1
+        if n >= limit:
+            break
+    if n:
+        log.info("writing the minutes again for %d meetings (the AI is reachable again)", n)
+        wake()
+    return n
