@@ -41,6 +41,8 @@ def fake_chat(messages, best=False):
     SYSTEMS.append(messages[0]["content"] if messages[0]["role"] == "system" else "")
     if FAIL["on"]:
         raise RuntimeError("LLM is down")
+    if "for a colleague asking" in messages[-1]["content"]:
+        return "Ryan Tan is the founder, Chairman and CEO of Aleta Planet."
     if "write the facts someone" in messages[-1]["content"]:
         return ('Here you go:\n```json\n[{"q": "When does Idea Saver V2 ship?", "a": "End of November 2026.", "kind": "date", '
                 '"topic": "Idea Saver V2", "alts": ["Idea Saver V2 ship date", "V2 launch date"]},'
@@ -1742,3 +1744,20 @@ def test_sources_zendesk_and_javascript_sites(monkeypatch):
         assert any(l.endswith("/guide.html") for l in links)
     finally:
         srv.shutdown()
+
+
+def test_who_is_written_from_documents(client, monkeypatch):
+    from app import knowledge, people, sources
+    sid = client.post("/api/knowledge/sources", json={"text": "Leadership\nRyan Tan\nFounder, Chairman and CEO of Aleta Planet\nLeads the group's strategy.", "title": "About us"}, headers=H).json()["id"]
+    sources.learn(sid)
+    mat = knowledge.person_material("Ryan")
+    assert "Founder, Chairman and CEO" in mat
+    monkeypatch.setattr(people, "all_names", lambda: ["Ryan"])
+    assert knowledge.who_needs_update("Ryan")
+    assert knowledge.who_is("Ryan") == ""                                   # not written yet (the sweep does it)
+    assert knowledge.who_is("Ryan", refresh=True).startswith("Ryan Tan is the founder")
+    assert not knowledge.who_needs_update("Ryan")
+    knowledge.rebuild()
+    f = next(x for x in knowledge.facts() if x["q"] == "Who is Ryan")
+    assert "Chairman and CEO" in f["a"] and f["kind"] == "person"
+    assert knowledge.find("who is ryan")[0]["q"] == "Who is Ryan"

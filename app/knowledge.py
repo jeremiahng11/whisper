@@ -161,18 +161,105 @@ def forget_meeting(jid: str) -> None:
     rebuild()
 
 
+WHO_PROMPT = """Write who {name} is, for a colleague asking "Who is {name}?" - 1 or 2 short sentences: their full
+name if given, their title or role, the company, and what they are responsible for. Use ONLY the material below
+(company documents, website pages, facts from meetings). If the material doesn't say their role, say what they do or
+talk about in meetings. No guessing, no "based on the material". Plain text.
+
+Material:
+\"\"\"
+{material}
+\"\"\""""
+
+
+def _who_dir() -> Path:
+    d = kdir() / "people"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _who_path(name: str) -> Path:
+    return _who_dir() / (re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_") + ".json")
+
+
+def person_material(name: str, limit: int = 6000) -> str:
+    """Everything known about this person: lines of your documents and pages that name them (e.g. a leadership page:
+    "Ryan Tan - Founder, Chairman and CEO"), facts that mention them, and their meeting profile."""
+    from . import people, sources
+    pat = re.compile(r"\b" + re.escape(name) + r"\b", re.I)
+    parts = []
+    for m in sources.listing():
+        try:
+            txt = (sources.sdir() / f"{m['id']}.txt").read_text()
+        except OSError:
+            continue
+        lines = txt.splitlines()
+        for i, ln in enumerate(lines):
+            if pat.search(ln):
+                parts.append(" ".join(x.strip() for x in lines[max(0, i - 1):i + 3] if x.strip())[:500])
+    for f in facts():
+        if f.get("kind") != "person" and (pat.search(f["q"]) or pat.search(f["a"])):
+            parts.append(f"{f['q']}? {f['a']}")
+    p = people.get(name) or {}
+    if p.get("note"):
+        parts.append("From meetings: " + re.sub(r"\s+", " ", re.sub(r"[#*_>]+", " ", p["note"]))[:800])
+    out, size = [], 0
+    for x in dict.fromkeys(parts):
+        if size + len(x) > limit:
+            break
+        out.append(x)
+        size += len(x)
+    return "\n".join(out)
+
+
+def who_is(name: str, refresh: bool = False) -> str:
+    """The answer to "Who is <name>?" written by the AI from person_material (kept until that material changes)."""
+    mat = person_material(name)
+    if not mat:
+        return ""
+    sig = hashlib.sha1(mat.encode()).hexdigest()[:12]
+    p = _who_path(name)
+    try:
+        old = json.loads(p.read_text())
+        if old.get("sig") == sig and not refresh:
+            return old.get("a", "")
+    except (OSError, ValueError):
+        if not refresh:
+            return ""                               # not written yet: the sweep does it (it calls the AI)
+    a = _clean_text(summarize.strip_thinking(summarize.chat([
+        {"role": "system", "content": "You write short, factual descriptions of people at a company."},
+        {"role": "user", "content": WHO_PROMPT.format(name=name, material=mat)}])), 300)
+    p.write_text(json.dumps({"sig": sig, "a": a}, ensure_ascii=False))
+    return a
+
+
+def who_needs_update(name: str) -> bool:
+    mat = person_material(name)
+    if not mat:
+        return False
+    try:
+        return json.loads(_who_path(name).read_text()).get("sig") != hashlib.sha1(mat.encode()).hexdigest()[:12]
+    except (OSError, ValueError):
+        return True
+
+
 def _people_facts() -> list[dict]:
     from . import people
     out = []
     for n in people.all_names():
         p = people.get(n) or {}
+        try:
+            written = json.loads(_who_path(n).read_text()).get("a", "")
+        except (OSError, ValueError):
+            written = ""
         note = re.sub(r"\s+", " ", re.sub(r"[#*_>]+", " ", p.get("note") or "")).strip()
-        if not note:
+        a = written or (re.split(r"(?<=[.!?])\s", note)[0][:240] if note else "")
+        if not a:
             continue
-        first = re.split(r"(?<=[.!?])\s", note)[0][:240]
         last = p.get("last_seen") or ""
-        out.append({"q": f"Who is {n}", "a": first, "kind": "person", "topic": n,
-                    "alts": [f"Tell me about {n}", f"What does {n} do"], "job": "", "date": str(last)[:10], "meeting": ""})
+        out.append({"q": f"Who is {n}", "a": a, "kind": "person", "topic": n,
+                    "alts": [f"Tell me about {n}", f"What does {n} do", f"What is {n}'s role"], "job": "",
+                    "date": str(last)[:10], "meeting": ""})
     return out
 
 
@@ -428,6 +515,13 @@ def learn_all(force: bool = False) -> None:
                 status["error"] = str(e)[:300]
                 log.warning("knowledge source %s: %s", sid, e)
             status["done"] += 1
+        from . import people
+        for n in people.all_names():                # then who everyone is, from all of that
+            try:
+                if force or who_needs_update(n):
+                    who_is(n, refresh=True)
+            except Exception as e:                  # noqa: BLE001
+                log.warning("who is %s: %s", n, e)
         rebuild()
     finally:
         status["state"] = "idle"
@@ -452,6 +546,15 @@ def _sweep() -> None:
                         learn_meeting(j["id"])
                         busy = True
                         break
+                if not busy:
+                    from . import people
+                    for n in people.all_names():      # "Who is X?" written from what's known about X
+                        if who_needs_update(n):
+                            log.info("writing who %s is", n)
+                            who_is(n, refresh=True)
+                            rebuild()
+                            busy = True
+                            break
                 if not busy:
                     from . import watchlm
                     if watchlm.nightly(facts()):
