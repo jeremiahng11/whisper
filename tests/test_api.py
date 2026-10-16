@@ -1546,6 +1546,8 @@ def test_watch_model_trains_exports_and_serves(client, tmp_path):
     assert cfg["d"] == 48 and head["dont_know"] == watchlm.DONT_KNOW and rep["version"]
     p = W.dequantize(q8)
     assert W.generate(p, cfg, vocab, "Who is RYAN?") == "Ryan is the Group CEO."    # punctuation and case don't matter
+    a, sure = W.answer(p, cfg, vocab, "Who is RYAN?")                         # the fast way (like the watch) agrees
+    assert a == "Ryan is the Group CEO." and 0 < sure <= 1 and head["sure_cut"] == watchlm.SURE_CUT
     assert W.detok(W.words("ships on 1 December 2026 - V2-ready.")) == "ships on 1 December 2026 \u2013 V2-ready."
     raw = (tmp_path / "model.owl").read_bytes()
     assert raw[:4] == b"OWL1" and int.from_bytes(raw[4:8], "little") % 4 == 0   # floats stay 4-byte aligned for the watch
@@ -1620,8 +1622,8 @@ def test_sources_text_file_and_site(client, monkeypatch):
 
 def test_watch_speech_model_served(client):
     r = client.get("/api/watch/speech", headers=H)
-    assert r.status_code == 200 and len(r.content) > 2_000_000 and r.content[:4] == (1).to_bytes(4, "little")
-    assert r.content[4:10] == b"mn7_en"
+    assert r.status_code == 200 and len(r.content) > 3_000_000 and r.content[:4] == (4).to_bytes(4, "little")
+    assert b"mn7_en" in r.content[:2000] and b"fst" in r.content[:2000]
 
 
 def test_learns_your_questions_and_speaks_answers(client, monkeypatch):

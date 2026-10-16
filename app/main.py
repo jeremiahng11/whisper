@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.13.0"
+VERSION = "1.13.1"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -922,8 +922,9 @@ async def watch_asked(request: Request):
 
 @app.get("/api/watch/speech", dependencies=[Depends(auth)])
 def watch_speech_model():
-    """The watch's offline speech model (Espressif MultiNet7 English, ~2.7 MB): hears the pack's questions."""
-    return FileResponse(Path(__file__).parent / "watch_files" / "mn7_en.srm", media_type="application/octet-stream")
+    """The watch's offline speech models: ESP-SR's srmodels.bin exactly as Espressif ships it (MultiNet7 English and
+    what it uses with it, 3.3 MB) - the trimmed copy of 1.12 (MultiNet only) crashed the watch."""
+    return FileResponse(Path(__file__).parent / "watch_files" / "srmodels.bin", media_type="application/octet-stream")
 
 
 @app.get("/api/watch/model", dependencies=[Depends(auth)])

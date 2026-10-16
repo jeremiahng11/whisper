@@ -299,8 +299,54 @@ def dequantize(q: dict) -> dict:
     return {k: (v[0].astype(np.float32) * v[1][:, None]) if isinstance(v, tuple) else v for k, v in q.items()}
 
 
+def answer(p: dict, cfg: dict, vocab: Vocab, question: str, max_new: int = 48) -> tuple[str, float]:
+    """Greedy answer + how sure the model was (the lowest probability it gave any word it chose, the stop
+    included). Step by step with a KV cache, exactly like the watch (owl.cpp) - and much faster than generate()."""
+    d, H = cfg["d"], cfg["heads"]
+    dh, T, L = d // H, cfg["seq"], cfg["layers"]
+    cos, sin = rope_tables(T, dh, cfg["rope_theta"])
+    K = np.zeros((L, T, H, dh), np.float32)
+    Vc = np.zeros((L, T, H, dh), np.float32)
+
+    def step(tok: int, pos: int) -> np.ndarray:
+        x = p["emb"][tok].astype(np.float32)
+        for i in range(L):
+            a, _ = _rms(x, p[f"{i}.attn_norm"])
+            q, k, v = np.split(p[f"{i}.qkv"] @ a, 3)
+            q, k, v = q.reshape(H, dh), k.reshape(H, dh), v.reshape(H, dh)
+            q = _rope(q[:, None, :], cos[pos:pos + 1], sin[pos:pos + 1])[:, 0]
+            k = _rope(k[:, None, :], cos[pos:pos + 1], sin[pos:pos + 1])[:, 0]
+            K[i, pos], Vc[i, pos] = k, v
+            s = np.einsum("hd,thd->ht", q, K[i, :pos + 1]) / math.sqrt(dh)
+            s = np.exp(s - s.max(-1, keepdims=True))
+            s /= s.sum(-1, keepdims=True)
+            o = np.einsum("ht,thd->hd", s, Vc[i, :pos + 1]).reshape(d)
+            x = x + p[f"{i}.proj"] @ o
+            f, _ = _rms(x, p[f"{i}.ffn_norm"])
+            g = p[f"{i}.gate"] @ f
+            x = x + p[f"{i}.down"] @ (g * _sig(g) * (p[f"{i}.up"] @ f))
+        out, _ = _rms(x, p["out_norm"])
+        return p["emb"] @ out
+
+    ids = [Q] + vocab.enc_q(question)[: T // 2] + [A]
+    for i, t in enumerate(ids):
+        logits = step(t, i)
+    out, sure, pos = [], 1.0, len(ids)
+    for _ in range(max_new):
+        pr = np.exp(logits - logits.max())
+        pr /= pr.sum()
+        t = int(np.argmax(logits))
+        sure = min(sure, float(pr[t]))
+        if t == EOS or pos >= T:
+            break
+        out.append(t)
+        logits = step(t, pos)
+        pos += 1
+    return vocab.dec(out), sure
+
+
 def generate(p: dict, cfg: dict, vocab: Vocab, question: str, max_new: int = 48) -> str:
-    """Greedy answer (the watch does the same, step by step with a KV cache)."""
+    """Greedy answer, the slow way (whole sequence each step) - the reference answer() is checked against."""
     ids = [Q] + vocab.enc_q(question)[: cfg["seq"] // 2] + [A]
     out = []
     for _ in range(max_new):

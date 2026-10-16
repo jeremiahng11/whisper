@@ -27,6 +27,7 @@ from .config import settings
 
 log = logging.getLogger("watchlm")
 DONT_KNOW = "I don't know that yet - ask me again when I'm online."
+SURE_CUT = 0.6
 OFF_TOPIC = ["what is the weather today", "tell me a joke", "what time is it", "play some music", "how are you",
              "what is the capital of france", "who won the football", "what is two plus two", "sing a song",
              "what is the meaning of life", "set an alarm", "how tall is mount everest", "who is the president",
@@ -135,16 +136,17 @@ def train(out: Path, max_minutes: float = 120, max_epochs: int = 200, seed: int 
     def score(items):
         right = 0
         for q, a in items:
-            got = W.generate(pq, cfg, vocab, q)
+            got = W.answer(pq, cfg, vocab, q)[0]
             right += _same(got, a)
         return round(100 * right / max(1, len(items)))
 
     report = {"trained_on": score(sample), "reworded": score(ds["test"]) if ds["test"] else None,
               "facts": ds["facts"], "pairs": len(pairs), "vocab": len(vocab.itos), "steps": step,
               "minutes": round((time.time() - t0) / 60, 1), "loss": round(loss_avg or 0, 4),
-              "examples": [{"q": q, "a": W.generate(pq, cfg, vocab, q)} for q, _ in (ds["test"] or sample)[:6]]}
+              "examples": [{"q": q, "a": W.answer(pq, cfg, vocab, q)[0]} for q, _ in (ds["test"] or sample)[:6]]}
     tmp = out / "model.owl.tmp"
-    meta = {"made": time.strftime("%Y-%m-%d %H:%M"), "facts": ds["facts"], "dont_know": DONT_KNOW}
+    # below this certainty the watch marks the answer "not sure" (measured: catches some wrong answers, no right ones)
+    meta = {"made": time.strftime("%Y-%m-%d %H:%M"), "facts": ds["facts"], "dont_know": DONT_KNOW, "sure_cut": SURE_CUT}
     size = W.export(tmp, q8, cfg, vocab, meta)
     ver = hashlib.sha1(tmp.read_bytes()).hexdigest()[:12]
     tmp.replace(out / "model.owl")
