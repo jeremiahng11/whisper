@@ -263,12 +263,55 @@ def find(q: str, limit: int = 12) -> list[dict]:
     return [f for _, f in find_scored(q, limit)]
 
 
+_vocab_cache: dict = {"at": None, "words": set(), "sounds": {}}
+
+
+def _kb_words(fs: list[dict]) -> tuple[set, dict]:
+    """Every word the knowledge base uses (and a sound key for each), rebuilt when kb.json changes."""
+    from . import terms
+    try:
+        at = (kdir() / "kb.json").stat().st_mtime
+    except OSError:
+        at = None
+    if _vocab_cache["at"] != at or not _vocab_cache["words"]:
+        words = set()
+        for f in fs:
+            words |= _words(f["q"] + " " + " ".join(f.get("alts") or []) + " " + (f.get("topic") or "") + " " + f["a"])
+        sounds: dict[str, str] = {}
+        for w in words:
+            if len(w) >= 4:
+                sounds.setdefault(terms.sound(w), w)
+        _vocab_cache.update(at=at, words=words, sounds=sounds)
+    return _vocab_cache["words"], _vocab_cache["sounds"]
+
+
+def _heard_as_known(want: set, fs: list[dict]) -> set:
+    """Speech-to-text writes names the way they sound ("Alita Planet", "Prisila"): a question word the knowledge base
+    doesn't know is read as the known word that sounds the same or is spelt almost the same."""
+    import difflib
+    from . import terms
+    words, sounds = _kb_words(fs)
+    out = set()
+    for w in want:
+        if w in words or len(w) < 4:
+            out.add(w)
+            continue
+        k = sounds.get(terms.sound(w))
+        if not k:
+            close = difflib.get_close_matches(w, words, n=1, cutoff=0.8)
+            k = close[0] if close else None
+        out.add(k or w)
+    return out
+
+
 def find_scored(q: str, limit: int = 12) -> list[tuple[int, dict]]:
     want = _words(q)
     if not want:
         return []
+    fs = facts()
+    want = _heard_as_known(want, fs)
     scored = []
-    for f in facts():
+    for f in fs:
         ask = _words(f["q"] + " " + " ".join(f.get("alts") or []) + " " + (f.get("topic") or ""))
         ans = _words(f["a"])
         s = 2 * len(want & ask) + len(want & ans)

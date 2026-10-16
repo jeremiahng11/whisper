@@ -1696,3 +1696,5 @@ def test_any_question_uses_company_knowledge(client):
     sysmsg = ask("When does the Idea Saver V2 ship?")         # no scope, no meeting words: still finds the fact
     assert sysmsg.startswith("You are the watch.") and "company knowledge base" in sysmsg and "Idea Saver V2" in sysmsg
     assert "company knowledge base" not in ask("tell me a joke about cats")   # nothing matches: plain answer
+    hits = knowledge.find("when does the idea sayver vee two ship")          # misheard words still find the fact
+    assert hits and hits[0]["q"].startswith("When does Idea Saver")
