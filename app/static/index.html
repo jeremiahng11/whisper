@@ -442,7 +442,16 @@ ul.replies{margin:4px 0;padding-left:20px;font-size:13.5px}
         <div class="row"><input id="srcUrl" placeholder="https://your-site.com/products/" style="flex:1;min-width:200px"><label class="mute">+ pages under it <input id="srcCrawl" type="number" min="0" max="60" value="0" style="width:56px"></label><button class="ghost" id="srcAddUrl">Add page</button></div>
         <div class="row" style="margin-top:6px"><input id="srcNews" placeholder="Follow the news about… (e.g. Aleta Planet)" style="flex:1;min-width:200px"><button class="ghost" id="srcAddNews">Follow news</button></div>
         <div class="row" style="margin-top:6px"><input type="file" id="srcFile" accept=".pdf,.docx,.txt,.md,.csv,.html,.htm" class="hidden"><button class="ghost" id="srcAddFile">Add a file (PDF, Word, text)</button><button class="ghost" id="srcPaste">Paste text</button><span class="mute" id="srcMsg"></span></div>
+        <div id="srcQueue" class="mute" style="margin-top:6px"></div>
         <div id="srcList" style="margin-top:6px"></div>
+        <h4 style="margin:14px 0 4px">Research on its own</h4>
+        <div class="mute">The server searches the web and the news about these topics every week, reads what's really about
+          them and learns the facts. With <i>find topics</i> on, it also adds the company, product and brand names your facts
+          keep mentioning, and researches questions nobody could answer (a few a day).</div>
+        <div class="row" style="margin-top:6px"><input id="rsTopic" placeholder="Research… (e.g. Sanrio Aleta Adventure)" style="flex:1;min-width:200px"><button class="ghost" id="rsAdd">Research</button></div>
+        <div class="row" style="margin-top:6px;gap:10px"><label><input type="checkbox" id="rsAuto"> find topics and research unanswered questions by itself</label><button class="ghost" id="rsNow">Research now</button></div>
+        <div id="rsNowMsg" class="mute"></div>
+        <div id="rsList" style="margin-top:6px"></div>
         <div id="wmNow" class="mute" style="margin-top:12px">…</div>
         <div class="row" style="margin-top:8px"><button id="wmTrain">Build watch AI</button><button class="danger hidden" id="wmStop">Stop</button><a class="hidden" id="wmFile" href="#">Download model</a><span class="mute" id="wmMsg"></span></div>
       </div>
@@ -1376,15 +1385,47 @@ async function loadKb() {
 async function loadSources() {
   try {
     const r = await (await api("/api/knowledge/sources")).json();
-    $("#srcList").innerHTML = r.items.map(x => `<div class="row" style="gap:6px;padding:3px 0" data-id="${x.id}">
-      <div style="flex:1">${x.kind === "news" ? "📰 " : ""}${x.kind === "url" ? `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.title)}</a>` : esc(x.title)}
-      <span class="mute"> · ${x.state === "reading" ? "reading" + (x.progress ? " " + esc(x.progress) : "") + "… (the AI reads one thing at a time: meetings first)" : x.state === "new" || x.state === "changed" ? "waiting for the AI" : x.state === "error" ? "problem: " + esc(x.error) : x.facts + " facts"}${x.pages ? " · " + x.pages + " pages" : ""}${x.kind === "news" && x.articles !== undefined ? " · " + x.articles + " articles (checked daily)" : ""}</span></div>
+    const ago = t => { if (!t) return ""; const m = Math.round((Date.now() / 1000 - t) / 60); return m < 60 ? m + " min ago" : m < 1440 ? Math.round(m / 60) + " h ago" : Math.round(m / 1440) + " days ago"; };
+    const how = x => x.state === "reading" ? `<b>reading now</b>${x.progress ? " - " + esc(x.progress) : ""}…`
+      : x.state === "new" || x.state === "changed" ? `in line (#${x.queue || "?"}) - read after what's ahead of it`
+      : x.state === "error" ? "problem: " + esc(x.error)
+      : x.facts + " facts" + ((x.kind === "news" || x.kind === "research") ? (x.articles ? ` · ${x.articles} articles` : x.searched === 0 ? " · the search found nothing yet" : x.searched ? ` · ${x.searched} results, none about it yet` : "") : "")
+        + (x.fetched ? " · checked " + ago(x.fetched) + (x.kind === "news" ? " (daily)" : x.kind === "url" ? " (daily)" : x.kind === "research" ? " (weekly)" : "") : "");
+    const reading = r.items.find(x => x.state === "reading"), waiting = r.items.filter(x => ["new", "changed"].includes(x.state)).length;
+    $("#srcQueue").innerHTML = reading || waiting ? `The AI reads one source at a time (your meetings first)${reading ? `: now <b>${esc(reading.title || reading.query || "")}</b>` : ""}${waiting ? ` · ${waiting} waiting in line` : ""}.` : "";
+    const mine = r.items.filter(x => x.kind !== "research");
+    $("#srcList").innerHTML = mine.map(x => `<div class="row" style="gap:6px;padding:3px 0" data-id="${x.id}">
+      <div style="flex:1">${x.kind === "news" ? "📰 " : x.kind === "file" ? "📄 " : x.kind === "text" ? "📝 " : ""}${x.kind === "url" ? `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.title || x.url)}</a>` : esc(x.title || x.query || x.filename || "(untitled)")}
+      <span class="mute"> · ${how(x)}${x.pages ? " · " + x.pages + " pages" : ""}</span></div>
       <button class="ghost srcRe" style="padding:2px 8px">Read again</button><button class="ghost srcDel" style="padding:2px 8px">Remove</button></div>`).join("") || '<span class="mute">None yet.</span>';
+    loadResearch(how);
     document.querySelectorAll(".srcRe").forEach(b => b.onclick = async () => { await api(`/api/knowledge/sources/${b.parentNode.dataset.id}/refresh`, { method: "POST" }); setTimeout(loadSources, 800); });
     document.querySelectorAll(".srcDel").forEach(b => b.onclick = async () => { if (!confirm("Remove this source and its facts?")) return; await api("/api/knowledge/sources/" + b.parentNode.dataset.id, { method: "DELETE" }); loadSources(); loadKb(); });
     if (r.items.some(x => ["reading", "new", "changed"].includes(x.state))) setTimeout(() => { loadSources(); loadKb(); }, 5000);
   } catch (e) { $("#srcList").textContent = ""; }
 }
+async function loadResearch(how) {
+  try {
+    const r = await (await api("/api/research")).json();
+    $("#rsAuto").checked = r.auto;
+    const run = r.running || {};
+    $("#rsNowMsg").innerHTML = (run.state === "running" ? `Researching… ${run.done} of ${run.total}. ` : "") +
+      (r.questions_researched ? `Researched ${r.questions_researched} questions nobody could answer; ${r.questions_answered} found answers. ` : "") +
+      (r.waiting ? `${r.waiting} unanswered questions waiting.` : "") + (r.browser ? "" : " (No headless browser on this server: some sites can't be read.)");
+    $("#rsList").innerHTML = r.topics.map(t => `<div class="row" style="gap:6px;padding:3px 0" data-t="${esc(t.topic)}" data-id="${t.source}">
+      <div style="flex:1">🔎 ${esc(t.topic)}${t.auto ? ' <span class="mute">(found by itself)</span>' : ""}
+      <span class="mute"> · ${t.source ? how({ ...t, kind: "research", queue: t.queue }) : "starting"}</span></div>
+      ${t.source ? '<button class="ghost rsRe" style="padding:2px 8px">Read again</button>' : ""}<button class="ghost rsDel" style="padding:2px 8px">Remove</button></div>`).join("") || '<span class="mute">No topics yet - add one, or let it find them (it needs a few facts about a name first).</span>';
+    document.querySelectorAll(".rsRe").forEach(b => b.onclick = async () => { await api(`/api/knowledge/sources/${b.parentNode.dataset.id}/refresh`, { method: "POST" }); setTimeout(loadSources, 800); });
+    document.querySelectorAll(".rsDel").forEach(b => b.onclick = async () => { if (!confirm("Stop researching this and forget what it found?")) return; await api("/api/research/topics?topic=" + encodeURIComponent(b.parentNode.dataset.t), { method: "DELETE" }); loadSources(); loadKb(); });
+    if (run.state === "running") setTimeout(loadSources, 5000);
+  } catch (e) { $("#rsList").textContent = ""; }
+}
+$("#rsAdd").onclick = async () => { const t = $("#rsTopic").value.trim(); if (!t) return;
+  try { await api("/api/research/topics", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ topic: t }) }); $("#rsTopic").value = ""; } catch (e) { $("#rsNowMsg").textContent = "Not added: " + e.message; }
+  loadSources(); };
+$("#rsAuto").onchange = async () => { await api("/api/research", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ auto: $("#rsAuto").checked }) }); loadSources(); };
+$("#rsNow").onclick = async () => { try { await api("/api/research/now", { method: "POST" }); } catch (e) { $("#rsNowMsg").textContent = e.message; } setTimeout(loadSources, 800); };
 async function addSource(body, isForm) {
   $("#srcMsg").textContent = "Adding…";
   try {

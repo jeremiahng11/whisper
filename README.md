@@ -368,6 +368,14 @@ owners, dates, budgets, terms, and who people are. In the background it reads on
 - **News watch** (1.14): "Follow the news about…" a company, person or topic. Once a day the server searches the
   news (Bing News, else Google News; free, no key), reads the new articles (headless browser where needed), keeps
   60 days of them and turns them into dated facts ("On 14 October 2026 (The Business Times) ...").
+- **Research on its own** (1.15, `app/research.py`): research topics ("Sanrio Aleta Adventure") are searched on the
+  web (Bing, else DuckDuckGo) and in the news every week; only pages really about the topic are read (all its words),
+  and the AI turns them into facts. With *find topics* on (`RESEARCH_AUTO`, default on) it also adds the company,
+  product and brand names your facts keep mentioning (not people; a topic you remove isn't found again) and
+  researches the questions nobody could answer, with your company's name (`RESEARCH_QUESTIONS` a day, default 4);
+  when it finds the answer, the question is linked to it, and the watch model learns it at night. Ask does a quick
+  live web search when the knowledge base knows nothing about a question (`RESEARCH_LIVE`, default on).
+  API: `GET/PUT /api/research`, `POST/DELETE /api/research/topics`, `POST /api/research/now`.
 - **Who is X?** (1.13.6) is written by the AI from everything known about X: lines of your pages and documents that
   name them (a leadership page), facts that mention them, and their meeting profile.
 - **Fix / Hide** a fact on the Account page; your fix survives re-reading, a hidden fact is used nowhere.

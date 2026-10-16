@@ -55,6 +55,9 @@ class Settings:
     watchai_threads: int = int(os.getenv("WATCHAI_THREADS", "0"))    # CPU threads for training the watch AI (0 = half)
     watchai_nightly: bool = _bool("WATCHAI_NIGHTLY", True)   # retrain the watch model at night when facts changed
     watchai_minutes: float = float(os.getenv("WATCHAI_MINUTES", "120"))  # longest a training run may take
+    research_auto: bool = _bool("RESEARCH_AUTO", True)        # research your company's topics on the web by itself
+    research_live: bool = _bool("RESEARCH_LIVE", True)        # Ask: a quick web search when nothing is known yet
+    research_questions: int = int(os.getenv("RESEARCH_QUESTIONS", "4"))   # unanswered questions researched per day
     knowledge_sweep: bool = _bool("KNOWLEDGE_SWEEP", True)   # learn facts from new meetings in the background
     vocab_packs: str = os.getenv("VOCAB_PACKS", "all")       # built-in vocabularies: payments,tech,finance | none
     admin_id: str = os.getenv("ADMIN_ID", "").strip()        # web page sign-in (both set = sign-in required)

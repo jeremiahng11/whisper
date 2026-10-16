@@ -15,12 +15,12 @@ from typing import Optional
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse, FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
 
-from . import agenda, autotag, chat, db, dynamics, knowledge, login, sources, watchlm, watchpack, people, vocab, redact, render, search, speech, summarize, terms, transcribe, voices, wakeword, worker
+from . import agenda, autotag, chat, db, dynamics, knowledge, login, sources, watchlm, watchpack, people, research, vocab, redact, render, search, speech, summarize, terms, transcribe, voices, wakeword, worker
 from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.14.0"
+VERSION = "1.15.0"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -624,6 +624,10 @@ async def ask(request: Request):
         company = company_context(q)
         if company:
             context += ("\n\n" if context else "") + company
+        if len(knowledge.find(q, 4)) < 2 and not data.get("offline"):
+            # little or nothing known: a quick web search (in the answer's thread) so "what's new with Sanrio Aleta
+            # Adventure" is answered from today's web, not only the AI's old general knowledge
+            return chat.start(clean, context, bool(data.get("best")), system, late=lambda: research.live_context(q))
     return chat.start(clean, context, bool(data.get("best")), system)
 
 
@@ -908,6 +912,51 @@ def refresh_source(sid: str):
         raise HTTPException(404, "no such source")
     _learn_source_bg(sid, True)
     return {"started": summarize.enabled()}
+
+
+# ---------------------------------------------------------------- research on its own (research.py)
+@app.get("/api/research", dependencies=[Depends(auth)])
+def research_state():
+    """Topics researched on the web (yours and the ones it found), questions it researched, what's running."""
+    return research.summary()
+
+
+@app.put("/api/research", dependencies=[Depends(auth)])
+async def research_set(request: Request):
+    """{"auto": false} - stop finding topics and researching unanswered questions by itself."""
+    d = await body_extra(request)
+    if "auto" in d:
+        research.set_auto(bool(d["auto"]))
+    return research.summary()
+
+
+@app.post("/api/research/topics", dependencies=[Depends(auth)], status_code=201)
+async def research_add(request: Request):
+    """{"topic": "Sanrio Aleta Adventure"} - research it on the web (now, then weekly)."""
+    d = await body_extra(request)
+    try:
+        m = research.add_topic(str(d.get("topic") or ""))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if m.get("state") in ("new", "changed"):
+        _learn_source_bg(m["id"])
+    return research.summary()
+
+
+@app.delete("/api/research/topics", dependencies=[Depends(auth)])
+def research_remove(topic: str):
+    """Stop researching it (a topic it found isn't found again); what it learned goes too."""
+    if not research.remove_topic(topic):
+        raise HTTPException(404, "no such topic")
+    return research.summary()
+
+
+@app.post("/api/research/now", dependencies=[Depends(auth)], status_code=202)
+def research_go():
+    """Find topics, read every topic again and research the questions nobody could answer - now."""
+    if not summarize.enabled():
+        raise HTTPException(400, "SUMMARY_BACKEND is none - no LLM configured")
+    return {"started": research.research_now()}
 
 
 @app.put("/api/knowledge/{fid}", dependencies=[Depends(auth)])

@@ -76,17 +76,27 @@ def _save(m: dict) -> None:
 def listing() -> list[dict]:
     out = []
     for p in sorted(sdir().glob("*.json")):
+        if p.name.endswith(".news.json"):           # a news/research source's article store, not a source
+            continue
         try:
             m = json.loads(p.read_text())
         except ValueError:
             continue
         out.append({k: v for k, v in m.items() if k != "facts"} | {"facts": len(m.get("facts") or [])})
-    return sorted(out, key=lambda m: m.get("added", 0), reverse=True)
+    out.sort(key=lambda m: m.get("added", 0), reverse=True)
+    n = 0                                           # the order the background reader takes them in (one at a time)
+    for m in out:
+        if m.get("state") in ("new", "changed"):
+            n += 1
+            m["queue"] = n
+    return out
 
 
 def all_facts() -> list[dict]:
     fs = []
     for p in sdir().glob("*.json"):
+        if p.name.endswith(".news.json"):
+            continue
         try:
             fs += json.loads(p.read_text()).get("facts") or []
         except ValueError:
@@ -177,8 +187,8 @@ BROWSER_HEADERS = {
 MIN_PAGE_TEXT = 200                                 # less than this from plain HTML: the page is built by JavaScript
 
 
-def _get(url: str) -> httpx.Response:
-    return httpx.get(url, timeout=25, follow_redirects=True, headers=BROWSER_HEADERS)
+def _get(url: str, timeout: float = 25) -> httpx.Response:
+    return httpx.get(url, timeout=timeout, follow_redirects=True, headers=BROWSER_HEADERS)
 
 
 def browser_available() -> bool:
@@ -312,6 +322,19 @@ Articles:
 \"\"\""""
 
 
+RESEARCH_PROMPT = """These are web pages and news found by searching for "{topic}". {asked}Write the facts someone in the
+company may later ask about {topic}: what it is, products and services, prices, places, dates, people and their roles,
+partnerships (e.g. licensed characters), latest launches and news. Ignore pages that are about something else with a
+similar name. Return ONLY a JSON array (at most {n} items) of objects with keys "q" (a short spoken question, 3-8
+words), "a" (one short sentence, at most 30 words; for news say WHEN and the source), "kind" (one of product, price,
+policy, person, date, fact, news), "topic" (1-4 words), "alts" (2-3 other wordings). Only what the pages clearly say.
+
+Pages:
+\"\"\"
+{text}
+\"\"\""""
+
+
 def _rss_items(xml_text: str) -> list[dict]:
     import xml.etree.ElementTree as ET
     from email.utils import parsedate_to_datetime
@@ -338,12 +361,12 @@ def _rss_items(xml_text: str) -> list[dict]:
     return out
 
 
-def news_search(topic: str) -> list[dict]:
+def news_search(topic: str, timeout: float = 25) -> list[dict]:
     from urllib.parse import quote_plus
     for feed in (f"https://www.bing.com/news/search?q={quote_plus(topic)}&format=rss&setlang=en",
                  f"https://news.google.com/rss/search?q={quote_plus(topic)}&hl=en-SG&gl=SG&ceid=SG:en"):
         try:
-            r = _get(feed)
+            r = _get(feed, timeout)
         except httpx.HTTPError:
             continue
         if r.status_code == 200:
@@ -351,6 +374,39 @@ def news_search(topic: str) -> list[dict]:
             if items:
                 return items
     return []
+
+
+def web_search(query: str, timeout: float = 25) -> list[dict]:
+    """Web results for a query (Bing's RSS results, else DuckDuckGo's HTML page; both free, no key):
+    [{"url", "title", "snippet", "date", "source"}]."""
+    from urllib.parse import parse_qs, quote_plus, unquote
+    try:
+        r = _get(f"https://www.bing.com/search?format=rss&setlang=en&q={quote_plus(query)}", timeout)
+        if r.status_code == 200:
+            items = _rss_items(r.text)
+            if items:
+                return items
+    except httpx.HTTPError:
+        pass
+    try:
+        r = _get(f"https://html.duckduckgo.com/html/?q={quote_plus(query)}", timeout)
+    except httpx.HTTPError:
+        return []
+    if r.status_code != 200:
+        return []
+    out = []
+    for m in re.finditer(r'<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)</a>(.*?)(?=<a[^>]+class="result__a"|$)', r.text, re.S):
+        href = html.unescape(m.group(1))
+        q = parse_qs(urlparse(href).query)
+        url = unquote(q["uddg"][0]) if q.get("uddg") else href
+        if not url.startswith("http"):
+            continue
+        snip = re.search(r'class="result__snippet"[^>]*>(.*?)</a>', m.group(3), re.S)
+        out.append({"url": url, "title": html_text(m.group(2))[1], "snippet": html_text(snip.group(1))[1] if snip else "",
+                    "date": time.strftime("%Y-%m-%d"), "source": urlparse(url).netloc})
+        if len(out) >= 15:
+            break
+    return out
 
 
 def _news_path(sid: str) -> Path:
@@ -364,14 +420,25 @@ def refresh_news(m: dict) -> str:
     except (OSError, ValueError):
         store = {}
     topic = m["query"]
-    words = [w for w in re.findall(r"\w+", topic.lower()) if len(w) > 2]
+    research = m["kind"] == "research"
+    words = sorted(knowledge._words(m.get("must") or topic)) if research else \
+        [w for w in re.findall(r"\w+", topic.lower()) if len(w) > 2]
     use_browser = browser_available()
     new = 0
-    for it in news_search(topic):
+    search = m.get("search") or topic               # (a question is searched with the company's name added)
+    found = news_search(search)
+    if research:                                    # the web as well as the news; the web first (more lasting)
+        seen_u = set()
+        found = [x for x in web_search(search) + found if not (x["url"] in seen_u or seen_u.add(x["url"]))]
+    m["searched"] = len(found)                       # (the page says "the search found nothing" vs "nothing about it")
+    for it in found:
         if it["url"] in store or new >= NEWS_NEW_PER_RUN:
             continue
-        hay = (it["title"] + " " + it["snippet"]).lower()
-        if words and not any(w in hay for w in words):   # search engines pad with loosely related stories
+        hay = (it["title"] + " " + it["snippet"] + " " + it["url"]).lower()
+        # a research topic: all its words (one may be missing from a long one) - "Sanrio Aleta Adventure" isn't any
+        # page that mentions Sanrio
+        need = m.get("need") or ((len(words) if len(words) <= 3 else len(words) - 1) if research else 1)
+        if words and sum(w in hay for w in words) < need:   # search engines pad with loosely related results
             continue
         text = it["snippet"]
         try:
@@ -383,7 +450,8 @@ def refresh_news(m: dict) -> str:
         store[it["url"]] = {**{k: it[k] for k in ("title", "date", "source")}, "text": text}
         new += 1
         time.sleep(0.5)
-    cutoff = time.strftime("%Y-%m-%d", time.localtime(time.time() - NEWS_KEEP_DAYS * 86400))
+    days = 365 if research else NEWS_KEEP_DAYS      # web pages (products, profiles) stay useful longer than news
+    cutoff = time.strftime("%Y-%m-%d", time.localtime(time.time() - days * 86400))
     keep = sorted(((u, a) for u, a in store.items() if a["date"] >= cutoff), key=lambda x: x[1]["date"], reverse=True)[:NEWS_MAX]
     store = dict(keep)
     _news_path(m["id"]).write_text(json.dumps(store, ensure_ascii=False))
@@ -403,11 +471,11 @@ def add(kind: str, title: str = "", url: str = "", text: str = "", filename: str
         if u.scheme not in ("http", "https") or not u.netloc:
             raise ValueError("give a full web address (https://...)")
         m.update(url=url.strip(), crawl=max(0, min(int(crawl or 0), MAX_CRAWL)), title=title or u.netloc + u.path)
-    elif kind == "news":
-        topic = re.sub(r"\s+", " ", (url or title or text or "").strip())[:80]
+    elif kind in ("news", "research"):
+        topic = re.sub(r"\s+", " ", (url or title or text or "").strip())[:120]
         if len(topic) < 3:
-            raise ValueError("say what to follow in the news (a company, a person, a topic)")
-        m.update(query=topic, title=title or f"News: {topic}")
+            raise ValueError("say what to follow (a company, a person, a topic)")
+        m.update(query=topic, title=title or (f"News: {topic}" if kind == "news" else f"Research: {topic}"))
     elif kind == "file":
         body = file_text(filename, data)
         if len(body.strip()) < 20:
@@ -428,6 +496,8 @@ def add(kind: str, title: str = "", url: str = "", text: str = "", filename: str
 def reset_stale() -> None:
     """At start-up: a source left "reading" by a restart is read again."""
     for p in sdir().glob("*.json"):
+        if p.name.endswith(".news.json"):
+            continue
         try:
             m = json.loads(p.read_text())
             if m.get("state") == "reading":
@@ -454,7 +524,10 @@ def due(m: dict) -> bool:
         return True
     if m.get("state") == "reading" and time.time() - (m.get("since") or 0) > 3600 and not _lock(m["id"]).locked():
         return True                                 # the server restarted while reading it: start again
-    return m.get("kind") in ("url", "news") and time.time() - (m.get("fetched") or 0) > REFETCH_S
+    if m.get("once") and m.get("fetched"):
+        return False                                # a one-off research (a question you asked): done
+    every = 7 * REFETCH_S if m.get("kind") == "research" else REFETCH_S   # web research weekly, news daily
+    return m.get("kind") in ("url", "news", "research") and time.time() - (m.get("fetched") or 0) > every
 
 
 def _chunks(text: str) -> list[str]:
@@ -495,8 +568,8 @@ def _learn(sid: str, force: bool) -> int:
             m["pages"] = len(pages)
             if pages and (not m.get("title") or m["title"].startswith(urlparse(m["url"]).netloc)):
                 m["title"] = pages[0]["title"][:80] or m["title"]
-        elif m["kind"] == "news":
-            m["progress"] = "searching the news"
+        elif m["kind"] in ("news", "research"):
+            m["progress"] = "searching the news" if m["kind"] == "news" else "searching the web and the news"
             _save(m)
             text = refresh_news(m)[:MAX_TEXT]
             (sdir() / f"{sid}.txt").write_text(text)
@@ -522,6 +595,10 @@ def _learn(sid: str, force: bool) -> int:
             _save(m)
             if m["kind"] == "news":
                 prompt = NEWS_PROMPT.format(topic=m["query"], n=PER_CHUNK, text=part)
+            elif m["kind"] == "research":
+                prompt = RESEARCH_PROMPT.format(topic=m["query"], n=PER_CHUNK, text=part,
+                                                asked=(f'Someone asked: "{m["question"]}" - if these pages answer it, '
+                                                       f'make that the first fact, worded as they asked.\n') if m.get("question") else "")
             else:
                 prompt = knowledge.DOC_PROMPT.format(n=PER_CHUNK, title=m["title"], where=m.get("url") or m.get("filename") or "pasted",
                                                      text=part)

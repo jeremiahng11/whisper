@@ -18,6 +18,7 @@ os.environ["AUTOTAG_NEW"] = "0"          # tested on their own below (they'd cha
 os.environ["AUTOTAG_SWEEP"] = "0"
 os.environ["PEOPLE_SWEEP"] = "0"
 os.environ["KNOWLEDGE_SWEEP"] = "0"
+os.environ["RESEARCH_LIVE"] = "0"         # no web searches from the Ask tests (turned on in its own test)
 
 import pytest
 from fastapi.testclient import TestClient
@@ -41,6 +42,14 @@ def fake_chat(messages, best=False):
     SYSTEMS.append(messages[0]["content"] if messages[0]["role"] == "system" else "")
     if FAIL["on"]:
         raise RuntimeError("LLM is down")
+    if "found by searching for" in messages[-1]["content"]:
+        out = [{"q": "What is Sanrio Aleta Adventure", "a": "A Hello Kitty travel card by Aleta Planet and Sanrio.",
+                "kind": "product", "topic": "Sanrio Aleta Adventure", "alts": ["tell me about Sanrio Aleta Adventure"]}]
+        if "Someone asked" in messages[-1]["content"]:
+            out.insert(0, {"q": "How much is the Adventure pass yearly fee", "a": "SGD 49 a year.", "kind": "price",
+                           "topic": "Adventure pass", "alts": ["Adventure pass yearly fee", "price of the Adventure pass"]})
+        import json as _j
+        return _j.dumps(out)
     if "for a colleague asking" in messages[-1]["content"]:
         return "Ryan Tan is the founder, Chairman and CEO of Aleta Planet."
     if "write the facts someone" in messages[-1]["content"]:
@@ -1599,7 +1608,7 @@ def test_sources_text_file_and_site(client, monkeypatch):
             self.content = self.text.encode()
             self.headers = {"content-type": "text/html"}
 
-    monkeypatch.setattr(sources, "_get", lambda u: (got.append(u), R(u))[1])
+    monkeypatch.setattr(sources, "_get", lambda u, *a: (got.append(u), R(u))[1])
     monkeypatch.setattr(sources.time, "sleep", lambda s: None)
     monkeypatch.setattr(sources, "browser_available", lambda: False)
     ps = sources.fetch_site("https://shop.test/products/", crawl=5)
@@ -1720,7 +1729,7 @@ def test_sources_zendesk_and_javascript_sites(monkeypatch):
                                      {"title": "Draft", "body": "<p>secret</p>", "draft": True}], "next_page": None})
         def json(self):
             return self._d
-    monkeypatch.setattr(sources, "_get", lambda u: J(u))
+    monkeypatch.setattr(sources, "_get", lambda u, *a: J(u))
     monkeypatch.setattr(sources.time, "sleep", lambda s: None)
     arts = sources.fetch_site("https://faq.example/hc/en-us")
     assert [a["title"] for a in arts] == ["How do I top up?", "Fees"] and "PayNow" in arts[0]["text"]
@@ -1778,7 +1787,7 @@ def test_news_source_follows_a_topic(client, monkeypatch):
             self.text = rss if "format=rss" in u else article
             self.content = self.text.encode()
             self.headers = {"content-type": "application/rss+xml" if "format=rss" in u else "text/html"}
-    monkeypatch.setattr(sources, "_get", lambda u: R(u))
+    monkeypatch.setattr(sources, "_get", lambda u, *a: R(u))
     monkeypatch.setattr(sources, "browser_available", lambda: False)
     monkeypatch.setattr(sources.time, "sleep", lambda s: None)
     r = client.post("/api/knowledge/sources", json={"news": "Aleta Planet"}, headers=H)
@@ -1795,3 +1804,80 @@ def test_news_source_follows_a_topic(client, monkeypatch):
     assert len(CALLS) == n and sources.get(sid)["new_articles"] == 0
     m = sources.get(sid); m["fetched"] = 0; sources._save(m)
     assert sources.due(sources.get(sid))                     # checked again daily
+
+
+def test_research_topics_questions_and_live(client, monkeypatch):
+    from app import chat, knowledge, research, sources
+    web = """<rss><channel>
+<item><title>Sanrio Aleta Adventure card - Aleta Planet</title><link>https://aleta.example/sanrio</link>
+<pubDate>Tue, 13 Oct 2026 08:00:00 GMT</pubDate><description>The Sanrio Aleta Adventure card with Hello Kitty designs.</description></item>
+<item><title>Adventure pass yearly fee - Aleta Planet</title><link>https://aleta.example/pass</link>
+<pubDate>Tue, 13 Oct 2026 08:00:00 GMT</pubDate><description>The Adventure pass costs SGD 49 a year.</description></item>
+<item><title>Sanrio theme park tickets</title><link>https://other.example/park</link>
+<pubDate>Tue, 13 Oct 2026 08:00:00 GMT</pubDate><description>Puroland opening hours.</description></item>
+</channel></rss>"""
+    page = "<html><title>Sanrio Aleta Adventure</title><p>" + "Aleta Planet and Sanrio launched the Sanrio Aleta Adventure card. " * 6 + "</p></html>"
+    got = []
+
+    class R:
+        def __init__(self, u):
+            self.status_code = 200
+            rss = "format=rss" in u or "/rss/" in u
+            self.text = (web if "bing.com/search" in u else "<rss><channel></channel></rss>") if rss else page
+            self.content = self.text.encode()
+            self.headers = {"content-type": "application/rss+xml" if rss else "text/html"}
+    monkeypatch.setattr(sources, "_get", lambda u, *a: (got.append(u), R(u))[1])
+    monkeypatch.setattr(sources, "browser_available", lambda: False)
+    monkeypatch.setattr(sources.time, "sleep", lambda s: None)
+
+    # topics it finds by itself: proper names the facts keep coming back to, not people, not common words
+    fs = [{"q": f"q{i}", "a": "a", "kind": "product", "topic": t, "id": f"x{i}"}
+          for i, t in enumerate(["Aleta Planet"] * 4 + ["Sanrio Aleta Adventure"] * 3 + ["pricing"] * 5 + ["Rare"] * 2)]
+    assert research.discover(fs) == ["Aleta Planet", "Sanrio Aleta Adventure"]
+
+    # a topic you add: searched on the web and in the news, pages about something else skipped
+    r = client.post("/api/research/topics", json={"topic": "Sanrio Aleta Adventure"}, headers=H)
+    assert r.status_code == 201
+    t = next(x for x in r.json()["topics"] if x["topic"] == "Sanrio Aleta Adventure")
+    assert not t["auto"] and t["source"]
+    sources.learn(t["source"])
+    m = sources.get(t["source"])
+    assert m["kind"] == "research" and m["state"] == "ok" and m["articles"] == 1     # the theme-park page isn't about it
+    assert any("bing.com/search?format=rss" in u for u in got) and any("news" in u for u in got)
+    assert knowledge.find("what is sanrio aleta adventure")[0]["q"] == "What is Sanrio Aleta Adventure"
+    m["fetched"] = time.time() - 2 * 86400; sources._save(m)
+    assert not sources.due(sources.get(t["source"]))         # web research: weekly, not daily
+    assert client.post("/api/research/topics", json={"topic": "x"}, headers=H).status_code == 400
+
+    # a question nobody could answer: researched with the company's name, then it answers it
+    knowledge.note_question("how much is the adventure pass yearly fee", "watch")
+    assert "how much is the adventure pass yearly fee" in research.unanswered()
+    q = research.research_question("how much is the adventure pass yearly fee")
+    assert q["search"] if "search" in q else True
+    sources.learn(q["id"])
+    assert research.relink_asked() >= 1
+    a = [x for x in knowledge.asked() if x["q"] == "how much is the adventure pass yearly fee"][-1]
+    assert a["fact"] and "SGD 49" in next(f for f in knowledge.facts() if f["id"] == a["fact"])["a"]
+    assert "how much is the adventure pass yearly fee" not in research.unanswered()
+    s = client.get("/api/research", headers=H).json()
+    assert s["questions_researched"] >= 1 and s["questions_answered"] >= 1
+
+    # removing a topic removes what it found; a found topic isn't found again
+    assert client.delete("/api/research/topics", params={"topic": "Sanrio Aleta Adventure"}, headers=H).status_code == 200
+    assert not sources.get(t["source"])
+    assert research.refresh_found(fs) == ["Aleta Planet"]
+    assert client.put("/api/research", json={"auto": False}, headers=H).json()["auto"] is False
+    client.put("/api/research", json={"auto": True}, headers=H)
+
+    # Ask about something nothing is known about: a quick web search goes along
+    monkeypatch.setattr(research.settings, "research_live", True)
+    ctx = research.live_context("Adventure pass yearly fee")
+    assert "SGD 49" in ctx and "aleta.example/pass" in ctx and "Puroland" not in ctx
+    SYSTEMS.clear()
+    r = client.post("/api/ask", json={"prompt": "what is the zorblax pass fee"}, headers=H)
+    import threading
+    for _ in range(100):                                     # (time.sleep is stubbed above)
+        if chat.get(r.json()["id"])["status"] != "pending":
+            break
+        threading.Event().wait(0.05)
+    assert any("quick web search" in x for x in SYSTEMS), (chat.get(r.json()["id"]), r.json())

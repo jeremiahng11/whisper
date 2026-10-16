@@ -16,7 +16,14 @@ _items: dict[str, dict] = {}
 _sem = threading.Semaphore(1)          # one answer at a time - the LLM runs on the same machine
 
 
-def _run(aid: str, messages: list[dict], system: str, best: bool) -> None:
+def _run(aid: str, messages: list[dict], system: str, best: bool, late=None) -> None:
+    if late:                                         # context that takes a moment (a web search): found here, not
+        try:                                         # while the device waits for its request to be accepted
+            extra = late()
+            if extra:
+                system += "\n\n" + extra
+        except Exception:                            # noqa: BLE001 - answer without it
+            pass
     with _sem:
         try:
             answer = summarize.chat([{"role": "system", "content": system}] + messages, best)
@@ -28,7 +35,7 @@ def _run(aid: str, messages: list[dict], system: str, best: bool) -> None:
         _items[aid].update(res, finished=time.time())
 
 
-def start(messages: list[dict], context: str = "", best: bool = False, system: str = "") -> dict:
+def start(messages: list[dict], context: str = "", best: bool = False, system: str = "", late=None) -> dict:
     aid = uuid.uuid4().hex[:12]
     now = time.time()
     with _lock:
@@ -36,7 +43,7 @@ def start(messages: list[dict], context: str = "", best: bool = False, system: s
             del _items[k]
         _items[aid] = {"id": aid, "status": "pending", "created": now}
     sysmsg = (system or SYSTEM) + (("\n\n" + context) if context else "")
-    threading.Thread(target=_run, args=(aid, messages, sysmsg, best), daemon=True).start()
+    threading.Thread(target=_run, args=(aid, messages, sysmsg, best, late), daemon=True).start()
     return {"id": aid, "status": "pending"}
 
 

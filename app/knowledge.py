@@ -565,7 +565,11 @@ def _sweep() -> None:
                         if sources.due(x):
                             log.info("learning facts from source %s", x["id"])
                             sources.learn(x["id"])
+                            busy = True
                             break
+                if not busy:
+                    from . import research           # topics it found, questions nobody could answer
+                    research.tick()
         except Exception as e:                      # noqa: BLE001
             log.warning("knowledge sweep: %s", e)
         time.sleep(150)
