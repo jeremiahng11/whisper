@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.16.0"
+VERSION = "1.16.1"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -1007,6 +1007,20 @@ def watch_voice(fid: str):
     p = watchpack.voice_file(fid)
     if not p:
         raise HTTPException(404, "no such answer, or no voice (TTS) on this server")
+    return FileResponse(p, media_type="audio/wav")
+
+
+@app.get("/api/watch/prompts", dependencies=[Depends(auth)])
+def watch_prompts():
+    """The watch's own spoken words ("Okay.", "Starting the meeting."), in the answers' voice: {"voice", "names"}."""
+    return watchpack.prompts_info()
+
+
+@app.get("/api/watch/prompts/{name}", dependencies=[Depends(auth)])
+def watch_prompt(name: str):
+    p = watchpack.prompt_file(name)
+    if not p:
+        raise HTTPException(404, "no such prompt, or no voice (TTS) on this server")
     return FileResponse(p, media_type="audio/wav")
 
 

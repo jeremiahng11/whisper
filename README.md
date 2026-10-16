@@ -385,6 +385,9 @@ owners, dates, budgets, terms, and who people are. In the background it reads on
   other fact to treat it the same. The watch model learns the essentials and your pages/research first; meeting facts
   fill the rest (meeting questions are answered online). Find a fact shows the answer when one fact clearly answers
   it, and **Ask Oracle** asks the AI.
+- **The watch's own words** (1.16.1): `GET /api/watch/prompts` (+ `/api/watch/prompts/<name>`) - "Okay.", "Okay,
+  recording stopped.", "Marked." in the answers' Piper voice (silence trimmed, IMA ADPCM); the watch (R1.7.9) uses
+  them in place of its built-in "Okay.".
 - **Who is X?** (1.13.6) is written by the AI from everything known about X: lines of your pages and documents that
   name them (a leadership page), facts that mention them, and their meeting profile.
 - **Fix / Hide** a fact on the Account page; your fix survives re-reading, a hidden fact is used nowhere.

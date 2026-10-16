@@ -1950,3 +1950,18 @@ def test_company_essentials_on_the_watch(client, monkeypatch):
                                                    "model": {"core_sig": ds["core_sig"]}})
     assert not watchlm.core_changed(fs)
     sources.remove(m["id"])
+
+
+def test_watch_prompts_in_the_answer_voice(client, monkeypatch):
+    import numpy as np
+    from app import speech, watchpack
+    monkeypatch.setattr(speech, "tts_available", lambda: True)
+    t = np.arange(16000) / 16000
+    sig = np.concatenate([np.zeros(8000), 0.5 * np.sin(2 * np.pi * 220 * t[:6000]), np.zeros(8000)])
+    monkeypatch.setattr(speech, "tts", lambda text, lang="en": speech.to_wav16k((sig * 32767).astype("<i2"), 16000))
+    r = client.get("/api/watch/prompts", headers=H).json()
+    assert "ok" in r["names"] and r["voice"]
+    w = client.get("/api/watch/prompts/ok", headers=H)
+    assert w.status_code == 200 and w.content[:4] == b"RIFF"
+    assert len(w.content) < 6000 + 2000                       # the half second of lead-in silence is gone (ADPCM ~4x)
+    assert client.get("/api/watch/prompts/nope", headers=H).status_code == 404

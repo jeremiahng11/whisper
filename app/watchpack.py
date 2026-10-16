@@ -131,3 +131,58 @@ def build(limit: int = MAX_ITEMS, extra: bool = False) -> dict:
         out["extra"] = more
     out["version"] = hashlib.sha1(json.dumps(out, sort_keys=True).encode()).hexdigest()[:12]
     return out
+
+
+# ---------------------------------------------------------------- the watch's own words ("Okay.", "Starting the meeting.")
+# Spoken with the same voice as the answers (Piper on this server); the watch downloads them once and uses them in
+# place of its built-in "Okay." (which stays for when it has none).
+PROMPTS = {
+    "ok": "Okay.",
+    "stopped": "Okay, recording stopped.",
+    "marked": "Marked.",
+}
+
+
+def prompt_file(name: str):
+    """16 kHz IMA ADPCM WAV of one prompt (silence trimmed), made once and kept until the voice changes."""
+    from . import speech
+    import io as _io
+    import wave as _wave
+    import numpy as np
+    text = PROMPTS.get(name)
+    if not text or not speech.tts_available():
+        return None
+    tag = voice_tag(text + "|" + str(speech.tts_voices().get("en", "")))
+    p = voice_dir() / f"prompt-{name}-{tag}.wav"
+    if not p.exists():
+        for old in voice_dir().glob(f"prompt-{name}-*.wav"):
+            old.unlink(missing_ok=True)
+        wav = speech.tts(text)
+        with _wave.open(_io.BytesIO(wav), "rb") as r:
+            pcm = np.frombuffer(r.readframes(r.getnframes()), dtype="<i2").astype(np.float32)
+        loud = np.nonzero(np.abs(pcm) > 0.04 * max(1.0, np.abs(pcm).max()))[0]
+        if len(loud):                               # no lead-in silence: it should sound right away
+            pcm = pcm[max(0, loud[0] - 160): min(len(pcm), loud[-1] + 1600)]
+        pcm = pcm / max(1.0, np.abs(pcm).max()) * 0.85 * 32767
+        fade = min(80, len(pcm))
+        pcm[:fade] *= np.linspace(0, 1, fade)
+        buf = _io.BytesIO()
+        with _wave.open(buf, "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(16000)
+            w.writeframes(pcm.astype("<i2").tobytes())
+        data = speech.wav_to_ima_adpcm(buf.getvalue())
+        tmp = p.with_suffix(".tmp")
+        tmp.write_bytes(data)
+        tmp.replace(p)
+    return p
+
+
+def prompts_info() -> dict:
+    """{"voice": tag, "names": [...]} - the watch downloads them again when the tag changes."""
+    from . import speech
+    if not speech.tts_available():
+        return {"voice": "", "names": []}
+    return {"voice": voice_tag(json.dumps(PROMPTS, sort_keys=True) + str(speech.tts_voices().get("en", ""))),
+            "names": sorted(PROMPTS)}
