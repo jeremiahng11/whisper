@@ -1666,3 +1666,13 @@ def test_learns_your_questions_and_speaks_answers(client, monkeypatch):
     # model size grows with the facts, within what the watch can hold
     assert W.config_for(100, 300)["d"] == 160 and W.config_for(2000, 3000)["d"] == 192
     assert all(W.weight_bytes(W.config_for(n, 6000)) <= W.WATCH_BUDGET for n in (10, 2000, 5000, 20000))
+
+
+def test_wrong_wakeup_clips_kept(client):
+    from app import wakeword
+    r = client.post("/api/wakeword/samples/not_wake", content=wav_bytes(2), headers=H)
+    assert r.status_code == 200, r.text
+    assert client.get("/api/wakeword/samples", headers=H).json()["samples"]["not_wake"] >= 1
+    assert client.post("/api/wakeword/samples/bogus", content=wav_bytes(2), headers=H).status_code == 400
+    client.delete("/api/wakeword/samples?phrase=not_wake", headers=H)
+    assert client.get("/api/wakeword/samples", headers=H).json()["samples"]["not_wake"] == 0

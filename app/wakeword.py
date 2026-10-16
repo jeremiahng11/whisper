@@ -24,6 +24,9 @@ from .config import settings
 STARTER = Path(__file__).parent / "wakeword_starter"
 STARTER_MANIFEST = {"models": [{"id": "wake", "label": "Hey Oracle", "file": "wake.tflite", "cutoff": 0.99, "window": 8, "arena": 30000}, {"id": "start_meeting", "label": "Start meeting", "file": "start_meeting.tflite", "cutoff": 0.98, "window": 5, "arena": 30000}, {"id": "voice_memo", "label": "Voice memo", "file": "voice_memo.tflite", "cutoff": 0.93, "window": 5, "arena": 30000}, {"id": "stop_recording", "label": "Stop recording", "file": "stop_recording.tflite", "cutoff": 0.99, "window": 5, "arena": 30000}, {"id": "mark_this", "label": "Mark this", "file": "mark_this.tflite", "cutoff": 0.86, "window": 5, "arena": 30000}]}
 COMMANDS = {"wake", "start_meeting", "voice_memo", "stop_recording", "mark_this"}
+# voice clips kept for training: your phrases, and "not_wake" - the 2 s the watch heard when it woke up but nobody
+# had said "Hey Oracle" (it trains the next model to ignore exactly those sounds)
+SAMPLE_IDS = COMMANDS | {"not_wake"}
 FILE_OK = re.compile(r"^[A-Za-z0-9_.-]{1,64}\.tflite$")
 MAX_FILE = 1024 * 1024
 
@@ -146,7 +149,7 @@ def _samples_dir() -> Path:
 
 
 def add_sample(mid: str, data: bytes) -> dict:
-    if mid not in COMMANDS:
+    if mid not in SAMPLE_IDS:
         raise ValueError(f"unknown phrase {mid!r}")
     if not (1000 < len(data) <= SAMPLE_MAX) or data[:4] != b"RIFF" or data[8:12] != b"WAVE":
         raise ValueError("send a short WAV clip")
@@ -159,7 +162,7 @@ def add_sample(mid: str, data: bytes) -> dict:
 
 def samples_summary() -> dict:
     out = {}
-    for mid in sorted(COMMANDS):
+    for mid in sorted(SAMPLE_IDS):
         d = _samples_dir() / mid
         out[mid] = len(list(d.glob("*.wav"))) if d.exists() else 0
     return {"samples": out, "total": sum(out.values())}
@@ -168,7 +171,7 @@ def samples_summary() -> dict:
 def samples_zip() -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        for mid in sorted(COMMANDS):
+        for mid in sorted(SAMPLE_IDS):
             d = _samples_dir() / mid
             for f in sorted(d.glob("*.wav")) if d.exists() else []:
                 z.write(f, f"{mid}/{f.name}")
@@ -177,7 +180,7 @@ def samples_zip() -> bytes:
 
 def clear_samples(mid: str | None = None) -> dict:
     if mid:
-        if mid not in COMMANDS:
+        if mid not in SAMPLE_IDS:
             raise ValueError(f"unknown phrase {mid!r}")
         shutil.rmtree(_samples_dir() / mid, ignore_errors=True)
     else:
