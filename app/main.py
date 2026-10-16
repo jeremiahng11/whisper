@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.17.3"
+VERSION = "1.17.4"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -551,8 +551,10 @@ def search_context(q: str) -> str:
 
 COMPANY_NOTE = ("Below is what the user's company knowledge base knows (learned from their meetings, website, product "
                 "documents and the people they work with). When the question is about the company, its people, products, "
-                "services or meetings, answer from it (it is more current than your own knowledge) and keep the answer "
-                "short. If it doesn't cover the question, answer normally and say it isn't in the company notes.")
+                "services or meetings, answer from it - it is more current than your own knowledge - in a sentence or "
+                "two, naming people and products as written there. Read all of it before answering: the answer is often "
+                "in a passage further down. Only if nothing below answers the question, answer from what you know "
+                "(say briefly that it's not from the company's notes).")
 
 
 def company_context(q: str, limit: int = 6000) -> str:
