@@ -27,7 +27,7 @@ from . import db, summarize, worker
 from .config import settings
 
 log = logging.getLogger("knowledge")
-KINDS = ("decision", "action", "date", "fact", "person", "term", "number", "product", "price", "policy")
+KINDS = ("decision", "action", "date", "fact", "person", "term", "number", "product", "price", "policy", "news")
 MAX_PER_MEETING = 25
 _lock = threading.RLock()
 status = {"state": "idle", "done": 0, "total": 0, "error": "", "updated": 0.0}

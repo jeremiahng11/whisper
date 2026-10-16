@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.13.6"
+VERSION = "1.14.0"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -866,7 +866,8 @@ def list_sources():
 
 @app.post("/api/knowledge/sources", dependencies=[Depends(auth)], status_code=201)
 async def add_source(request: Request):
-    """{"url": "https://...", "crawl": 20} (the page + up to 20 more under it) or {"text": "...", "title": ""};
+    """{"url": "https://...", "crawl": 20} (the page + up to 20 more under it), {"news": "Aleta Planet"} (follow the
+    news about it: searched and read daily), or {"text": "...", "title": ""};
     or a file (PDF, Word, text, Markdown, CSV, HTML) as multipart field "file". Read by the AI in the background."""
     ctype = request.headers.get("content-type", "")
     try:
@@ -881,7 +882,9 @@ async def add_source(request: Request):
             m = sources.add("file", str(form.get("title") or ""), filename=f.filename or "upload.txt", data=data)
         else:
             d = await request.json()
-            if d.get("url"):
+            if d.get("news"):
+                m = sources.add("news", str(d.get("title") or ""), url=str(d["news"]))
+            elif d.get("url"):
                 m = sources.add("url", str(d.get("title") or ""), url=str(d["url"]), crawl=int(d.get("crawl") or 0))
             else:
                 m = sources.add("text", str(d.get("title") or ""), text=str(d.get("text") or ""))

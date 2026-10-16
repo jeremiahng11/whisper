@@ -1761,3 +1761,37 @@ def test_who_is_written_from_documents(client, monkeypatch):
     f = next(x for x in knowledge.facts() if x["q"] == "Who is Ryan")
     assert "Chairman and CEO" in f["a"] and f["kind"] == "person"
     assert knowledge.find("who is ryan")[0]["q"] == "Who is Ryan"
+
+
+def test_news_source_follows_a_topic(client, monkeypatch):
+    from app import knowledge, sources
+    rss = """<rss><channel>
+<item><title>Aleta Planet launches card for travellers</title><link>http://www.bing.com/news/apiclick.aspx?ref=x&amp;url=https%3a%2f%2fnews.example%2faleta-card</link>
+<pubDate>Wed, 14 Oct 2026 08:00:00 GMT</pubDate><description>Aleta Planet unveiled a new travel card.</description><source>The Example Times</source></item>
+<item><title>Weather is nice</title><link>https://news.example/weather</link><pubDate>Wed, 14 Oct 2026 08:00:00 GMT</pubDate><description>Sunny.</description></item>
+</channel></rss>"""
+    article = "<html><title>Card</title><p>" + "Aleta Planet, the Singapore payments company, launched a multi-currency travel card on 14 October. " * 5 + "</p></html>"
+
+    class R:
+        def __init__(self, u):
+            self.status_code = 200
+            self.text = rss if "format=rss" in u else article
+            self.content = self.text.encode()
+            self.headers = {"content-type": "application/rss+xml" if "format=rss" in u else "text/html"}
+    monkeypatch.setattr(sources, "_get", lambda u: R(u))
+    monkeypatch.setattr(sources, "browser_available", lambda: False)
+    monkeypatch.setattr(sources.time, "sleep", lambda s: None)
+    r = client.post("/api/knowledge/sources", json={"news": "Aleta Planet"}, headers=H)
+    assert r.status_code == 201 and r.json()["kind"] == "news"
+    sid = r.json()["id"]
+    sources.learn(sid)
+    m = sources.get(sid)
+    assert m["articles"] == 1 and m["state"] == "ok"        # the weather story isn't about it
+    txt = (sources.sdir() / f"{sid}.txt").read_text()
+    assert "multi-currency travel card" in txt and "The Example Times, 2026-10-14" in txt and "https://news.example/aleta-card" in txt
+    assert all(f["kind"] == "news" for f in m["facts"])
+    n = len(CALLS)
+    sources.learn(sid)                                       # nothing new the next day: the AI isn't asked again
+    assert len(CALLS) == n and sources.get(sid)["new_articles"] == 0
+    m = sources.get(sid); m["fetched"] = 0; sources._save(m)
+    assert sources.due(sources.get(sid))                     # checked again daily

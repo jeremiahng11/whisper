@@ -365,6 +365,11 @@ owners, dates, budgets, terms, and who people are. In the background it reads on
   `INSTALL_BROWSER=0` leaves it out): a web page (and up to 60 pages under it - a product section), a PDF / Word / text /
   Markdown / CSV file, or pasted text. Read the same way; web pages are fetched again daily and re-read only when
   their text changed. Meeting facts win when both answer the same question.
+- **News watch** (1.14): "Follow the news about…" a company, person or topic. Once a day the server searches the
+  news (Bing News, else Google News; free, no key), reads the new articles (headless browser where needed), keeps
+  60 days of them and turns them into dated facts ("On 14 October 2026 (The Business Times) ...").
+- **Who is X?** (1.13.6) is written by the AI from everything known about X: lines of your pages and documents that
+  name them (a leadership page), facts that mention them, and their meeting profile.
 - **Fix / Hide** a fact on the Account page; your fix survives re-reading, a hidden fact is used nowhere.
 - **The watch's offline answers**: `GET /api/watch/pack` gives ~150 short spoken questions (letters only, numbers as
   words, for Espressif MultiNet on the watch) with their answers.

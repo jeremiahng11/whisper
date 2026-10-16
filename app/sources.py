@@ -292,6 +292,106 @@ def fetch_site(url: str, crawl: int = 0) -> list[dict]:
     return pages
 
 
+# ---------------------------------------------------------------- news about a topic (research in the background)
+# A "news" source follows a topic ("Aleta Planet", a competitor, your industry): once a day the server searches the
+# news (Bing News, else Google News - both free, no key), reads the new articles (the headless browser when a site
+# needs it) and keeps the last 60 days. The AI turns them into dated facts like any other source.
+NEWS_KEEP_DAYS = 60
+NEWS_MAX = 60
+NEWS_NEW_PER_RUN = 12
+
+NEWS_PROMPT = """From these news articles about "{topic}", write the facts someone in the company may later ask about:
+what happened, who, when, numbers, partnerships, products, regulation. Return ONLY a JSON array (at most {n} items) of
+objects with keys "q" (a short spoken question, 3-8 words), "a" (one short sentence, at most 30 words, that says
+WHEN - the article date - and the source, e.g. "On 12 October 2026 (The Business Times) ..."), "kind" (use "news"),
+"topic" (1-4 words), "alts" (2-3 other wordings). Only what the articles clearly say.
+
+Articles:
+\"\"\"
+{text}
+\"\"\""""
+
+
+def _rss_items(xml_text: str) -> list[dict]:
+    import xml.etree.ElementTree as ET
+    from email.utils import parsedate_to_datetime
+    from urllib.parse import parse_qs
+    out = []
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError:
+        return out
+    for it in root.iter("item"):
+        g = lambda tag: (it.findtext(tag) or "").strip()   # noqa: E731
+        link = g("link")
+        q = parse_qs(urlparse(link).query)
+        if "bing.com" in link and q.get("url"):          # Bing wraps the article's address
+            link = q["url"][0]
+        try:
+            when = parsedate_to_datetime(g("pubDate")).strftime("%Y-%m-%d")
+        except (TypeError, ValueError):
+            when = time.strftime("%Y-%m-%d")
+        src = it.find("source")
+        out.append({"url": link, "title": html.unescape(g("title")), "date": when,
+                    "source": (src.text or "").strip() if src is not None else urlparse(link).netloc,
+                    "snippet": html_text(g("description"))[1][:600]})
+    return out
+
+
+def news_search(topic: str) -> list[dict]:
+    from urllib.parse import quote_plus
+    for feed in (f"https://www.bing.com/news/search?q={quote_plus(topic)}&format=rss&setlang=en",
+                 f"https://news.google.com/rss/search?q={quote_plus(topic)}&hl=en-SG&gl=SG&ceid=SG:en"):
+        try:
+            r = _get(feed)
+        except httpx.HTTPError:
+            continue
+        if r.status_code == 200:
+            items = _rss_items(r.text)
+            if items:
+                return items
+    return []
+
+
+def _news_path(sid: str) -> Path:
+    return sdir() / f"{sid}.news.json"
+
+
+def refresh_news(m: dict) -> str:
+    """New articles about the topic into the source's store; returns the text the AI reads (newest first)."""
+    try:
+        store = json.loads(_news_path(m["id"]).read_text())
+    except (OSError, ValueError):
+        store = {}
+    topic = m["query"]
+    words = [w for w in re.findall(r"\w+", topic.lower()) if len(w) > 2]
+    use_browser = browser_available()
+    new = 0
+    for it in news_search(topic):
+        if it["url"] in store or new >= NEWS_NEW_PER_RUN:
+            continue
+        hay = (it["title"] + " " + it["snippet"]).lower()
+        if words and not any(w in hay for w in words):   # search engines pad with loosely related stories
+            continue
+        text = it["snippet"]
+        try:
+            _, body, _, _ = _page(it["url"], use_browser)
+            if len(body) > len(text):
+                text = body[:6000]
+        except ValueError:
+            pass
+        store[it["url"]] = {**{k: it[k] for k in ("title", "date", "source")}, "text": text}
+        new += 1
+        time.sleep(0.5)
+    cutoff = time.strftime("%Y-%m-%d", time.localtime(time.time() - NEWS_KEEP_DAYS * 86400))
+    keep = sorted(((u, a) for u, a in store.items() if a["date"] >= cutoff), key=lambda x: x[1]["date"], reverse=True)[:NEWS_MAX]
+    store = dict(keep)
+    _news_path(m["id"]).write_text(json.dumps(store, ensure_ascii=False))
+    m["articles"] = len(store)
+    m["new_articles"] = new
+    return "\n\n".join(f"## {a['title']} ({a['source']}, {a['date']})\n{u}\n\n{a['text']}" for u, a in keep)
+
+
 # ---------------------------------------------------------------- add / learn / remove
 def add(kind: str, title: str = "", url: str = "", text: str = "", filename: str = "", data: bytes = b"",
         crawl: int = 0) -> dict:
@@ -303,6 +403,11 @@ def add(kind: str, title: str = "", url: str = "", text: str = "", filename: str
         if u.scheme not in ("http", "https") or not u.netloc:
             raise ValueError("give a full web address (https://...)")
         m.update(url=url.strip(), crawl=max(0, min(int(crawl or 0), MAX_CRAWL)), title=title or u.netloc + u.path)
+    elif kind == "news":
+        topic = re.sub(r"\s+", " ", (url or title or text or "").strip())[:80]
+        if len(topic) < 3:
+            raise ValueError("say what to follow in the news (a company, a person, a topic)")
+        m.update(query=topic, title=title or f"News: {topic}")
     elif kind == "file":
         body = file_text(filename, data)
         if len(body.strip()) < 20:
@@ -335,7 +440,7 @@ def reset_stale() -> None:
 def remove(sid: str) -> bool:
     if not get(sid):
         return False
-    for ext in (".json", ".txt"):
+    for ext in (".json", ".txt", ".news.json"):
         try:
             (sdir() / f"{sid}{ext}").unlink()
         except OSError:
@@ -349,7 +454,7 @@ def due(m: dict) -> bool:
         return True
     if m.get("state") == "reading" and time.time() - (m.get("since") or 0) > 3600 and not _lock(m["id"]).locked():
         return True                                 # the server restarted while reading it: start again
-    return m.get("kind") == "url" and time.time() - (m.get("fetched") or 0) > REFETCH_S
+    return m.get("kind") in ("url", "news") and time.time() - (m.get("fetched") or 0) > REFETCH_S
 
 
 def _chunks(text: str) -> list[str]:
@@ -390,6 +495,16 @@ def _learn(sid: str, force: bool) -> int:
             m["pages"] = len(pages)
             if pages and (not m.get("title") or m["title"].startswith(urlparse(m["url"]).netloc)):
                 m["title"] = pages[0]["title"][:80] or m["title"]
+        elif m["kind"] == "news":
+            m["progress"] = "searching the news"
+            _save(m)
+            text = refresh_news(m)[:MAX_TEXT]
+            (sdir() / f"{sid}.txt").write_text(text)
+            if not text:
+                m.update(fetched=time.time(), state="ok", error="", progress="", facts=[])
+                _save(m)
+                knowledge.rebuild()
+                return 0
         else:
             text = (sdir() / f"{sid}.txt").read_text()
         m["fetched"] = time.time()
@@ -405,14 +520,19 @@ def _learn(sid: str, force: bool) -> int:
         for i, part in enumerate(parts):
             m["progress"] = f"part {i + 1} of {len(parts)}"   # (the AI may be busy with your meetings first)
             _save(m)
-            prompt = knowledge.DOC_PROMPT.format(n=PER_CHUNK, title=m["title"], where=m.get("url") or m.get("filename") or "pasted",
-                                                 text=part)
+            if m["kind"] == "news":
+                prompt = NEWS_PROMPT.format(topic=m["query"], n=PER_CHUNK, text=part)
+            else:
+                prompt = knowledge.DOC_PROMPT.format(n=PER_CHUNK, title=m["title"], where=m.get("url") or m.get("filename") or "pasted",
+                                                     text=part)
             for f in knowledge.parse_facts(summarize.chat([{"role": "system", "content": "You extract facts from documents as JSON."},
                                                            {"role": "user", "content": prompt}])):
                 k = knowledge._norm(f["q"])
                 if k in seen:
                     continue
                 seen.add(k)
+                if m["kind"] == "news":
+                    f["kind"] = "news"
                 f.update(job="", source=sid, date=date, meeting=m["title"])
                 facts.append(f)
         m.update(facts=facts, sig=sig, state="ok", error="", progress="")
