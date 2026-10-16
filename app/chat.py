@@ -59,3 +59,46 @@ def get(aid: str) -> dict | None:
     with _lock:
         v = _items.get(aid)
         return {k: v[k] for k in ("id", "status", "answer", "error") if k in v} if v else None
+
+
+# ---------------------------------------------------------------- the answer's voice, made as soon as it's ready
+# The watch reads answers out: it asks /api/tts with the answer right after getting it. With "speak": true the
+# voice is made here the moment the answer is done, so that request finds it ready instead of waiting for Piper.
+_voices: dict[str, tuple[float, bytes]] = {}
+
+
+def _vkey(text: str, lang: str, adpcm: bool) -> str:
+    return re.sub(r"[^a-z0-9]+", "", (text or "").lower())[:600] + "|" + (lang or "en") + ("|a" if adpcm else "")
+
+
+def spoken(text: str, lang: str, adpcm: bool):
+    with _lock:
+        v = _voices.get(_vkey(text, lang, adpcm))
+    return v[1] if v else None
+
+
+def speak_when_done(aid: str) -> None:
+    def run():
+        from . import speech
+        if not speech.tts_available():
+            return
+        for _ in range(1200):                       # up to 10 minutes
+            v = get(aid)
+            if not v or v["status"] != "pending":
+                break
+            time.sleep(0.5)
+        if not v or v.get("status") != "done" or not v.get("answer"):
+            return
+        text = " ".join(v["answer"].split())[:1500]
+        try:
+            wav = speech.tts(text)
+            data = speech.wav_to_ima_adpcm(wav)
+        except Exception:                           # noqa: BLE001 - the watch asks for it the usual way
+            return
+        now = time.time()
+        with _lock:
+            for k in [k for k, (t, _) in _voices.items() if now - t > 600]:
+                del _voices[k]
+            _voices[_vkey(text, "en", True)] = (now, data)
+            _voices[_vkey(text, "en", False)] = (now, wav)
+    threading.Thread(target=run, daemon=True).start()

@@ -183,6 +183,9 @@ def model_loaded() -> bool:
     return _model is not None
 
 
+quick = threading.local()                           # quick.on: a short spoken question (/api/stt) - speed first
+
+
 def _run(audio: np.ndarray, offset: float, language: Optional[str], prompt: str,
          progress: ProgressFn, total: float, vad_threshold: Optional[float] = None) -> tuple[list[Segment], str, float]:
     """Transcribe one stretch of audio; returns (segments with absolute times, language, probability).
@@ -213,6 +216,8 @@ def _run(audio: np.ndarray, offset: float, language: Optional[str], prompt: str,
         condition_on_previous_text=False,     # avoids Whisper getting stuck repeating a phrase
         word_timestamps=True,                 # lets speaker changes inside a line be split at the right word
     )
+    if getattr(quick, "on", False):           # a question to the watch: greedy decoding, no word times (2-3x faster)
+        kwargs.update(beam_size=1, word_timestamps=False)
     if prompt:
         kwargs["initial_prompt"] = prompt
     if settings.normalize:

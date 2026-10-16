@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.17.0"
+VERSION = "1.17.1"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -578,16 +578,34 @@ def company_context(q: str, limit: int = 6000) -> str:
 
 
 @app.post("/api/ask", dependencies=[Depends(auth)], status_code=202)
-async def ask(request: Request):
+async def ask(request: Request, wait: float = 0):
     """{"messages": [...]} -> {"id", "status": "pending"}; poll GET /api/ask/{id}.
     Optional: "recording": <recording or job id> (ask about one meeting), "scope": "meetings" (search all
-    meetings), "task": "email" (draft a follow-up email for "recording"), "best": true."""
+    meetings), "task": "email" (draft a follow-up email for "recording"), "best": true, "speak": true (the answer
+    will be read out: its voice is made as soon as it's ready). ?wait=<s> (up to 15): answer in this reply if it's
+    ready by then (one request instead of several polls)."""
     try:
         data = await request.json()
     except Exception:
         raise HTTPException(400, "body must be JSON")
     if not isinstance(data, dict):
         raise HTTPException(400, "body must be a JSON object")
+    r = _ask_start(data)
+    if data.get("speak"):
+        chat.speak_when_done(r["id"])
+    return await _wait_answer(r, wait)
+
+
+async def _wait_answer(r: dict, wait: float) -> dict:
+    import asyncio
+    t_end = time.time() + max(0.0, min(float(wait or 0), 15.0))
+    while r.get("status") == "pending" and time.time() < t_end:
+        await asyncio.sleep(0.15)
+        r = chat.get(r["id"]) or r
+    return r
+
+
+def _ask_start(data: dict) -> dict:
     msgs = data.get("messages")
     if not msgs and data.get("prompt"):
         msgs = [{"role": "user", "content": str(data["prompt"])}]
@@ -649,11 +667,12 @@ async def ask(request: Request):
 
 
 @app.get("/api/ask/{aid}", dependencies=[Depends(auth)])
-def ask_result(aid: str):
+async def ask_result(aid: str, wait: float = 0):
+    """?wait=<s> (up to 15): reply as soon as the answer is ready (or after that long)."""
     r = chat.get(aid)
     if not r:
         raise HTTPException(404, "unknown or expired")
-    return r
+    return await _wait_answer(r, wait)
 
 # ---------------------------------------------------------------- speakers, voices, glossary, search, templates
 @app.post("/api/jobs/{jid}/speakers", dependencies=[Depends(auth)])
@@ -1557,9 +1576,12 @@ async def text_to_speech(request: Request):
         raise HTTPException(503, "text-to-speech not installed (build with INSTALL_TTS=1, TTS=piper)")
     from starlette.concurrency import run_in_threadpool
     try:
-        wav = await run_in_threadpool(speech.tts, str(data.get("text", "")), str(data.get("lang", "en")))
-        if str(data.get("format", "")).lower() == "adpcm":
-            wav = await run_in_threadpool(speech.wav_to_ima_adpcm, wav)
+        adpcm = str(data.get("format", "")).lower() == "adpcm"
+        wav = chat.spoken(str(data.get("text", "")), str(data.get("lang", "en")), adpcm)   # made ahead (speak)
+        if wav is None:
+            wav = await run_in_threadpool(speech.tts, str(data.get("text", "")), str(data.get("lang", "en")))
+            if adpcm:
+                wav = await run_in_threadpool(speech.wav_to_ima_adpcm, wav)
     except Exception as e:
         raise HTTPException(500, f"tts failed: {str(e)[:200]}")
     return Response(wav, media_type="audio/wav")

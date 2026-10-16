@@ -2053,3 +2053,22 @@ def test_live_questions_go_first(monkeypatch):
     summarize._live["n"] = 0
     b.join(2)
     assert order == ["background"]
+
+
+def test_ask_waits_and_voice_is_ready(client, monkeypatch):
+    from app import chat, speech
+    monkeypatch.setattr(speech, "tts_available", lambda: True)
+    made = []
+    monkeypatch.setattr(speech, "tts", lambda text, lang="en": (made.append(text), speech.to_wav16k(__import__("numpy").zeros(1600, "<i2"), 16000))[1])
+    r = client.post("/api/ask?wait=5", json={"prompt": "tell me a short joke", "speak": True}, headers=H).json()
+    assert r["status"] == "done" and r["answer"]                # answered in the same reply (no polling)
+    import threading
+    for _ in range(100):
+        if chat.spoken(r["answer"], "en", True):
+            break
+        threading.Event().wait(0.05)
+    n = len(made)
+    w = client.post("/api/tts", json={"text": r["answer"].replace("\n", " "), "format": "adpcm"}, headers=H)
+    assert w.status_code == 200 and len(made) == n               # the voice was ready: not made again
+    g = client.get(f"/api/ask/{r['id']}?wait=1", headers=H).json()
+    assert g["status"] == "done"

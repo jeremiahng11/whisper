@@ -385,6 +385,9 @@ owners, dates, budgets, terms, and who people are. In the background it reads on
   other fact to treat it the same. The watch model learns the essentials and your pages/research first; meeting facts
   fill the rest (meeting questions are answered online). Find a fact shows the answer when one fact clearly answers
   it, and **Ask Oracle** asks the AI.
+- **Quicker spoken questions** (1.17.1): `/api/stt` decodes greedily without word times; `POST /api/ask?wait=N` and
+  `GET /api/ask/{id}?wait=N` (up to 15 s) reply as soon as the answer is ready; `"speak": true` makes the answer's
+  voice as soon as it's ready, so the watch's `/api/tts` request finds it waiting.
 - **Fast lane and find by meaning** (1.17): live questions (the watch, Ask) use a small quick model of their own
   (`OLLAMA_MODEL_FAST`, default `qwen2.5:3b-instruct`, kept loaded; `""` = the main model) and background work
   (meetings, sources, research) holds its next request back while one waits, so answers don't queue behind a

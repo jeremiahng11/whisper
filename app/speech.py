@@ -46,7 +46,11 @@ def pick_language(path: str, candidates: list[str]) -> Optional[str]:
 def stt(path: str, language: Optional[str] = None, candidates: Optional[list[str]] = None) -> dict:
     if not language and candidates:
         language = pick_language(path, candidates)
-    tr = transcribe.transcribe(path, language, lambda p, s: None, diarize=False, prompt=voices.whisper_prompt())
+    transcribe.quick.on = True
+    try:
+        tr = transcribe.transcribe(path, language, lambda p, s: None, diarize=False, prompt=voices.whisper_prompt())
+    finally:
+        transcribe.quick.on = False
     text = " ".join(s.text.strip() for s in tr.segments).strip()
     if settings.redact:
         text = redact.redact(text)
