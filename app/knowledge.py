@@ -444,8 +444,9 @@ def find_scored(q: str, limit: int = 12) -> list[tuple[int, dict]]:
         ask = _words(f["q"] + " " + " ".join(f.get("alts") or []) + " " + (f.get("topic") or ""))
         ans = _words(f["a"])
         s = 2 * len(want & ask) + len(want & ans)
-        if s and f.get("kind") == "person" and f.get("topic") and _words(f["topic"]) <= want | {"who"}:
-            s += 1                                  # "ryan gwee" / "who is ryan": that person's own fact first
+        if s and f.get("kind") == "person" and f.get("topic") and _words(f["topic"]) & want:
+            # "ryan gwee" / "who is ryan": that person's own fact first (all of the name, or a first name)
+            s += 3 if _words(f["topic"]) <= want else 2
         if s:
             scored.append((s, f.get("date") or "", f))
     scored.sort(key=lambda x: (x[0], x[1]), reverse=True)

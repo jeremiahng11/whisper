@@ -1973,3 +1973,18 @@ def test_watch_crash_reports(client):
     assert client.post("/api/watch/crash", json={"fw": "R1.7.10", "text": "R1.7.9 task loopTask pc 0x42001234"}, headers=H).status_code == 200
     items = client.get("/api/watch/crashes", headers=H).json()["items"]
     assert items[0]["text"].startswith("R1.7.9 task loopTask")
+
+
+def test_plain_question_skips_the_ai_intent(client):
+    n = len(CALLS)
+    r = client.post("/api/intent", json={"text": "Who is Ryan?"}, headers=H).json()
+    assert r["type"] == "question" and len(CALLS) == n          # no AI round trip before the answer
+    from app import knowledge
+    fs = [{"q": "Who is Ryan Gwee", "a": "Founder, Chairman and CEO of Aleta Planet.", "kind": "person", "topic": "Ryan Gwee",
+           "alts": ["Tell me about Ryan Gwee"], "id": "a1"},
+          {"q": "What did Ryan ask for in the budget review", "a": "Ryan asked for a cut.", "kind": "action", "topic": "budget",
+           "id": "a2", "alts": []}]
+    import unittest.mock as um
+    with um.patch.object(knowledge, "facts", lambda: fs):
+        assert knowledge.best_answer("who is ryan")["id"] == "a1"
+        assert knowledge.best_answer("ryan gwee")["id"] == "a1"

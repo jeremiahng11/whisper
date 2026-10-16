@@ -176,6 +176,17 @@ Reply with ONLY one JSON object, one of:
 Command: "{text}\""""
 
 
+_ASK = re.compile(r"^\s*(hey oracle[, ]+)?(who|whos|who's|what|whats|what's|when|where|which|why|how|is|are|was|were|does|do|did|"
+                  r"can|could|tell me about|explain|define)\b", re.I)
+_ACT = re.compile(r"\b(remind|reminder|timer|alarm|wake me|note|task|to-?do|add|schedule|book|translate|say .* in|"
+                  r"record|meeting at|call me|set (a|an|the)?)\b", re.I)
+
+
+def plain_question(text: str) -> bool:
+    """A question, not something to do: answered straight away (the AI isn't asked what kind of request it is)."""
+    return bool(_ASK.search(text)) and not _ACT.search(text) and len(text) < 300
+
+
 def intent(text: str, now_epoch: Optional[int] = None, tz_min: int = 480) -> dict:
     tz = timezone(timedelta(minutes=tz_min))
     now = datetime.fromtimestamp(now_epoch or time.time(), tz)
@@ -186,6 +197,8 @@ def intent(text: str, now_epoch: Optional[int] = None, tz_min: int = 480) -> dic
     if r:
         r["source"] = "rules"
         return r
+    if plain_question(text):                        # "who is Ryan?": no need to ask the AI what you meant first
+        return {"type": "question", "source": "rules"}
     if not summarize.enabled():
         return {"type": "question", "source": "default"}
     try:
