@@ -33,7 +33,6 @@ CHUNK = 9000                    # characters the AI reads at a time
 PER_CHUNK = 20                  # facts per chunk
 MAX_CRAWL = 60
 REFETCH_S = 86400
-UA = "OracleMinutes/1.12 (knowledge base; +self-hosted)"
 
 
 def sdir() -> Path:
@@ -168,36 +167,119 @@ def file_text(name: str, data: bytes) -> str:
 
 
 # ---------------------------------------------------------------- web pages
+# Many sites turn away clients that don't look like a browser (HTTP 403 from Zendesk, Cloudflare ...): we ask like one.
+BROWSER_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) "
+                  "Chrome/128.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,application/json;q=0.8,*/*;q=0.7",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+MIN_PAGE_TEXT = 200                                 # less than this from plain HTML: the page is built by JavaScript
+
+
 def _get(url: str) -> httpx.Response:
-    return httpx.get(url, timeout=25, follow_redirects=True, headers={"User-Agent": UA})
+    return httpx.get(url, timeout=25, follow_redirects=True, headers=BROWSER_HEADERS)
+
+
+def browser_available() -> bool:
+    try:
+        import playwright.sync_api  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def render(url: str) -> tuple[str, str, list[str]]:
+    """Open the page in a headless Chromium (sites that build their pages with JavaScript, or that only answer
+    browsers) and read what's on screen: (title, text, links)."""
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as p:
+        b = p.chromium.launch(args=["--no-sandbox", "--disable-dev-shm-usage"])
+        try:
+            page = b.new_page(user_agent=BROWSER_HEADERS["User-Agent"], locale="en-US")
+            page.goto(url, wait_until="networkidle", timeout=45000)
+            page.wait_for_timeout(1500)               # late content (animations, lazy lists)
+            html_ = page.content()
+            links = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+        finally:
+            b.close()
+    title, text, more = html_text(html_)
+    return title, text, list(dict.fromkeys(links + more))
+
+
+def zendesk_articles(url: str, limit: int = 2000) -> list[dict]:
+    """A Zendesk Help Center (/hc/<locale>): every article through its public API, which is how such sites hand out
+    their text (the pages themselves often refuse anything but a browser). [] if it isn't one."""
+    u = urlparse(url)
+    m = re.match(r"/hc/([A-Za-z-]+)", u.path or "")
+    if not m:
+        return []
+    api = f"{u.scheme}://{u.netloc}/api/v2/help_center/{m.group(1)}/articles.json?per_page=100&page=1"
+    out = []
+    while api and len(out) < limit:
+        try:
+            r = _get(api)
+        except httpx.HTTPError:
+            break
+        if r.status_code != 200 or "json" not in r.headers.get("content-type", ""):
+            break
+        d = r.json()
+        for a in d.get("articles") or []:
+            if a.get("draft"):
+                continue
+            body = html_text(a.get("body") or "")[1]
+            if body:
+                out.append({"url": a.get("html_url") or url, "title": a.get("title") or "", "text": body})
+        api = d.get("next_page")
+        time.sleep(0.3)
+    return out
+
+
+def _page(u: str, use_browser: bool) -> tuple[str, str, list[str], str]:
+    """One page: (title, text, links, how) - plain HTTP first, the headless browser when that gets nothing useful."""
+    err = ""
+    try:
+        r = _get(u)
+        ctype = r.headers.get("content-type", "")
+        if r.status_code == 200 and "pdf" in ctype:
+            return Path(urlparse(u).path).name, file_text("x.pdf", r.content), [], "pdf"
+        if r.status_code == 200 and ("html" in ctype or "text" in ctype):
+            title, text, links = html_text(r.text)
+            if len(text) >= MIN_PAGE_TEXT or not use_browser:
+                return title, text, links, "http"
+        else:
+            err = f"answered HTTP {r.status_code}"
+    except httpx.HTTPError as e:
+        err = str(e)
+    if use_browser:
+        try:
+            title, text, links = render(u)
+            return title, text, links, "browser"
+        except Exception as e:                       # noqa: BLE001
+            err = (err + "; " if err else "") + f"browser: {str(e).splitlines()[0][:160]}"
+    raise ValueError(err or "no text")
 
 
 def fetch_site(url: str, crawl: int = 0) -> list[dict]:
     """The page, and up to `crawl` more pages under the same address: [{"url", "title", "text"}]."""
     start = urldefrag(url)[0]
+    help_center = zendesk_articles(start, 2000 if crawl else 200)
+    if help_center:
+        return help_center
     base = urlparse(start)
     prefix = start.rsplit("/", 1)[0] + "/" if not start.endswith("/") else start
     todo, seen, pages = [start], {start}, []
+    use_browser = browser_available()
     while todo and len(pages) <= min(crawl, MAX_CRAWL):
         u = todo.pop(0)
         try:
-            r = _get(u)
-        except httpx.HTTPError as e:
+            title, text, links, how = _page(u, use_browser)
+        except ValueError as e:
             if not pages:
-                raise ValueError(f"couldn't open {u}: {e}")
+                hint = "" if use_browser else " (this server has no headless browser: rebuild with INSTALL_BROWSER=1)"
+                raise ValueError(f"couldn't read {u}: {e}{hint}")
             continue
-        if r.status_code != 200:
-            if not pages:
-                raise ValueError(f"{u} answered HTTP {r.status_code}")
-            continue
-        ctype = r.headers.get("content-type", "")
-        if "pdf" in ctype:
-            pages.append({"url": u, "title": Path(urlparse(u).path).name, "text": file_text("x.pdf", r.content)})
-            continue
-        if "html" not in ctype and "text" not in ctype:
-            continue
-        title, text, links = html_text(r.text)
-        pages.append({"url": u, "title": title or u, "text": text})
+        pages.append({"url": u, "title": title or u, "text": text, "how": how})
         for h in links:
             v = urldefrag(urljoin(u, h))[0]
             pv = urlparse(v)
@@ -299,8 +381,11 @@ def _learn(sid: str, force: bool) -> int:
             pages = fetch_site(m["url"], m.get("crawl", 0))
             text = "\n\n".join(f"## {p['title']}\n{p['url']}\n\n{p['text']}" for p in pages)[:MAX_TEXT]
             if sum(len(p["text"]) for p in pages) < 150:
-                raise ValueError("that page has almost no text for the server to read (the site builds it in the "
-                                 "browser) - add its product pages one by one, a PDF, or paste the text")
+                raise ValueError("that page has almost no text for the server to read even in a browser (a login page?) "
+                                 "- add a PDF or paste the text" if browser_available() else
+                                 "that page has almost no text for the server to read (the site builds it in the "
+                                 "browser) - rebuild Oracle Minutes with INSTALL_BROWSER=1 (headless Chromium), or add "
+                                 "a PDF / paste the text")
             (sdir() / f"{sid}.txt").write_text(text)
             m["pages"] = len(pages)
             if pages and (not m.get("title") or m["title"].startswith(urlparse(m["url"]).netloc)):

@@ -1599,6 +1599,7 @@ def test_sources_text_file_and_site(client, monkeypatch):
 
     monkeypatch.setattr(sources, "_get", lambda u: (got.append(u), R(u))[1])
     monkeypatch.setattr(sources.time, "sleep", lambda s: None)
+    monkeypatch.setattr(sources, "browser_available", lambda: False)
     ps = sources.fetch_site("https://shop.test/products/", crawl=5)
     assert [p["title"] for p in ps] == ["Products", "Round watch"] and "menu" not in ps[0]["text"] and "x()" not in ps[1]["text"]
     assert "https://shop.test/about" not in got and not any("other.test" in u for u in got)
@@ -1698,3 +1699,46 @@ def test_any_question_uses_company_knowledge(client):
     assert "company knowledge base" not in ask("tell me a joke about cats")   # nothing matches: plain answer
     hits = knowledge.find("when does the idea sayver vee two ship")          # misheard words still find the fact
     assert hits and hits[0]["q"].startswith("When does Idea Saver")
+
+
+def test_sources_zendesk_and_javascript_sites(monkeypatch):
+    import http.server, threading as _th, functools, tempfile as _tf, os as _os
+    from app import sources
+    # a Zendesk Help Center: every article through its API (the pages themselves answer 403)
+    calls = []
+
+    class J:
+        def __init__(self, u):
+            calls.append(u)
+            self.status_code, self.headers = 200, {"content-type": "application/json"}
+            self._d = ({"articles": [{"title": "How do I top up?", "body": "<p>Top up with PayNow in the app.</p>",
+                                      "html_url": "https://faq.example/hc/en-us/articles/1"}], "next_page": u.replace("page=1", "page=2")}
+                       if "page=1" in u else
+                       {"articles": [{"title": "Fees", "body": "<p>No fee for local spend.</p>", "html_url": "x", "draft": False},
+                                     {"title": "Draft", "body": "<p>secret</p>", "draft": True}], "next_page": None})
+        def json(self):
+            return self._d
+    monkeypatch.setattr(sources, "_get", lambda u: J(u))
+    monkeypatch.setattr(sources.time, "sleep", lambda s: None)
+    arts = sources.fetch_site("https://faq.example/hc/en-us")
+    assert [a["title"] for a in arts] == ["How do I top up?", "Fees"] and "PayNow" in arts[0]["text"]
+    assert calls[0] == "https://faq.example/api/v2/help_center/en-us/articles.json?per_page=100&page=1"
+    monkeypatch.undo()
+    # a page built by JavaScript: plain HTTP gets an empty shell, the headless browser gets the text
+    if not sources.browser_available():
+        return
+    d = _tf.mkdtemp()
+    open(_os.path.join(d, "index.html"), "w").write(
+        "<html><head><title>Playbook</title></head><body><div id=root></div><script>"
+        "document.getElementById('root').innerHTML = '<h1>Aleta Playbook</h1><p>' + 'Our onboarding steps for new merchants: "
+        "verify the business, sign the agreement, set up the API keys and go live within five working days. ' .repeat(3) + "
+        "'</p><a href=\"/guide.html\">Guide</a>';</script></body></html>")
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(http.server.SimpleHTTPRequestHandler, directory=d))
+    _th.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        url = f"http://127.0.0.1:{srv.server_address[1]}/index.html"
+        title, text, links, how = sources._page(url, True)
+        assert how == "browser" and "onboarding steps for new merchants" in text and title == "Playbook"
+        assert any(l.endswith("/guide.html") for l in links)
+    finally:
+        srv.shutdown()

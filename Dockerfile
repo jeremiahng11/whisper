@@ -6,12 +6,16 @@ ARG INSTALL_DIARIZE=0
 ARG GPU=0
 # INSTALL_TTS=1     -> Piper text-to-speech for spoken answers (~60 MB)
 ARG INSTALL_TTS=1
+# INSTALL_BROWSER=1 -> headless Chromium, so Watch AI sources can read sites that build their pages with JavaScript
+#                      or only answer browsers (~350 MB)
+ARG INSTALL_BROWSER=1
 
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     DATA_DIR=/data \
     HF_HOME=/data/models/hf \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
     LD_LIBRARY_PATH=/usr/local/lib/python3.11/site-packages/nvidia/cublas/lib:/usr/local/lib/python3.11/site-packages/nvidia/cudnn/lib
 
 WORKDIR /srv
@@ -23,7 +27,9 @@ RUN pip install -r requirements.txt \
       else pip install --index-url https://download.pytorch.org/whl/cpu torch==2.8.0 torchaudio==2.8.0; fi \
       && pip install -r requirements-diarize.txt; \
     fi \
- && if [ "$INSTALL_TTS" = "1" ]; then pip install -r requirements-tts.txt || echo "TTS install failed - continuing without speech"; fi
+ && if [ "$INSTALL_TTS" = "1" ]; then pip install -r requirements-tts.txt || echo "TTS install failed - continuing without speech"; fi \
+ && if [ "$INSTALL_BROWSER" = "1" ]; then (pip install "playwright>=1.45,<2" && playwright install --with-deps chromium \
+      && chmod -R a+rx /ms-playwright) || echo "browser install failed - continuing without (JavaScript sites can't be read)"; fi
 
 COPY app ./app
 
