@@ -523,6 +523,14 @@ def context_for(q: str, limit: int = 2500) -> str:
     return ("Facts from the company knowledge base (learned from all meetings):\n" + "\n".join(lines))[:limit]
 
 
+def _rag_summary() -> dict:
+    try:
+        from . import rag
+        return rag.summary()
+    except Exception:                               # noqa: BLE001
+        return {}
+
+
 def summary() -> dict:
     fs = facts()
     kinds: dict[str, int] = {}
@@ -535,7 +543,7 @@ def summary() -> dict:
     cd = core.load()
     return {"facts": len(fs), "kinds": kinds, "meetings_read": learned, "sources": len(sources.listing()),
             "core": sum(1 for f in fs if f.get("core")), "core_company": cd.get("company") or core.company(),
-            "core_made": cd.get("made") or 0,
+            "core_made": cd.get("made") or 0, "rag": _rag_summary(),
             "asked": len(ak), "asked_linked": sum(1 for a in ak if a.get("fact")), **status}
 
 
@@ -590,7 +598,15 @@ def start_learning(force: bool = False) -> bool:
 
 def _sweep() -> None:
     time.sleep(180)
+    last_rag = 0.0
     while True:
+        try:
+            from . import rag                       # find by meaning: embed what's new (no AI chat needed)
+            if rag.enabled() and time.time() - last_rag > 300:
+                last_rag = time.time()
+                rag.update(max_new=800)
+        except Exception as e:                      # noqa: BLE001 - the embedding model may still be downloading
+            log.info("rag: %s", e)
         try:
             if summarize.enabled() and worker.current_job is None and db.next_queued() is None and status["state"] == "idle":
                 busy = False

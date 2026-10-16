@@ -37,6 +37,9 @@ services:
       - TZ=${TZ:-Asia/Singapore}
       - OLLAMA_MODEL_BEST=${OLLAMA_MODEL_BEST:-}
       - OPENAI_MODEL_BEST=${OPENAI_MODEL_BEST:-}
+      - OLLAMA_MODEL_FAST=${OLLAMA_MODEL_FAST:-qwen2.5:3b-instruct}   # live questions (watch, Ask): quick, kept loaded
+      - OLLAMA_EMBED_MODEL=${OLLAMA_EMBED_MODEL:-nomic-embed-text}   # find by meaning (RAG)
+      - RAG=${RAG:-1}
       - CALENDAR_ICS_URLS=${CALENDAR_ICS_URLS:-}
       - MS_TENANT_ID=${MS_TENANT_ID:-}
       - MS_CLIENT_ID=${MS_CLIENT_ID:-}
@@ -67,6 +70,8 @@ services:
     image: ollama/ollama:latest
     environment:
       - OLLAMA_KEEP_ALIVE=10m
+      - OLLAMA_MAX_LOADED_MODELS=3    # the main model, the quick one for live questions and the embedding model together
+      - OLLAMA_NUM_PARALLEL=1
     volumes:
       - ollama-data:/root/.ollama
     restart: unless-stopped

@@ -26,7 +26,7 @@ def _run(aid: str, messages: list[dict], system: str, best: bool, late=None) -> 
             pass
     with _sem:
         try:
-            answer = summarize.chat([{"role": "system", "content": system}] + messages, best)
+            answer = summarize.chat([{"role": "system", "content": system}] + messages, best, fast=not best)
             answer = re.sub(r"<think>.*?</think>", "", answer, flags=re.S)     # reasoning models
             res = {"id": aid, "status": "done", "answer": answer.strip()}
         except Exception as e:                       # noqa: BLE001 - report any LLM failure to the device

@@ -1358,6 +1358,7 @@ async function loadKb() {
       `The watch can answer <b>${pack.count}</b> of them offline.` +
       (k.core ? `<br><b>${k.core}</b> company essentials${k.core_company ? " about " + esc(k.core_company) : ""} are always on the watch and answered on it directly (founder, leaders, products, services; written ${k.core_made ? new Date(k.core_made * 1000).toLocaleString() : "-"}, again when what's known changes). ` +
         `<a href="#" id="coreNow">Rewrite now</a>` : (k.core_company ? `<br>Company essentials about ${esc(k.core_company)}: written once there's enough material. <a href="#" id="coreNow">Write now</a>` : "")) +
+      (k.rag && k.rag.enabled ? `<br>Find by meaning: <b>${k.rag.passages}</b> passages indexed (${esc(k.rag.model)})${k.rag.state === "indexing" ? " - indexing…" : ""}${k.rag.state === "error" ? " - " + esc(k.rag.error) : ""}.` : "") +
       (k.asked ? `<br>You've asked ${k.asked} questions; ${k.asked_linked} matched a fact and taught it your wording.` : "") +
       (k.state === "learning" ? `<br>Reading meetings… ${k.done} of ${k.total}` : "") + (k.error ? `<br>Last problem: ${esc(k.error)}` : "");
     const ans = $("#kbAnswer");

@@ -18,7 +18,8 @@ os.environ["AUTOTAG_NEW"] = "0"          # tested on their own below (they'd cha
 os.environ["AUTOTAG_SWEEP"] = "0"
 os.environ["PEOPLE_SWEEP"] = "0"
 os.environ["KNOWLEDGE_SWEEP"] = "0"
-os.environ["RESEARCH_LIVE"] = "0"         # no web searches from the Ask tests (turned on in its own test)
+os.environ["RESEARCH_LIVE"] = "0"
+os.environ["RAG"] = "0"                   # finding by meaning: its own test (with a stand-in embedding model)         # no web searches from the Ask tests (turned on in its own test)
 
 import pytest
 from fastapi.testclient import TestClient
@@ -36,7 +37,7 @@ BEST = []
 SYSTEMS = []
 
 
-def fake_chat(messages, best=False):
+def fake_chat(messages, best=False, fast=False):
     CALLS.append(messages[-1]["content"])
     BEST.append(best)
     SYSTEMS.append(messages[0]["content"] if messages[0]["role"] == "system" else "")
@@ -1988,3 +1989,67 @@ def test_plain_question_skips_the_ai_intent(client):
     with um.patch.object(knowledge, "facts", lambda: fs):
         assert knowledge.best_answer("who is ryan")["id"] == "a1"
         assert knowledge.best_answer("ryan gwee")["id"] == "a1"
+
+
+def test_find_by_meaning_rag(client, monkeypatch):
+    import numpy as np
+    from app import chat, knowledge, rag, sources, summarize
+    # a stand-in embedding model: words, with "tech side" meaning the same as "CTO"
+    syn = {"cto": "tech", "technology": "tech", "side": "tech", "runs": "lead", "head": "lead", "chief": "lead"}
+    def fake_embed(texts, query=False, timeout=60):
+        out = []
+        for t in texts:
+            v = np.zeros(64)
+            for w in re.findall(r"[a-z]+", t.lower()):
+                w = syn.get(w, w)
+                v[hash(w) % 64] += 1
+            out.append(list(v))
+        return out
+    import re
+    monkeypatch.setattr(rag, "embed", fake_embed)
+    monkeypatch.setattr(rag.settings, "rag", True)
+    monkeypatch.setattr(rag.settings, "rag_min_score", 0.2)
+    m = sources.add("text", "Team page", text="Our team\n\nJeremiah Ng is the Group CTO and CIO of Aleta Planet, "
+                    "leading technology and engineering.\n\nThe office is at 1 Example Road, Singapore.")
+    n = rag.update()
+    assert n > 0 and rag.summary()["passages"] >= n
+    assert rag.update() == 0                                 # nothing new: nothing embedded again
+    hits = rag.find("who runs the tech side", 3)
+    assert any("Jeremiah Ng" in h["text"] for h in hits)
+    ctx = rag.context_for("who runs the tech side")
+    assert "Jeremiah Ng" in ctx and "closest in meaning" in ctx
+    # Ask: the passage goes to the AI (the quick model), found in the answer's thread
+    SYSTEMS.clear()
+    fast_seen = []
+    real = summarize.chat
+    def spy(messages, best=False, fast=False):
+        fast_seen.append(fast)
+        return real(messages, best, fast)
+    monkeypatch.setattr(summarize, "chat", spy)
+    r = client.post("/api/ask", json={"prompt": "who runs the tech side"}, headers=H)
+    import threading
+    for _ in range(100):
+        if chat.get(r.json()["id"])["status"] != "pending":
+            break
+        threading.Event().wait(0.05)
+    assert any("Jeremiah Ng is the Group CTO" in x for x in SYSTEMS) and True in fast_seen
+    sources.remove(m["id"])
+    rag.update()
+    assert not any("Jeremiah Ng is the Group CTO" in h["text"] for h in rag.find("who runs the tech side", 5))
+
+
+def test_live_questions_go_first(monkeypatch):
+    from app import summarize
+    import threading
+    order = []
+    summarize._live["n"] = 1                                 # a live question is being answered
+    def background():
+        summarize._yield_to_live(max_s=5)
+        order.append("background")
+    b = threading.Thread(target=background)
+    b.start()
+    threading.Event().wait(0.3)
+    assert order == []                                       # background waits
+    summarize._live["n"] = 0
+    b.join(2)
+    assert order == ["background"]

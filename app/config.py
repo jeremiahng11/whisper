@@ -77,7 +77,16 @@ class Settings:
     openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
     # "Best quality" minutes use a bigger model (slower). Empty = same model as normal.
     ollama_model_best: str = os.getenv("OLLAMA_MODEL_BEST", "")       # e.g. qwen2.5:14b-instruct
+    # live questions (the watch, Ask): a small quick model of their own, so they never wait behind the background
+    # reading (meetings, sources, research) the main model does; "" = use the main model
+    ollama_model_fast: str = os.getenv("OLLAMA_MODEL_FAST", "qwen2.5:3b-instruct")
+    ollama_fast_ctx: int = _int("OLLAMA_FAST_CTX", 6144)
+    ollama_embed_model: str = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")   # find by meaning (rag.py)
+    rag: bool = _bool("RAG", True)
+    rag_min_score: float = float(os.getenv("RAG_MIN_SCORE", "0.45"))
     openai_model_best: str = os.getenv("OPENAI_MODEL_BEST", "")
+    openai_model_fast: str = os.getenv("OPENAI_MODEL_FAST", "")
+    openai_embed_model: str = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
     summary_chunk_chars: int = _int("SUMMARY_CHUNK_CHARS", 24000)   # longer transcripts are summarised in parts
     llm_timeout_s: int = _int("LLM_TIMEOUT_S", 1800)
 

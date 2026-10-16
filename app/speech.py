@@ -203,7 +203,7 @@ def intent(text: str, now_epoch: Optional[int] = None, tz_min: int = 480) -> dic
         return {"type": "question", "source": "default"}
     try:
         out = summarize.chat([{"role": "user", "content": INTENT_PROMPT.format(
-            now=now.strftime("%Y-%m-%d %H:%M"), weekday=now.strftime("%A"), text=text.replace('"', "'"))}])
+            now=now.strftime("%Y-%m-%d %H:%M"), weekday=now.strftime("%A"), text=text.replace('"', "'"))}], fast=True)
         out = re.sub(r"<think>.*?</think>", "", out, flags=re.S)
         m = re.search(r"\{.*\}", out, re.S)
         d = json.loads(m.group(0)) if m else {}

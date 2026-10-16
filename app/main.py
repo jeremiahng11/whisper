@@ -15,12 +15,12 @@ from typing import Optional
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse, FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
 
-from . import agenda, autotag, chat, db, dynamics, knowledge, login, sources, watchlm, watchpack, people, research, vocab, redact, render, search, speech, summarize, terms, transcribe, voices, wakeword, worker
+from . import agenda, autotag, chat, db, dynamics, knowledge, login, sources, watchlm, watchpack, people, rag, research, vocab, redact, render, search, speech, summarize, terms, transcribe, voices, wakeword, worker
 from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.16.3"
+VERSION = "1.17.0"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -555,12 +555,16 @@ COMPANY_NOTE = ("Below is what the user's company knowledge base knows (learned 
                 "short. If it doesn't cover the question, answer normally and say it isn't in the company notes.")
 
 
-def company_context(q: str, limit: int = 4500) -> str:
-    """Facts, people and (when facts are few) meeting excerpts matching the question - or "" if nothing matches."""
+def company_context(q: str, limit: int = 6000) -> str:
+    """Facts, passages close in meaning (rag.py), people and (when facts are few) meeting excerpts matching the
+    question - or "" if nothing matches."""
     parts = []
-    kb = knowledge.context_for(q, 2500)
+    kb = knowledge.context_for(q, 1800)
     if kb:
         parts.append(kb)
+    near = rag.context_for(q, 3000)
+    if near:
+        parts.append(near)
     who = [n for n in people.all_names() if re.search(r"\b" + re.escape(n) + r"\b", q, re.I)]
     if who:
         pc = people.context_for(who, 1200)
@@ -628,13 +632,19 @@ async def ask(request: Request):
         # any other question (the watch's "Hey Oracle ...", Ask on the web): your company's knowledge goes along when
         # something matches - people, products, services, decisions - so "what is Aleta Planet" or "who is Ryan"
         # is answered from your meetings, website and documents instead of the AI's general knowledge
-        company = company_context(q)
-        if company:
-            context += ("\n\n" if context else "") + company
-        if len(knowledge.find(q, 4)) < 2 and not data.get("offline"):
-            # little or nothing known: a quick web search (in the answer's thread) so "what's new with Sanrio Aleta
-            # Adventure" is answered from today's web, not only the AI's old general knowledge
-            return chat.start(clean, context, bool(data.get("best")), system, late=lambda: research.live_context(q))
+        web = len(knowledge.find(q, 4)) < 2 and not data.get("offline")
+
+        def late() -> str:
+            # found in the answer's thread (finding by meaning asks the embedding model): the company's knowledge
+            # closest to the question, and - when little is known - a quick web search, so "what's new with Sanrio
+            # Aleta Adventure" is answered from today's web, not only the AI's old general knowledge
+            out = company_context(q)
+            if web and "closest in meaning" not in out:   # nothing close in your own knowledge either
+                w = research.live_context(q)
+                if w:
+                    out = (out + "\n\n" if out else "") + w
+            return out
+        return chat.start(clean, context, bool(data.get("best")), system, late=late)
     return chat.start(clean, context, bool(data.get("best")), system)
 
 

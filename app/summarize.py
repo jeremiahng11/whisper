@@ -3,6 +3,7 @@ import json
 import logging
 import re
 import threading
+import time
 from typing import Callable, Optional
 
 import httpx
@@ -350,14 +351,16 @@ def strip_thinking(text: str) -> str:
     return text.strip()
 
 
-def _ollama_chat(messages: list[dict], retry: bool = True, model: str = "") -> str:
+def _ollama_chat(messages: list[dict], retry: bool = True, model: str = "", ctx: int = 0) -> str:
     model = model or settings.ollama_model
     body = {
         "model": model,
         "messages": messages,
         "stream": False,
-        "options": {"num_ctx": settings.ollama_num_ctx, "temperature": 0.2},
+        "options": {"num_ctx": ctx or settings.ollama_num_ctx, "temperature": 0.2},
     }
+    if model == settings.ollama_model_fast and model != settings.ollama_model:
+        body["keep_alive"] = "24h"                # the quick model stays loaded: no load time before an answer
     if any(k in model.lower() for k in ("qwen3", "deepseek-r1", "gpt-oss")):
         body["think"] = False                     # reasoning models: answer straight away (much faster)
         if "qwen3" in model.lower() and messages:  # older Ollama ignores "think": qwen3's own switch
@@ -368,6 +371,12 @@ def _ollama_chat(messages: list[dict], retry: bool = True, model: str = "") -> s
                     break
             body["messages"] = msgs
     r = httpx.post(f"{settings.ollama_url}/api/chat", json=body, timeout=settings.llm_timeout_s)
+    if retry and r.status_code == 404 and "not found" in r.text.lower() and model == settings.ollama_model_fast \
+            and model != settings.ollama_model:
+        # the quick model isn't downloaded yet: this answer comes from the main model, the quick one downloads
+        if settings.ollama_auto_pull:
+            threading.Thread(target=ensure_ollama_model, args=(model,), daemon=True).start()
+        return _ollama_chat(messages, retry=False, model=settings.ollama_model)
     if retry and r.status_code == 404 and "not found" in r.text.lower() and settings.ollama_auto_pull:
         ensure_ollama_model(model)                # model not downloaded yet: pull it once, then retry
         return _ollama_chat(messages, retry=False, model=model)
@@ -431,14 +440,45 @@ def explain_llm_error(e: Exception) -> str:
     return msg[:300]
 
 
-def chat(messages: list[dict], best: bool = False) -> str:
+# Live questions come first: while one waits for its answer, background work (meetings, sources, research) holds
+# its next request back, so the machine's cores go to the answer.
+_live = {"n": 0}
+_live_lock = threading.Lock()
+
+
+def live_waiting() -> bool:
+    return _live["n"] > 0
+
+
+def _yield_to_live(max_s: float = 180) -> None:
+    t0 = time.time()
+    while _live["n"] > 0 and time.time() - t0 < max_s:
+        time.sleep(0.5)
+
+
+def chat(messages: list[dict], best: bool = False, fast: bool = False) -> str:
+    """fast: a live question (the watch, Ask) - the quick model, ahead of background work."""
     backend = settings.summary_backend.lower()
-    model = best_model() if best else ""
-    if backend == "ollama":
-        return _ollama_chat(messages, model=model)
-    if backend == "openai":
-        return _openai_chat(messages, model=model)
-    raise RuntimeError(f"unknown SUMMARY_BACKEND {settings.summary_backend!r}")
+    if not fast:
+        _yield_to_live()
+        model = best_model() if best else ""
+        if backend == "ollama":
+            return _ollama_chat(messages, model=model)
+        if backend == "openai":
+            return _openai_chat(messages, model=model)
+        raise RuntimeError(f"unknown SUMMARY_BACKEND {settings.summary_backend!r}")
+    with _live_lock:
+        _live["n"] += 1
+    try:
+        if backend == "ollama":
+            m = settings.ollama_model_fast or settings.ollama_model
+            return _ollama_chat(messages, model=m, ctx=settings.ollama_fast_ctx if m == settings.ollama_model_fast else 0)
+        if backend == "openai":
+            return _openai_chat(messages, model=settings.openai_model_fast)
+        raise RuntimeError(f"unknown SUMMARY_BACKEND {settings.summary_backend!r}")
+    finally:
+        with _live_lock:
+            _live["n"] -= 1
 
 
 _pull_lock = threading.Lock()

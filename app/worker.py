@@ -305,7 +305,12 @@ def delete_job_files(job: dict) -> None:
 def _loop() -> None:
     global current_job
     if summarize.enabled() and settings.summary_backend.lower() == "ollama" and settings.ollama_auto_pull:
-        threading.Thread(target=summarize.ensure_ollama_model, daemon=True).start()
+        def pull_all():
+            summarize.ensure_ollama_model()
+            for m in (settings.ollama_model_fast, settings.ollama_embed_model if settings.rag else ""):
+                if m:
+                    summarize.ensure_ollama_model(m)   # the quick model for live questions, the embedding model
+        threading.Thread(target=pull_all, daemon=True).start()
     if settings.transcriber != "fake" and os.getenv("PRELOAD_MODEL", "1") == "1":
         try:
             transcribe.get_model()                  # first start downloads the model (~1.6 GB for turbo)

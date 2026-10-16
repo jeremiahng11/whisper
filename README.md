@@ -385,6 +385,13 @@ owners, dates, budgets, terms, and who people are. In the background it reads on
   other fact to treat it the same. The watch model learns the essentials and your pages/research first; meeting facts
   fill the rest (meeting questions are answered online). Find a fact shows the answer when one fact clearly answers
   it, and **Ask Oracle** asks the AI.
+- **Fast lane and find by meaning** (1.17): live questions (the watch, Ask) use a small quick model of their own
+  (`OLLAMA_MODEL_FAST`, default `qwen2.5:3b-instruct`, kept loaded; `""` = the main model) and background work
+  (meetings, sources, research) holds its next request back while one waits, so answers don't queue behind a
+  minute-long document read. `rag.py` indexes every fact, page/document/research passage and meeting's minutes
+  with an embedding model (`OLLAMA_EMBED_MODEL`, default `nomic-embed-text`; `OPENAI_EMBED_MODEL` with openai;
+  `RAG=0` off) and gives the AI the passages closest in meaning to the question ("who runs the tech side?" finds
+  the CTO). Both models are downloaded at start; the index updates in the background every 5 minutes.
 - **Plain questions skip the intent AI** (1.16.3): "who is Ryan?", "what products do we have" go straight to the
   answer (before, the AI was asked first what kind of request it was - a second slow round trip on a home server).
 - **Instant answers** (1.16.2): a question that a company essential or a who-is answer clearly matches ("who is
