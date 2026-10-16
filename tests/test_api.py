@@ -42,6 +42,15 @@ def fake_chat(messages, best=False):
     SYSTEMS.append(messages[0]["content"] if messages[0]["role"] == "system" else "")
     if FAIL["on"]:
         raise RuntimeError("LLM is down")
+    if "company profile of" in messages[-1]["content"]:
+        import json as _j
+        return _j.dumps([
+            {"q": "Who is the CTO of Aleta Planet", "a": "Jeremiah Ng, Group CTO and CIO.", "kind": "person",
+             "topic": "Aleta Planet", "alts": ["who is the CTO", "who is our CTO"]},
+            {"q": "Who founded Aleta Planet", "a": "Ryan Tan, the founder, Chairman and CEO.", "kind": "person",
+             "topic": "Aleta Planet", "alts": ["who is the founder of Aleta Planet", "who is our founder"]},
+            {"q": "What products does Aleta Planet have", "a": "Aleta Adventure cards and the card issuing API.",
+             "kind": "product", "topic": "Aleta Planet", "alts": ["what are our products"]}])
     if "found by searching for" in messages[-1]["content"]:
         out = [{"q": "What is Sanrio Aleta Adventure", "a": "A Hello Kitty travel card by Aleta Planet and Sanrio.",
                 "kind": "product", "topic": "Sanrio Aleta Adventure", "alts": ["tell me about Sanrio Aleta Adventure"]}]
@@ -1881,3 +1890,63 @@ def test_research_topics_questions_and_live(client, monkeypatch):
             break
         threading.Event().wait(0.05)
     assert any("quick web search" in x for x in SYSTEMS), (chat.get(r.json()["id"]), r.json())
+
+
+def test_company_essentials_on_the_watch(client, monkeypatch):
+    from app import core, knowledge, sources, watchlm, watchpack
+    monkeypatch.setattr(core, "company", lambda: "Aleta Planet")
+    m = sources.add("text", "Leadership", text="Our leadership\nRyan Tan - Founder, Chairman and CEO\n"
+                    "Jeremiah Ng - Group CTO and CIO\nWei Ling - Chief Financial Officer of Aleta Planet\n"
+                    "Sam Lee - Chief Operating Officer, runs card operations\n"
+                    "Aleta Planet is a payments company in Singapore. " * 3)
+    sources.learn(m["id"])
+    mat = core.material()
+    assert "Founder, Chairman and CEO" in mat
+    assert core.build(force=True) == 3
+    fs = knowledge.facts()
+    cto = next(f for f in fs if f["q"] == "Who is the CTO of Aleta Planet")
+    assert cto["core"] and cto["meeting"] == "Company profile"
+    assert knowledge.find("who is our cto")[0]["q"] == "Who is the CTO of Aleta Planet"
+    r = client.get("/api/knowledge", params={"q": "what product does aleta planet have"}, headers=H).json()
+    assert r["answer"]["a"].startswith("Aleta Adventure cards")   # (products / product)
+    assert client.get("/api/knowledge", params={"q": "flibbert quasar nebula"}, headers=H).json()["answer"] is None
+    n = len(CALLS)
+    core.build()                                             # nothing changed: the AI isn't asked again
+    assert len(CALLS) == n and not core.needs_update()
+
+    # first in the watch's pack, marked for answering on the watch even when online
+    pack = watchpack.build(150, True)
+    top = pack["items"][:3]
+    assert all(it.get("core") for it in top) and {it["q"] for it in top} >= {"Who founded Aleta Planet"}
+    assert "who is the cto" in next(it for it in top if it["q"] == "Who is the CTO of Aleta Planet")["say"]
+
+    # pin any fact to the watch
+    other = next(f for f in fs if not f.get("core"))
+    assert client.put(f"/api/knowledge/{other['id']}", json={"pinned": True}, headers=H).status_code == 200
+    f2 = next(f for f in knowledge.facts() if f["id"] == other["id"])
+    assert f2["core"] and f2["pinned"]
+    assert any(it["id"] == other["id"] and it.get("core") for it in watchpack.build(150)["items"])
+    client.put(f"/api/knowledge/{other['id']}", json={"a": "A better answer."}, headers=H)   # a fix keeps the pin
+    f2 = next(f for f in knowledge.facts() if f["id"] == other["id"])
+    assert f2["pinned"] and f2["a"] == "A better answer."
+    client.put(f"/api/knowledge/{other['id']}", json={"pinned": False}, headers=H)
+    assert not next(f for f in knowledge.facts() if f["id"] == other["id"]).get("core")
+    client.put(f"/api/knowledge/{other['id']}", json={}, headers=H)
+
+    # the watch model: essentials first and learned harder; retrained soon after they change
+    fs = knowledge.facts()
+    wf = watchlm.watch_facts(fs)
+    assert all(f.get("core") for f in wf[:3])
+    jobs = [i for i, f in enumerate(wf) if f.get("job")]
+    assert not jobs or min(jobs) > max(i for i, f in enumerate(wf) if not f.get("job"))   # meetings after the rest
+    ds = watchlm.make_dataset(fs)
+    assert sum(1 for q, a in ds["train"] if a == "Jeremiah Ng, Group CTO and CIO.") >= 4 and ds["core_sig"]
+    started = []
+    monkeypatch.setattr(watchlm, "start", lambda f: started.append(len(f)))
+    monkeypatch.setattr(watchlm, "state", lambda: {"training": False, "status": {"at": time.time() - 7 * 3600},
+                                                   "model": {"core_sig": "old"}})
+    assert watchlm.core_changed(fs) and started
+    monkeypatch.setattr(watchlm, "state", lambda: {"training": False, "status": {"at": time.time() - 7 * 3600},
+                                                   "model": {"core_sig": ds["core_sig"]}})
+    assert not watchlm.core_changed(fs)
+    sources.remove(m["id"])

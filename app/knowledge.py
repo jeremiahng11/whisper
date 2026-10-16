@@ -280,6 +280,9 @@ def rebuild() -> list[dict]:
             merged.setdefault(_norm(f["q"]), f)
         for f in _people_facts():
             merged.setdefault(_norm(f["q"]), f)
+        from . import core                          # the company profile (core.py): wins for the same question
+        for f in core.core_facts():
+            merged[_norm(f["q"])] = f
         ov = overrides()
         byq = _asked_by_fact()
         out = []
@@ -290,6 +293,8 @@ def rebuild() -> list[dict]:
                 continue
             if o.get("a"):
                 f["a"], f["edited"] = o["a"], True
+            if o.get("pinned"):                     # "Pin to watch": treated like the company profile
+                f["core"] = f["pinned"] = True
             a = byq.get(f["id"])
             if a:                                   # your own wordings of this question, and how often you ask it
                 have = {_norm(x) for x in [f["q"]] + (f.get("alts") or [])}
@@ -317,13 +322,27 @@ def overrides() -> dict:
         return {}
 
 
-def set_override(fid: str, answer: str | None = None, hidden: bool = False) -> None:
+def set_override(fid: str, answer: str | None = None, hidden: bool = False, pinned: bool | None = None) -> None:
+    """pinned=True/False changes only the pin; otherwise: hide it, give the right answer, or (neither) back to what
+    the AI read (a pin stays)."""
     with _lock:
         ov = overrides()
-        if hidden:
-            ov[fid] = {"hidden": True}
+        o = dict(ov.get(fid) or {})
+        if pinned is not None:
+            if pinned:
+                o["pinned"] = True
+                o.pop("hidden", None)
+            else:
+                o.pop("pinned", None)
+        elif hidden:
+            o = {"hidden": True}
         elif answer:
-            ov[fid] = {"a": _clean_text(answer, 300)}
+            o["a"] = _clean_text(answer, 300)
+            o.pop("hidden", None)
+        else:
+            o = {"pinned": True} if o.get("pinned") else {}
+        if o:
+            ov[fid] = o
         else:
             ov.pop(fid, None)
         (kdir() / "overrides.json").write_text(json.dumps(ov, ensure_ascii=False))
@@ -341,8 +360,31 @@ _STOP = set("a an the is are was were be to of in on for and or what who when wh
             "my it its this that with at by from about tell me please can could".split())
 
 
+def _stem(w: str) -> str:
+    """products -> product, services -> service (so "what product" finds "What products ...")."""
+    if len(w) > 4 and w.endswith("ies"):
+        return w[:-3] + "y"
+    if len(w) > 4 and w.endswith("s") and not w.endswith(("ss", "us", "is")):
+        return w[:-1]
+    return w
+
+
 def _words(s: str) -> set[str]:
-    return {w for w in _norm(s).split() if w not in _STOP and len(w) > 1}
+    return {_stem(w) for w in _norm(s).split() if w not in _STOP and len(w) > 1}
+
+
+def best_answer(q: str) -> dict | None:
+    """The fact that clearly answers the question (Find a fact shows it as the answer), or None."""
+    hits = find_scored(q, 2)
+    if not hits:
+        return None
+    top, f = hits[0]
+    second = hits[1][0] if len(hits) > 1 else 0
+    want = _words(q)
+    ask = _words(f["q"] + " " + " ".join(f.get("alts") or []) + " " + (f.get("topic") or ""))
+    if top >= 2 and top > second and len(want & ask) * 2 >= len(want):
+        return f
+    return None
 
 
 def find(q: str, limit: int = 12) -> list[dict]:
@@ -402,6 +444,8 @@ def find_scored(q: str, limit: int = 12) -> list[tuple[int, dict]]:
         ask = _words(f["q"] + " " + " ".join(f.get("alts") or []) + " " + (f.get("topic") or ""))
         ans = _words(f["a"])
         s = 2 * len(want & ask) + len(want & ans)
+        if s and f.get("kind") == "person" and f.get("topic") and _words(f["topic"]) <= want | {"who"}:
+            s += 1                                  # "ryan gwee" / "who is ryan": that person's own fact first
         if s:
             scored.append((s, f.get("date") or "", f))
     scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
@@ -486,7 +530,11 @@ def summary() -> dict:
     from . import sources
     learned = len(list((kdir() / "meetings").glob("*.json")))
     ak = asked()
+    from . import core
+    cd = core.load()
     return {"facts": len(fs), "kinds": kinds, "meetings_read": learned, "sources": len(sources.listing()),
+            "core": sum(1 for f in fs if f.get("core")), "core_company": cd.get("company") or core.company(),
+            "core_made": cd.get("made") or 0,
             "asked": len(ak), "asked_linked": sum(1 for a in ak if a.get("fact")), **status}
 
 
@@ -523,6 +571,11 @@ def learn_all(force: bool = False) -> None:
             except Exception as e:                  # noqa: BLE001
                 log.warning("who is %s: %s", n, e)
         rebuild()
+        try:
+            from . import core
+            core.build(force)
+        except Exception as e:                      # noqa: BLE001
+            log.warning("company profile: %s", e)
     finally:
         status["state"] = "idle"
 
@@ -556,8 +609,13 @@ def _sweep() -> None:
                             busy = True
                             break
                 if not busy:
+                    from . import core               # the company profile, when what it's written from changed
+                    if core.needs_update():
+                        core.build()
+                        busy = True
+                if not busy:
                     from . import watchlm
-                    if watchlm.nightly(facts()):
+                    if watchlm.nightly(facts()) or watchlm.core_changed(facts()):
                         busy = True
                 if not busy:
                     from . import sources

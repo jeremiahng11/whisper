@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.15.0"
+VERSION = "1.16.0"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -836,7 +836,10 @@ def get_knowledge(q: str = "", limit: int = 500):
     """What the knowledge base knows: {"facts": n, "kinds", "meetings_read", "state", ..., "items": [...]}.
     ?q= returns the facts best matching a question."""
     items = knowledge.find(q, min(limit, 50)) if q else knowledge.facts()[: max(1, min(limit, 5000))]
-    return {**knowledge.summary(), "items": items}
+    out = {**knowledge.summary(), "items": items}
+    if q:
+        out["answer"] = knowledge.best_answer(q)     # the fact that clearly answers it (None: ask the AI)
+    return out
 
 
 @app.post("/api/knowledge/learn", dependencies=[Depends(auth)], status_code=202)
@@ -959,6 +962,22 @@ def research_go():
     return {"started": research.research_now()}
 
 
+@app.post("/api/knowledge/core", dependencies=[Depends(auth)], status_code=202)
+def core_now():
+    """Write the company profile (the essentials always on the watch) again now, from everything known."""
+    if not summarize.enabled():
+        raise HTTPException(400, "SUMMARY_BACKEND is none - no LLM configured")
+    from . import core
+
+    def run():
+        try:
+            core.build(force=True)
+        except Exception as e:                       # noqa: BLE001
+            log.warning("company profile: %s", e)
+    threading.Thread(target=run, daemon=True).start()
+    return {"started": True}
+
+
 @app.put("/api/knowledge/{fid}", dependencies=[Depends(auth)])
 async def fix_fact(fid: str, request: Request):
     """{"a": "the right answer"} or {"hidden": true} (wrong or private fact) or {} (back to what the AI read)."""
@@ -968,7 +987,10 @@ async def fix_fact(fid: str, request: Request):
         raise HTTPException(400, "body must be JSON")
     if not re.fullmatch(r"[0-9a-f]{8}", fid):
         raise HTTPException(400, "bad fact id")
-    knowledge.set_override(fid, str(data.get("a") or "") or None, bool(data.get("hidden")))
+    if "pinned" in data:                             # {"pinned": true} - always on the watch (like the company profile)
+        knowledge.set_override(fid, pinned=bool(data["pinned"]))
+    else:
+        knowledge.set_override(fid, str(data.get("a") or "") or None, bool(data.get("hidden")))
     return {"ok": True, **knowledge.summary()}
 
 

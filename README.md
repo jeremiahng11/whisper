@@ -376,6 +376,15 @@ owners, dates, budgets, terms, and who people are. In the background it reads on
   when it finds the answer, the question is linked to it, and the watch model learns it at night. Ask does a quick
   live web search when the knowledge base knows nothing about a question (`RESEARCH_LIVE`, default on).
   API: `GET/PUT /api/research`, `POST/DELETE /api/research/topics`, `POST /api/research/now`.
+- **Company essentials** (1.16, `app/core.py`): the AI writes a small company profile as facts - what the company is,
+  founder, chairman, CEO, CTO and other leaders (one fact per role, "who is our CTO" included), products and services,
+  partners - from your pages, documents, research, who-is answers and meetings; written again when that material
+  changes (at most every 4 hours; **Rewrite now** on the Account page). These win over other facts, come first in the
+  watch pack (marked `core`: the watch answers them itself even online - firmware R1.7.7), are learned twice as hard
+  by the watch model, and the watch model retrains within hours when they change (not only at night). **Pin** any
+  other fact to treat it the same. The watch model learns the essentials and your pages/research first; meeting facts
+  fill the rest (meeting questions are answered online). Find a fact shows the answer when one fact clearly answers
+  it, and **Ask Oracle** asks the AI.
 - **Who is X?** (1.13.6) is written by the AI from everything known about X: lines of your pages and documents that
   name them (a leadership page), facts that mention them, and their meeting profile.
 - **Fix / Hide** a fact on the Account page; your fix survives re-reading, a hidden fact is used nowhere.

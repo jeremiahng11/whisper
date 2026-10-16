@@ -84,12 +84,18 @@ def build(limit: int = MAX_ITEMS, extra: bool = False) -> dict:
     from . import speech
     facts = knowledge.facts()
     voice = speech.tts_available()
-    # what you ask most comes first, then people (up to a quarter of the pack), then the newest of everything else
-    often = sorted((f for f in facts if f.get("asked")), key=lambda f: -f["asked"])
-    oid = {f["id"] for f in often}
+    # the company essentials (core.py, and facts you pinned) always come first; then what you ask most; then people
+    # (up to a quarter of the pack); then your pages, documents and research; meeting facts last (meeting questions
+    # are answered online by the server's AI)
+    core = [f for f in facts if f.get("core")]
+    cid = {f["id"] for f in core}
+    often = sorted((f for f in facts if f.get("asked") and f["id"] not in cid), key=lambda f: -f["asked"])
+    oid = cid | {f["id"] for f in often}
     people = [f for f in facts if f.get("kind") == "person" and f["id"] not in oid][: limit // 4]
-    rest = sorted((f for f in facts if f.get("kind") != "person" and f["id"] not in oid), key=lambda f: f.get("date") or "", reverse=True)
-    people = often + people
+    pid = oid | {f["id"] for f in people}
+    rest = sorted((f for f in facts if f["id"] not in pid),
+                  key=lambda f: (not f.get("job"), f.get("date") or ""), reverse=True)
+    people = core + often + people
     items, seen = [], set()
     for f in people + rest:
         if len(items) >= limit:
@@ -98,8 +104,12 @@ def build(limit: int = MAX_ITEMS, extra: bool = False) -> dict:
         if not say:
             continue
         seen.update(say[:2])
-        items.append({"id": f["id"], "q": f["q"], "say": say[:2], "a": f["a"][:240], "kind": f.get("kind", "fact"),
-                      "date": f.get("date") or ""})
+        items.append({"id": f["id"], "q": f["q"], "say": say[:3 if f.get("core") else 2], "a": f["a"][:240],
+                      "kind": f.get("kind", "fact"), "date": f.get("date") or ""})
+        if f.get("core"):                           # the watch answers these itself, even when online
+            items[-1]["core"] = True
+            items[-1]["alts"] = [x for x in (f.get("alts") or [])][:6]
+            seen.update(say[:3])
         if voice:
             items[-1]["voice"] = voice_tag(f["a"][:240])
     more = []

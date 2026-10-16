@@ -58,9 +58,30 @@ def make_dataset(facts: list[dict], seed: int = 0) -> dict:
             qs.append(f"tell me about {f['topic']}")
         for q in qs:
             train.append([q, f["a"]])
+            if f.get("core"):                       # the company essentials: learned harder (twice as many examples)
+                train.append([q, f["a"]])
     for q in OFF_TOPIC:
         train.append([q, DONT_KNOW])
-    return {"train": train, "test": test, "facts": len(facts), "sig": facts_sig(facts)}
+    return {"train": train, "test": test, "facts": len(facts), "sig": facts_sig(facts), "core_sig": core_sig(facts)}
+
+
+def core_sig(facts: list[dict]) -> str:
+    rows = sorted([f["q"], f["a"]] for f in facts if f.get("core"))
+    return hashlib.sha1(json.dumps(rows, ensure_ascii=False).encode()).hexdigest()[:12] if rows else ""
+
+
+WATCH_FACTS_MAX = 2000
+
+
+def watch_facts(facts: list[dict]) -> list[dict]:
+    """What the watch's model learns: the company essentials and everything from your pages, documents and research
+    first; meeting facts after them (most asked, then newest) while there's room. Meeting questions are answered
+    online by the server's AI anyway."""
+    core = [f for f in facts if f.get("core")]
+    company = [f for f in facts if not f.get("core") and not f.get("job")]
+    meet = sorted((f for f in facts if not f.get("core") and f.get("job")),
+                  key=lambda f: (f.get("asked") or 0, f.get("date") or ""), reverse=True)
+    return (core + company + meet)[:max(WATCH_FACTS_MAX, len(core))]
 
 
 def facts_sig(facts: list[dict]) -> str:
@@ -150,7 +171,7 @@ def train(out: Path, max_minutes: float = 120, max_epochs: int = 200, seed: int 
     size = W.export(tmp, q8, cfg, vocab, meta)
     ver = hashlib.sha1(tmp.read_bytes()).hexdigest()[:12]
     tmp.replace(out / "model.owl")
-    report.update(version=ver, size=size, config=cfg, made=meta["made"], facts_sig=ds.get("sig", ""))
+    report.update(version=ver, size=size, config=cfg, made=meta["made"], facts_sig=ds.get("sig", ""), core_sig=ds.get("core_sig", ""))
     (out / "report.json").write_text(json.dumps(report, ensure_ascii=False))
     _status(out, state="done", step=step, steps=total, loss=report["loss"])
     return report
@@ -190,6 +211,7 @@ def start(facts: list[dict]) -> dict:
     with _lock:
         if _proc is not None and _proc.poll() is None:
             return state()
+        facts = watch_facts(facts)
         if len(facts) < 5:
             raise ValueError("the knowledge base has fewer than 5 facts - let it learn from your meetings first")
         out = wdir()
@@ -212,6 +234,7 @@ def stop() -> None:
 def nightly(facts: list[dict]) -> bool:
     """Called by the knowledge sweep: between 02:00 and 05:00 server time, train again if the facts changed since
     the last model (WATCHAI_NIGHTLY=0 turns it off). True if it started."""
+    facts = watch_facts(facts)
     if not settings.watchai_nightly or not 2 <= time.localtime().tm_hour < 5 or len(facts) < 5:
         return False
     st = state()
@@ -223,6 +246,25 @@ def nightly(facts: list[dict]) -> bool:
     if time.time() - last < 6 * 3600 and (st.get("status") or {}).get("state") in ("error", "stopped"):
         return False                                  # it failed tonight already: not again and again
     log.info("nightly watch AI training: the knowledge changed")
+    start(facts)
+    return True
+
+
+def core_changed(facts: list[dict]) -> bool:
+    """The company essentials changed (a new product, a new CTO): train again now, not only at night - at most once
+    every 6 hours. True if it started."""
+    facts = watch_facts(facts)
+    if not settings.watchai_nightly or len(facts) < 5:
+        return False
+    st = state()
+    if st["training"] or not st["model"]:
+        return False
+    want = core_sig(facts)
+    if not want or st["model"].get("core_sig", "") == want:
+        return False
+    if time.time() - ((st.get("status") or {}).get("at") or 0) < 6 * 3600:
+        return False
+    log.info("watch AI training: the company essentials changed")
     start(facts)
     return True
 

@@ -435,7 +435,8 @@ ul.replies{margin:4px 0;padding-left:20px;font-size:13.5px}
         <div class="sub2">Watch AI (company knowledge)</div>
         <p class="mute" style="margin:0 0 8px">Short facts learned from all your meetings: what was decided, who owns what, dates, budgets, who people are. Ask uses them; the watch gets the most useful ones as offline answers, and its own small AI model is trained on all of them here on this server.</p>
         <div id="kbNow" class="mute">…</div>
-        <div class="row" style="margin-top:8px"><button class="ghost" id="kbLearn">Learn from meetings now</button><input id="kbFind" placeholder="Find a fact…" style="flex:1;max-width:260px"><span class="mute" id="kbMsg"></span></div>
+        <div class="row" style="margin-top:8px"><button class="ghost" id="kbLearn">Learn from meetings now</button><input id="kbFind" placeholder="Ask or find… (who is Ryan, what products do we have)" style="flex:1;min-width:220px"><button class="ghost" id="kbAsk">Ask Oracle</button><span class="mute" id="kbMsg"></span></div>
+        <div id="kbAnswer" class="hidden" style="margin-top:8px;padding:8px 10px;border:1px solid var(--line,#ddd);border-radius:8px"></div>
         <div id="kbList" style="margin-top:8px;max-height:320px;overflow:auto"></div>
         <div class="sub2" style="margin-top:14px">Sources (besides your meetings)</div>
         <p class="mute" style="margin:0 0 6px">Your website, product pages, price lists, FAQs. Web pages are checked again every day.</p>
@@ -1355,11 +1356,25 @@ async function loadKb() {
     const pack = await (await api("/api/watch/pack")).json();
     $("#kbNow").innerHTML = `<b>${k.facts}</b> facts from ${k.meetings_read} meetings${k.sources ? " and " + k.sources + " sources" : ""}${kinds ? " (" + esc(kinds) + ")" : ""}. ` +
       `The watch can answer <b>${pack.count}</b> of them offline.` +
+      (k.core ? `<br><b>${k.core}</b> company essentials${k.core_company ? " about " + esc(k.core_company) : ""} are always on the watch and answered on it directly (founder, leaders, products, services; written ${k.core_made ? new Date(k.core_made * 1000).toLocaleString() : "-"}, again when what's known changes). ` +
+        `<a href="#" id="coreNow">Rewrite now</a>` : (k.core_company ? `<br>Company essentials about ${esc(k.core_company)}: written once there's enough material. <a href="#" id="coreNow">Write now</a>` : "")) +
       (k.asked ? `<br>You've asked ${k.asked} questions; ${k.asked_linked} matched a fact and taught it your wording.` : "") +
       (k.state === "learning" ? `<br>Reading meetings… ${k.done} of ${k.total}` : "") + (k.error ? `<br>Last problem: ${esc(k.error)}` : "");
+    const ans = $("#kbAnswer");
+    if (q && k.answer) {
+      ans.innerHTML = `<b>${esc(k.answer.a)}</b><br><span class="mute">${esc(k.answer.q)}? · ${k.answer.core ? "company essentials (on the watch)" : esc(k.answer.meeting || k.answer.kind)}${k.answer.date ? " · " + esc(k.answer.date) : ""}</span>`;
+      ans.classList.remove("hidden");
+    } else if (q && !ans.dataset.asked) {
+      ans.innerHTML = `<span class="mute">No fact answers that directly - press <b>Ask Oracle</b> (or Enter) and the AI answers from everything it knows${k.items.length ? ", or see the closest facts below" : ""}.</span>`;
+      ans.classList.remove("hidden");
+    } else if (!q) { ans.classList.add("hidden"); delete ans.dataset.asked; }
     $("#kbList").innerHTML = k.items.map(f => `<div class="row" style="gap:6px;align-items:flex-start;padding:4px 0;border-bottom:1px solid var(--line,#eee)" data-id="${f.id}">
-      <div style="flex:1"><b>${esc(f.q)}?</b> ${esc(f.a)}${f.edited ? ' <span class="mute">(your fix)</span>' : ""}<br><span class="mute">${esc(f.kind)}${f.meeting ? " · " + esc(f.meeting) : ""}${f.date ? " · " + esc(f.date) : ""}${f.asked ? " · asked " + f.asked + "×" : ""}</span></div>
-      <button class="ghost kbFix" style="padding:2px 8px">Fix</button><button class="ghost kbHide" style="padding:2px 8px">Hide</button></div>`).join("") || '<span class="mute">Nothing yet.</span>';
+      <div style="flex:1"><b>${esc(f.q)}?</b> ${esc(f.a)}${f.edited ? ' <span class="mute">(your fix)</span>' : ""}${f.core ? ' <span class="mute">⌚ on the watch' + (f.pinned ? " (pinned)" : "") + "</span>" : ""}<br><span class="mute">${esc(f.kind)}${f.meeting ? " · " + esc(f.meeting) : ""}${f.date ? " · " + esc(f.date) : ""}${f.asked ? " · asked " + f.asked + "×" : ""}</span></div>
+      ${f.pinned || !f.core ? `<button class="ghost kbPin" style="padding:2px 8px" data-p="${f.pinned ? "" : "1"}">${f.pinned ? "Unpin" : "Pin"}</button>` : ""}<button class="ghost kbFix" style="padding:2px 8px">Fix</button><button class="ghost kbHide" style="padding:2px 8px">Hide</button></div>`).join("") || '<span class="mute">Nothing yet.</span>';
+    document.querySelectorAll(".kbPin").forEach(b => b.onclick = async () => {
+      await api("/api/knowledge/" + b.parentNode.dataset.id, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pinned: !!b.dataset.p }) }); loadKb();
+    });
+    if ($("#coreNow")) $("#coreNow").onclick = async e => { e.preventDefault(); try { await api("/api/knowledge/core", { method: "POST" }); $("#coreNow").textContent = "writing…"; setTimeout(loadKb, 15000); } catch (x) { $("#coreNow").textContent = x.message; } };
     document.querySelectorAll(".kbFix").forEach(b => b.onclick = async () => {
       const id = b.parentNode.dataset.id, f = k.items.find(x => x.id === id);
       const a = prompt("The right answer:", f.a); if (a === null) return;
@@ -1439,7 +1454,25 @@ $("#srcAddNews").onclick = () => { const t = $("#srcNews").value.trim(); if (t) 
 $("#srcAddFile").onclick = () => $("#srcFile").click();
 $("#srcFile").onchange = () => { const f = $("#srcFile").files[0]; if (!f) return; const fd = new FormData(); fd.append("file", f); addSource(fd, true); $("#srcFile").value = ""; };
 $("#srcPaste").onclick = () => { const t = prompt("Paste the text (product info, FAQ, policy…):"); if (t && t.trim()) addSource({ text: t }); };
-$("#kbFind").oninput = () => { clearTimeout(kbTimer); kbTimer = setTimeout(loadKb, 300); };
+$("#kbFind").oninput = () => { delete $("#kbAnswer").dataset.asked; clearTimeout(kbTimer); kbTimer = setTimeout(loadKb, 300); };
+async function kbAskOracle() {
+  const q = $("#kbFind").value.trim(), ans = $("#kbAnswer");
+  if (!q) return;
+  ans.dataset.asked = "1"; ans.classList.remove("hidden");
+  ans.innerHTML = '<span class="mute">Thinking…</span>';
+  try {
+    const r = await (await api("/api/ask", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: q }) })).json();
+    for (let i = 0; i < 240; i++) {
+      await new Promise(res => setTimeout(res, 1000));
+      const a = await (await api("/api/ask/" + r.id)).json();
+      if (a.status === "done") { ans.innerHTML = esc(a.answer).replace(/\n/g, "<br>") + '<br><span class="mute">Oracle (the AI, with your company knowledge)</span>'; return; }
+      if (a.status === "error") { ans.innerHTML = '<span class="mute">Couldn\'t answer: ' + esc(a.error || "") + "</span>"; return; }
+    }
+    ans.innerHTML = '<span class="mute">The AI is busy - try again in a minute.</span>';
+  } catch (e) { ans.innerHTML = '<span class="mute">' + esc(e.message) + "</span>"; }
+}
+$("#kbAsk").onclick = kbAskOracle;
+$("#kbFind").onkeydown = e => { if (e.key === "Enter") kbAskOracle(); };
 $("#kbLearn").onclick = async () => {
   try { const r = await (await api("/api/knowledge/learn", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).json();
     $("#kbMsg").textContent = r.started ? "Reading the new and changed meetings…" : "Already up to date or busy."; } catch (e) { $("#kbMsg").textContent = e.message; }
