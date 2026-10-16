@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.16.1"
+VERSION = "1.16.2"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -618,6 +618,13 @@ async def ask(request: Request):
         if kb:
             context += "\n\n" + kb
     elif not data.get("recording") and data.get("task") != "email":
+        if len(clean) == 1 and not data.get("best"):
+            # "who is Ryan", "who is our CTO", "what products do we have": a company essential or a who-is answer
+            # that clearly matches is the answer - at once, without waiting for the AI (on a home server that's
+            # the difference between a second and half a minute)
+            f = knowledge.best_answer(q)
+            if f and (f.get("core") or f.get("kind") == "person") and len(knowledge._words(q)) <= 6:
+                return chat.instant(f["a"])
         # any other question (the watch's "Hey Oracle ...", Ask on the web): your company's knowledge goes along when
         # something matches - people, products, services, decisions - so "what is Aleta Planet" or "who is Ryan"
         # is answered from your meetings, website and documents instead of the AI's general knowledge
@@ -1008,6 +1015,31 @@ def watch_voice(fid: str):
     if not p:
         raise HTTPException(404, "no such answer, or no voice (TTS) on this server")
     return FileResponse(p, media_type="audio/wav")
+
+
+@app.post("/api/watch/crash", dependencies=[Depends(auth)])
+async def watch_crash(request: Request):
+    """The watch's last crash (task, address, backtrace) after it restarted: {"fw", "text"} - kept to look into."""
+    d = await body_extra(request)
+    text = str(d.get("text") or "")[:2000]
+    if not text:
+        raise HTTPException(400, "send {'text': ...}")
+    p = settings.data_dir / "watch_crashes.jsonl"
+    with open(p, "a") as f:
+        f.write(json.dumps({"at": time.time(), "fw": str(d.get("fw") or "")[:20], "text": text}) + "\n")
+    log.warning("watch crash report: %s", text)
+    return {"ok": True}
+
+
+@app.get("/api/watch/crashes", dependencies=[Depends(auth)])
+def watch_crashes():
+    """The watch's crash reports, newest first."""
+    p = settings.data_dir / "watch_crashes.jsonl"
+    try:
+        rows = [json.loads(x) for x in p.read_text().splitlines() if x.strip()]
+    except (OSError, ValueError):
+        rows = []
+    return {"items": rows[::-1][:50]}
 
 
 @app.get("/api/watch/prompts", dependencies=[Depends(auth)])

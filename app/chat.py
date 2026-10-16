@@ -47,6 +47,14 @@ def start(messages: list[dict], context: str = "", best: bool = False, system: s
     return {"id": aid, "status": "pending"}
 
 
+def instant(answer: str) -> dict:
+    """An answer that needs no AI (a fact the knowledge base has exactly): ready at once."""
+    aid = uuid.uuid4().hex[:12]
+    with _lock:
+        _items[aid] = {"id": aid, "status": "done", "answer": answer, "created": time.time(), "finished": time.time()}
+    return {"id": aid, "status": "done", "answer": answer}
+
+
 def get(aid: str) -> dict | None:
     with _lock:
         v = _items.get(aid)

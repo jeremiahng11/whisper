@@ -385,6 +385,10 @@ owners, dates, budgets, terms, and who people are. In the background it reads on
   other fact to treat it the same. The watch model learns the essentials and your pages/research first; meeting facts
   fill the rest (meeting questions are answered online). Find a fact shows the answer when one fact clearly answers
   it, and **Ask Oracle** asks the AI.
+- **Instant answers** (1.16.2): a question that a company essential or a who-is answer clearly matches ("who is
+  Ryan", "who is our CTO") is answered at once from the fact, without the AI. **Watch crash reports**:
+  `POST /api/watch/crash` (the watch sends its last crash after restarting), `GET /api/watch/crashes`; the newest is
+  shown on Account > Watch AI.
 - **The watch's own words** (1.16.1): `GET /api/watch/prompts` (+ `/api/watch/prompts/<name>`) - "Okay.", "Okay,
   recording stopped.", "Marked." in the answers' Piper voice (silence trimmed, IMA ADPCM); the watch (R1.7.9) uses
   them in place of its built-in "Okay.".

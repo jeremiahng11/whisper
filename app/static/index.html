@@ -1390,6 +1390,10 @@ async function loadKb() {
       (m.reworded !== null ? ` and <b>${m.reworded}%</b> asked in other words` : "") + "." : "No watch model yet.";
     if (w.training) t += `<br>Training… ${st.state === "testing" ? "testing it" : `step ${st.step || 0} of ${st.steps || "?"}` + (st.eta_s ? `, about ${dur(st.eta_s)} left` : "")}`;
     else if (st.state === "error") t += `<br>The last training failed: ${esc((st.error || "").slice(-200))}`;
+    try {
+      const cr = (await (await api("/api/watch/crashes")).json()).items || [];
+      if (cr.length) t += `<br><span class="mute">Watch's last crash (${new Date(cr[0].at * 1000).toLocaleString()}): <code style="user-select:all">${esc(cr[0].text)}</code></span>`;
+    } catch (e) {}
     $("#wmNow").innerHTML = t;
     $("#wmTrain").classList.toggle("hidden", w.training); $("#wmStop").classList.toggle("hidden", !w.training);
     $("#wmFile").classList.toggle("hidden", !m);

@@ -1911,6 +1911,8 @@ def test_company_essentials_on_the_watch(client, monkeypatch):
     assert r["answer"]["a"].startswith("Aleta Adventure cards")   # (products / product)
     assert client.get("/api/knowledge", params={"q": "flibbert quasar nebula"}, headers=H).json()["answer"] is None
     n = len(CALLS)
+    r = client.post("/api/ask", json={"prompt": "Who is our CTO?"}, headers=H).json()   # at once, no AI
+    assert r["status"] == "done" and r["answer"].startswith("Jeremiah Ng") and len(CALLS) == n
     core.build()                                             # nothing changed: the AI isn't asked again
     assert len(CALLS) == n and not core.needs_update()
 
@@ -1965,3 +1967,9 @@ def test_watch_prompts_in_the_answer_voice(client, monkeypatch):
     assert w.status_code == 200 and w.content[:4] == b"RIFF"
     assert len(w.content) < 6000 + 2000                       # the half second of lead-in silence is gone (ADPCM ~4x)
     assert client.get("/api/watch/prompts/nope", headers=H).status_code == 404
+
+
+def test_watch_crash_reports(client):
+    assert client.post("/api/watch/crash", json={"fw": "R1.7.10", "text": "R1.7.9 task loopTask pc 0x42001234"}, headers=H).status_code == 200
+    items = client.get("/api/watch/crashes", headers=H).json()["items"]
+    assert items[0]["text"].startswith("R1.7.9 task loopTask")
