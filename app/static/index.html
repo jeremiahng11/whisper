@@ -435,6 +435,7 @@ ul.replies{margin:4px 0;padding-left:20px;font-size:13.5px}
         <div class="sub2">Watch AI (company knowledge)</div>
         <p class="mute" style="margin:0 0 8px">Short facts learned from all your meetings: what was decided, who owns what, dates, budgets, who people are. Ask uses them; the watch gets the most useful ones as offline answers, and its own small AI model is trained on all of them here on this server.</p>
         <div id="kbNow" class="mute">…</div>
+        <div class="row" style="margin-top:8px;gap:10px"><label title="Off: nothing is learned in the background - no facts from new meetings, no company profile, no re-reading of your pages, no research, no watch-model training. The buttons below still work."><input type="checkbox" id="kbAuto"> Learn by itself</label><span class="mute" id="kbAutoMsg"></span></div>
         <div class="row" style="margin-top:8px"><button class="ghost" id="kbLearn">Learn from meetings now</button><input id="kbFind" placeholder="Ask or find… (who is Ryan, what products do we have)" style="flex:1;min-width:220px"><button class="ghost" id="kbAsk">Ask Oracle</button><span class="mute" id="kbMsg"></span></div>
         <div id="kbAnswer" class="hidden" style="margin-top:8px;padding:8px 10px;border:1px solid var(--line,#ddd);border-radius:8px"></div>
         <div id="kbList" style="margin-top:8px;max-height:320px;overflow:auto"></div>
@@ -1378,6 +1379,8 @@ async function loadKb() {
     const k = await (await api("/api/knowledge?limit=300" + (q ? "&q=" + encodeURIComponent(q) : ""))).json();
     const kinds = Object.entries(k.kinds || {}).map(([a, n]) => `${n} ${a}${n > 1 ? "s" : ""}`).join(", ");
     const pack = await (await api("/api/watch/pack")).json();
+    $("#kbAuto").checked = k.auto_learning !== false;
+    $("#kbAutoMsg").textContent = k.auto_learning === false ? "Off - nothing is learned in the background; use the buttons when you want it." : "";
     $("#kbNow").innerHTML = `<b>${k.facts}</b> facts from ${k.meetings_read} meetings${k.sources ? " and " + k.sources + " sources" : ""}${kinds ? " (" + esc(kinds) + ")" : ""}. ` +
       `The watch can answer <b>${pack.count}</b> of them offline.` +
       (k.core ? `<br><b>${k.core}</b> company essentials${k.core_company ? " about " + esc(k.core_company) : ""} are always on the watch and answered on it directly (founder, leaders, products, services; written ${k.core_made ? new Date(k.core_made * 1000).toLocaleString() : "-"}, again when what's known changes). ` +
@@ -1483,6 +1486,11 @@ $("#srcAddNews").onclick = () => { const t = $("#srcNews").value.trim(); if (t) 
 $("#srcAddFile").onclick = () => $("#srcFile").click();
 $("#srcFile").onchange = () => { const f = $("#srcFile").files[0]; if (!f) return; const fd = new FormData(); fd.append("file", f); addSource(fd, true); $("#srcFile").value = ""; };
 $("#srcPaste").onclick = () => { const t = prompt("Paste the text (product info, FAQ, policy…):"); if (t && t.trim()) addSource({ text: t }); };
+$("#kbAuto").onchange = async () => {
+  try { await api("/api/knowledge/auto", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ on: $("#kbAuto").checked }) }); }
+  catch (e) { $("#kbAuto").checked = !$("#kbAuto").checked; }
+  loadKb(); loadSources();
+};
 $("#kbFind").oninput = () => { delete $("#kbAnswer").dataset.asked; clearTimeout(kbTimer); kbTimer = setTimeout(loadKb, 300); };
 async function kbAskOracle() {
   const q = $("#kbFind").value.trim(), ans = $("#kbAnswer");

@@ -543,7 +543,7 @@ def summary() -> dict:
     cd = core.load()
     return {"facts": len(fs), "kinds": kinds, "meetings_read": learned, "sources": len(sources.listing()),
             "core": sum(1 for f in fs if f.get("core")), "core_company": cd.get("company") or core.company(),
-            "core_made": cd.get("made") or 0, "rag": _rag_summary(),
+            "core_made": cd.get("made") or 0, "rag": _rag_summary(), "auto_learning": auto_learning(),
             "asked": len(ak), "asked_linked": sum(1 for a in ak if a.get("fact")), **status}
 
 
@@ -596,6 +596,28 @@ def start_learning(force: bool = False) -> bool:
     return True
 
 
+# ---------------------------------------------------------------- learning by itself: on / off (Account > Watch AI)
+def _auto_path() -> Path:
+    return kdir() / "auto.json"
+
+
+def auto_learning() -> bool:
+    """Off: the server learns nothing by itself - no facts from new meetings, no who-is, no company profile, no
+    re-reading of pages, no research, no watch-model training. The buttons (Learn now, Read again, Research now,
+    Build watch AI) still work. Minutes are still written and search by meaning stays up to date."""
+    try:
+        return bool(json.loads(_auto_path().read_text()).get("on", True))
+    except (OSError, ValueError):
+        return True
+
+
+def set_auto_learning(on: bool) -> None:
+    tmp = _auto_path().with_suffix(".tmp")
+    tmp.write_text(json.dumps({"on": bool(on), "at": time.time()}))
+    tmp.replace(_auto_path())
+    log.info("learning by itself %s", "on" if on else "off")
+
+
 def _sweep() -> None:
     time.sleep(180)
     last_rag = 0.0
@@ -612,7 +634,8 @@ def _sweep() -> None:
         except Exception as e:                      # noqa: BLE001
             log.info("summary retry: %s", e)
         try:
-            if summarize.enabled() and worker.current_job is None and db.next_queued() is None and status["state"] == "idle":
+            if auto_learning() and summarize.enabled() and worker.current_job is None and db.next_queued() is None \
+                    and status["state"] == "idle":
                 busy = False
                 for j in db.list_jobs(200, "done"):  # one new or changed meeting per pass: keep the server free
                     if needs_update(j):

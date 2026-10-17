@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.17.4"
+VERSION = "1.17.5"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -1001,6 +1001,17 @@ def research_go():
     if not summarize.enabled():
         raise HTTPException(400, "SUMMARY_BACKEND is none - no LLM configured")
     return {"started": research.research_now()}
+
+
+@app.put("/api/knowledge/auto", dependencies=[Depends(auth)])
+async def knowledge_auto(request: Request):
+    """{"on": false} - stop learning by itself (facts from new meetings, who-is, company profile, re-reading pages,
+    research, watch-model training); {"on": true} - start again. The buttons still work either way."""
+    d = await body_extra(request)
+    if "on" not in d:
+        raise HTTPException(400, "send {'on': true|false}")
+    knowledge.set_auto_learning(bool(d["on"]))
+    return knowledge.summary()
 
 
 @app.post("/api/knowledge/core", dependencies=[Depends(auth)], status_code=202)

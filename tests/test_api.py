@@ -2115,3 +2115,13 @@ def test_person_not_them(client):
     assert r["removed"] >= 1
     assert not any(x["job"] == ln["job"] and x["i"] == ln["i"] for x in people.their_lines(n))
     assert not any(x["job"] == ln["job"] and x["i"] == ln["i"] for x in client.get(f"/api/people/{n}/samples", headers=H).json()["items"])
+
+
+def test_auto_learning_switch(client):
+    from app import knowledge
+    assert client.get("/api/knowledge", headers=H).json()["auto_learning"] is True
+    r = client.put("/api/knowledge/auto", json={"on": False}, headers=H).json()
+    assert r["auto_learning"] is False and knowledge.auto_learning() is False
+    assert client.put("/api/knowledge/auto", json={}, headers=H).status_code == 400
+    client.put("/api/knowledge/auto", json={"on": True}, headers=H)
+    assert knowledge.auto_learning() is True
