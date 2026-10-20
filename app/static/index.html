@@ -272,6 +272,7 @@ ul.replies{margin:4px 0;padding-left:20px;font-size:13.5px}
           <option value="vi">Vietnamese</option>
         </select>
         <label class="mute">Meeting type</label><select id="tpl"></select>
+        <label class="mute">Minutes in</label><select id="mlang"><option value="">Same as speech</option><option value="en">English</option><option value="zh">中文 Chinese</option><option value="both">Bilingual: meeting language + English</option></select>
         <label class="mute">People</label><input type="number" id="ppl" min="1" max="20" placeholder="auto">
         <input id="att" type="text" placeholder="Attendees, comma separated" class="wide">
         <label class="mute"><input type="checkbox" id="sum" checked> Write minutes</label>
@@ -300,6 +301,7 @@ ul.replies{margin:4px 0;padding-left:20px;font-size:13.5px}
           <div><h2 id="mTitle" title="Click to rename"></h2><div class="mute" id="mMeta"></div></div>
           <div class="mtools noprint">
             <select id="reTpl" title="Meeting type for the new minutes"></select>
+            <select id="reLang" title="Language of the new minutes"><option value="">Same as speech</option><option value="en">English</option><option value="zh">中文 Chinese</option><option value="both">Bilingual (+ English)</option></select>
             <label class="mute" id="reBestLabel"><input type="checkbox" id="reBest"> Best</label>
             <button class="ghost" id="resum" title="Write the minutes again with the current names and meeting type">Redo minutes</button>
             <button class="danger" id="del">Delete</button>
@@ -911,6 +913,7 @@ async function show(id) {
       window.print();
     };
     $("#reTpl").value = j.template || "general"; $("#reBest").checked = !!j.best;
+    $("#reLang").value = ["", "en", "zh", "both"].includes(j.minutes_lang || "") ? (j.minutes_lang || "") : "";
     $("#askBox").classList.remove("hidden"); $("#ansOne").innerHTML = "";
     loadSpeakers(id, true);
   }
@@ -935,7 +938,7 @@ $("#resum").onclick = async () => {
   if (!current) return;
   const id = current;
   await api(`/api/jobs/${id}/summarize`, { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ template: $("#reTpl").value, best: $("#reBest").checked }) });
+    body: JSON.stringify({ template: $("#reTpl").value, best: $("#reBest").checked, minutes_lang: $("#reLang").value }) });
   load(); show(id);
   // names and tags are kept; show them again (with the new minutes) as soon as it's done
   for (let k = 0; k < 400 && id === current; k++) {
@@ -1542,6 +1545,7 @@ function upload(file) {
   if (+$("#ppl").value) q.set("speakers", +$("#ppl").value);
   if ($("#att").value.trim()) q.set("attendees", $("#att").value.trim());
   if ($("#best").checked) q.set("best", "true");
+  if ($("#mlang").value) q.set("minutes_lang", $("#mlang").value);
   const x = new XMLHttpRequest();
   x.open("POST", "/api/jobs?" + q);
   if (KEY) x.setRequestHeader("Authorization", "Bearer " + KEY);

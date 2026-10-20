@@ -385,6 +385,11 @@ owners, dates, budgets, terms, and who people are. In the background it reads on
   other fact to treat it the same. The watch model learns the essentials and your pages/research first; meeting facts
   fill the rest (meeting questions are answered online). Find a fact shows the answer when one fact clearly answers
   it, and **Ask Oracle** asks the AI.
+- **Bilingual minutes** (1.17.6): upload option *Minutes in* (and next to *Redo minutes*): same as speech, English,
+  中文, or *Bilingual* = the meeting's language + English (English meetings get + 中文). The minutes are written in
+  the meeting's language, then translated section by section: `# 中文 (Chinese)` then `# English`, title
+  "中文标题 / English title". API: `minutes_lang=both|en|zh|zh+en` on upload, or `{"minutes_lang": ...}` on
+  `/summarize`. `SUMMARY_LANGUAGE=both` makes it the default. Action items are listed once (first language).
 - **Learn by itself on/off** (1.17.5): Account > Watch AI > *Learn by itself* (`PUT /api/knowledge/auto {"on":
   false}`). Off: nothing is learned in the background (facts from new meetings, who-is, company profile, re-reading
   pages, research, watch-model training); the buttons still work, minutes are still written.

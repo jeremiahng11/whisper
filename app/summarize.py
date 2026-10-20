@@ -597,14 +597,18 @@ Use them to get names, decisions and action items right, and give them priority 
 def summarize(transcript_text: str, language: str, progress: Optional[Callable[[float, str], None]] = None,
               user_notes: str = "", template: str = "general", best: bool = False,
               attendees: Optional[list[str]] = None, glossary: Optional[list[str]] = None,
-              flagged: str = "", meeting_date: str = "", people: str = "") -> tuple[str, str]:
-    """Returns (title, markdown body without the title line)."""
+              flagged: str = "", meeting_date: str = "", people: str = "",
+              minutes_lang: str = "") -> tuple[str, str]:
+    """Returns (title, markdown body without the title line).
+    minutes_lang: "" = SUMMARY_LANGUAGE or the speech language; "en", "zh", ... = that language;
+    "both" = the meeting's language + English (English meetings: + Chinese); "zh+en" = exactly those two."""
     progress = progress or (lambda p, s: None)
     spoken = re.sub(r"\[\d+:\d+(:\d+)?\]|\[[^\]]*\]:?", " ", transcript_text)
     if len(spoken.split()) < 18 and not user_notes.strip():          # a quick test or a few words: no minutes
         first = " ".join(spoken.split()[:8])
         return (first[:60] or "Short recording"), "_Short recording - too little speech for minutes; see the transcript._\n"
-    lang = settings.summary_language or language
+    first, second = minutes_languages(minutes_lang or settings.summary_language, language)
+    lang = first
     lang_line = f"Write the minutes in {lang_name(lang)}.\n\n" if lang else ""
     system = SYSTEM
     if attendees:
@@ -637,7 +641,74 @@ def summarize(transcript_text: str, language: str, progress: Optional[Callable[[
     if flagged.strip():
         prompt += FLAGGED_EXTRA.format(flagged=flagged.strip()[:8000])
     out = chat([sys, {"role": "user", "content": prompt}], best)
-    return split_title(out)
+    title, body = split_title(out)
+    if not second:
+        return title, body
+    progress(0.9, f"translating the minutes into {lang_name(second)}")
+    title2, body2 = translate_minutes(title, body, second, best)
+    both_title = f"{title} / {title2}" if title and title2 and title2 != title else (title or title2)
+    return both_title, f"# {native_name(first)}\n\n{body}\n\n# {native_name(second)}\n\n{body2}"
+
+
+def minutes_languages(want: str, spoken: str) -> tuple[str, str]:
+    """-> (language to write the minutes in, second language to translate them into or "")."""
+    want = (want or "").strip().lower()
+    spoken = (spoken or "").strip().lower()
+    if want in ("both", "bilingual"):
+        first = spoken or "en"
+        return first, ("zh" if first.startswith("en") else "en")
+    if "+" in want:
+        a, b = (x.strip() for x in want.split("+", 1))
+        a = a or spoken or "en"
+        return a, (b if b and b != a else "")
+    return (want or spoken), ""
+
+
+def primary_part(body: str) -> str:
+    """Bilingual minutes ('# 中文 ... # English ...'): only the first language - for the action items."""
+    m = re.match(r"^# [^\n]+\n(.*?)\n# [^\n]+\n", body, re.S)
+    return m.group(1).strip() if m else body
+
+
+TRANSLATE_PROMPT = """Translate these meeting minutes into {lang}.
+- Keep exactly the same Markdown: the "Title:" line first, headings, bullet points, "- [ ]" checkboxes, bold, tables.
+- Keep people's names, company and product names, acronyms (KYC, MAS, API ...), numbers, amounts and dates as
+  they are.{names}
+- Translate everything else fully and naturally, the way a {lang} speaker would write minutes.
+- Reply with ONLY the translated minutes, no notes.
+
+Minutes:
+\"\"\"
+{text}
+\"\"\""""
+
+
+def translate_minutes(title: str, body: str, target: str, best: bool = False) -> tuple[str, str]:
+    """Translate finished minutes, section by section when they are long. -> (title, body)."""
+    sections, cur = [], ""
+    for block in re.split(r"(?m)^(?=## )", body):
+        if cur and len(cur) + len(block) > 3500:
+            sections.append(cur)
+            cur = ""
+        cur += block
+    if cur.strip():
+        sections.append(cur)
+    sys = {"role": "system", "content": "You are a careful professional translator of business meeting minutes."}
+    out_title, parts = "", []
+    for i, sec in enumerate(sections or [""]):
+        text = (f"Title: {title}\n\n" if i == 0 and title else "") + sec.strip()
+        if not text.strip():
+            continue
+        done = strip_thinking(chat([sys, {"role": "user", "content": TRANSLATE_PROMPT.format(
+            lang=lang_name(target), text=text, names="" if target.startswith("zh") or target == "yue" else
+            "\n- Names in Chinese characters: keep them and add the romanised name once, e.g. 陈伟 (Chen Wei).")}], best))
+        if i == 0 and title:
+            t, b = split_title(done)
+            out_title, done = t, b if t else done
+        else:
+            done = split_title(done)[1]
+        parts.append(done.strip())
+    return out_title, "\n\n".join(parts)
 
 
 FLAGGED_EXTRA = """
@@ -731,6 +802,15 @@ _LANGS = {
     "es": "Spanish", "pt": "Portuguese", "it": "Italian", "nl": "Dutch", "ru": "Russian", "ar": "Arabic",
     "tl": "Tagalog", "yue": "Cantonese",
 }
+
+
+_NATIVE = {"en": "English", "zh": "中文", "ms": "Bahasa Melayu", "ta": "தமிழ்", "id": "Bahasa Indonesia",
+           "ja": "日本語", "ko": "한국어", "th": "ภาษาไทย", "vi": "Tiếng Việt", "yue": "粵語"}
+
+
+def native_name(code: str) -> str:
+    n = _NATIVE.get((code or "").lower())
+    return f"{n} ({lang_name(code)})" if n and n != lang_name(code) else lang_name(code)
 
 
 def lang_name(code: str) -> str:

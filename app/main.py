@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.17.5"
+VERSION = "1.17.6"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -98,6 +98,7 @@ def job_out(j: dict) -> dict:
         "finished_at": j["finished_at"],
         "template": (j.get("options") or {}).get("template", "general"),
         "best": bool((j.get("options") or {}).get("best")),
+        "minutes_lang": (j.get("options") or {}).get("minutes_lang", ""),
         "speakers": (j.get("options") or {}).get("speakers"),
         "speaker_names": (j.get("options") or {}).get("speaker_names") or {},
         "speaker_auto": (j.get("options") or {}).get("speaker_auto") or [],
@@ -115,7 +116,8 @@ def job_out(j: dict) -> dict:
 
 def options(language: Optional[str], summarize_: bool, diarize: Optional[bool], title: Optional[str],
             template: Optional[str] = None, speakers: Optional[int] = None, best: Optional[bool] = None,
-            redact_: Optional[bool] = None, attendees: Optional[str] = None) -> dict:
+            redact_: Optional[bool] = None, attendees: Optional[str] = None,
+            minutes_lang: Optional[str] = None) -> dict:
     o = {"summarize": summarize_, "diarize": settings.diarize if diarize is None else diarize,
          "redact": settings.redact if redact_ is None else redact_}
     if language and language.lower() != "auto":
@@ -134,7 +136,19 @@ def options(language: Optional[str], summarize_: bool, diarize: Optional[bool], 
         o["best"] = True
     if attendees:
         o["attendees"] = [a.strip()[:60] for a in attendees.split(",") if a.strip()][:30]
+    if minutes_lang:
+        o["minutes_lang"] = check_minutes_lang(minutes_lang)
     return o
+
+
+def check_minutes_lang(v: str) -> str:
+    """"" / "auto" = same as speech, "en", "zh", "both" (meeting language + English), "zh+en"."""
+    v = str(v or "").strip().lower()
+    if v in ("", "auto", "same"):
+        return ""
+    if v in ("both", "bilingual") or re.fullmatch(r"[a-z]{2,3}(\+[a-z]{2,3})?", v):
+        return "both" if v == "bilingual" else v
+    raise HTTPException(400, "minutes_lang must be empty, a language code like en / zh, both, or zh+en")
 
 
 def apply_extra(o: dict, extra: dict) -> dict:
@@ -204,6 +218,7 @@ async def create_job(
     best: Optional[bool] = Query(None, description="best-quality minutes (bigger model, slower)"),
     redact_: Optional[bool] = Query(None, alias="redact"),
     attendees: Optional[str] = Query(None, description="comma separated names"),
+    minutes_lang: Optional[str] = Query(None, description="minutes in: en, zh, both (meeting language + English), zh+en"),
     x_recording_id: Optional[str] = Header(None, description="your own id; re-uploads return the same job"),
     x_filename: Optional[str] = Header(None),
 ):
@@ -226,7 +241,7 @@ async def create_job(
                 raise HTTPException(413, f"upload bigger than MAX_UPLOAD_MB={settings.max_upload_mb}")
         else:
             await save_body(request, tmp)
-        opts = options(language, summarize_, diarize, title, template, speakers, best, redact_, attendees)
+        opts = options(language, summarize_, diarize, title, template, speakers, best, redact_, attendees, minutes_lang)
         return job_out(new_job(tmp, filename, opts, rid, priority))
     finally:
         tmp.unlink(missing_ok=True)
@@ -303,6 +318,7 @@ async def upload_complete(
     best: Optional[bool] = Query(None),
     redact_: Optional[bool] = Query(None, alias="redact"),
     attendees: Optional[str] = Query(None),
+    minutes_lang: Optional[str] = Query(None, description="minutes in: en, zh, both (meeting language + English), zh+en"),
     x_total_size: Optional[int] = Header(None, description="optional: full file size, checked before queueing"),
 ):
     check_id(rid)
@@ -314,7 +330,7 @@ async def upload_complete(
         raise HTTPException(404, "nothing uploaded for this recording id")
     if x_total_size is not None and p.stat().st_size != x_total_size:
         return JSONResponse({"recording_id": rid, "received": p.stat().st_size, "error": "size mismatch"}, status_code=409)
-    opts = apply_extra(options(language, summarize_, diarize, title, template, speakers, best, redact_, attendees), extra)
+    opts = apply_extra(options(language, summarize_, diarize, title, template, speakers, best, redact_, attendees, minutes_lang), extra)
     return job_out(new_job(p, safe_name(filename or rid), opts, rid, priority))
 
 
@@ -461,6 +477,12 @@ async def resummarize(jid: str, request: Request):
         opts["template"] = extra["template"]
     if "best" in extra:
         opts["best"] = bool(extra["best"])
+    if "minutes_lang" in extra:
+        ml = check_minutes_lang(extra["minutes_lang"])
+        if ml:
+            opts["minutes_lang"] = ml
+        else:
+            opts.pop("minutes_lang", None)
     db.update(jid, status="queued", stage="summary queued", progress=0, options=opts)
     worker.wake()
     return job_out(db.get(jid))

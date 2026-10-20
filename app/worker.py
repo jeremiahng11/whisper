@@ -168,6 +168,7 @@ def run_summary(jid: str) -> None:
             flagged=render.flagged_text(named, render.parse_marks(opts.get("notes", ""))),
             meeting_date=meeting_date(job),
             people=people.context_for(sorted(set(names.values()))),
+            minutes_lang=opts.get("minutes_lang", ""),
         )
         _write(jid, "summary.md", body)
         opts = db.get(jid).get("options", {})
@@ -175,7 +176,7 @@ def run_summary(jid: str) -> None:
         opts["summary_title"] = title                       # what the minutes called it (your own title wins)
         db.update(jid, title=opts.get("title") or title, summary_error="", options=opts)
         db.update(jid, stage="listing action items")
-        acts = summarize.extract_actions(body, meeting_date(job), best)
+        acts = summarize.extract_actions(summarize.primary_part(body), meeting_date(job), best)
         _write(jid, "actions_raw.json", json.dumps(acts, ensure_ascii=False, indent=1))
     except Exception as e:
         log.warning("summary failed for %s: %s", jid, e)

@@ -2125,3 +2125,29 @@ def test_auto_learning_switch(client):
     assert client.put("/api/knowledge/auto", json={}, headers=H).status_code == 400
     client.put("/api/knowledge/auto", json={"on": True}, headers=H)
     assert knowledge.auto_learning() is True
+
+
+def test_bilingual_minutes(client):
+    assert summarize.minutes_languages("both", "zh") == ("zh", "en")
+    assert summarize.minutes_languages("both", "en") == ("en", "zh")
+    assert summarize.minutes_languages("zh+en", "en") == ("zh", "en")
+    assert summarize.minutes_languages("en", "zh") == ("en", "")
+    assert summarize.minutes_languages("", "zh") == ("zh", "")
+    assert client.post("/api/jobs?minutes_lang=klingon!", content=wav_bytes(3), headers=H).status_code == 400
+    CALLS.clear()
+    r = client.post("/api/jobs?minutes_lang=both&language=zh", content=wav_bytes(20), headers=H)
+    j = wait(client, r.json()["id"])
+    assert j["status"] == "done" and j["minutes_lang"] == "both"
+    assert any(c.startswith("Write the minutes in Chinese") or "Write the minutes in Chinese" in c for c in CALLS)
+    tr = [c for c in CALLS if c.startswith("Translate these meeting minutes into English")]
+    assert tr and "Title:" in tr[0]
+    md = client.get(f"/api/jobs/{j['id']}/summary.md", headers=H).text
+    assert "# 中文 (Chinese)" in md and "# English" in md
+    # action items come from the first language only (not listed twice)
+    acts = [c for c in CALLS if "as JSON" in c]
+    assert acts and "# English" not in acts[-1]
+    # redo in English only
+    r = client.post(f"/api/jobs/{j['id']}/summarize", json={"minutes_lang": "en"}, headers=H)
+    j = wait(client, j["id"])
+    assert j["minutes_lang"] == "en"
+    assert "# English" not in client.get(f"/api/jobs/{j['id']}/summary.md", headers=H).text
