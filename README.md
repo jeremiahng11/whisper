@@ -385,6 +385,11 @@ owners, dates, budgets, terms, and who people are. In the background it reads on
   other fact to treat it the same. The watch model learns the essentials and your pages/research first; meeting facts
   fill the rest (meeting questions are answered online). Find a fact shows the answer when one fact clearly answers
   it, and **Ask Oracle** asks the AI.
+- **Live view** (1.18.0): a recording streaming in from a watch shows at the top of the Recordings list: device,
+  when it started, how much audio has arrived, when the last audio came ("waiting for the watch" after 30 s), how far
+  the live transcript is, and the transcript itself, growing as parts are ready. `GET /api/live`. Live parts are
+  transcribed every `LIVE_MIN_NEW_S` (now 20 s of new audio, was 240), holding back the last `LIVE_HOLD_S` (8 s, was
+  20) for a sentence that may go on, and only the new stretch of the recording is read (not the whole file again).
 - **Bilingual minutes** (1.17.6): upload option *Minutes in* (and next to *Redo minutes*): same as speech, English,
   中文, or *Bilingual* = the meeting's language + English (English meetings get + 中文). The minutes are written in
   the meeting's language, then translated section by section: `# 中文 (Chinese)` then `# English`, title

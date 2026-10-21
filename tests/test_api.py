@@ -453,6 +453,7 @@ def test_ask_meeting_search_email_docx(client):
 def test_live_upload_transcribes_while_recording(client, monkeypatch):
     from app import worker
     monkeypatch.setattr(settings, "live_min_new_s", 5)
+    monkeypatch.setattr(settings, "live_hold_s", 20)
     rid = "dev1-live"
     data = bytearray(wav_bytes(60))
     data[4:8] = b"\0\0\0\0"; data[40:44] = b"\0\0\0\0"             # header of a WAV still being recorded
@@ -466,6 +467,11 @@ def test_live_upload_transcribes_while_recording(client, monkeypatch):
         time.sleep(0.05)
     import json as _j
     assert _j.loads(st.read_text())["until"] == 15
+    # the page sees it streaming in, with the transcript so far
+    lv = client.get("/api/live", headers=H).json()["live"]
+    one = [x for x in lv if x["rid"] == rid][0]
+    assert one["receiving"] and abs(one["received_s"] - 40) < 0.1 and one["transcribed_s"] == 15
+    assert one["segments"] and one["segments"][0]["text"]
     client.put(f"/api/uploads/{rid}", content=bytes(data[first:]), headers={**H, "X-Offset": str(first), "X-Live": "1"})
     r = client.post(f"/api/uploads/{rid}/complete?filename=2026-10-09_1100.wav", headers={**H, "X-Total-Size": str(len(data))})
     j = wait(client, r.json()["id"])

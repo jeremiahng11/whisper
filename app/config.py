@@ -95,7 +95,8 @@ class Settings:
     redact: bool = _bool("REDACT", True)          # hide NRIC/FIN, card and bank account numbers in transcripts
 
     # --- live upload (device uploads while it records; transcribed in parts) ---
-    live_min_new_s: int = _int("LIVE_MIN_NEW_S", 240)     # transcribe a part once this much new audio arrived
+    live_min_new_s: int = _int("LIVE_MIN_NEW_S", 20)      # transcribe a part once this much new audio arrived
+    live_hold_s: int = _int("LIVE_HOLD_S", 8)             # the last seconds wait for the next part (a sentence may go on)
 
     # --- voice (round Idea Saver): text-to-speech ---
     tts_backend: str = os.getenv("TTS", "piper").lower()          # piper | none

@@ -1,5 +1,6 @@
 """Background worker: takes queued jobs one at a time -> transcribe -> summarise -> save results."""
 import json
+import re
 import logging
 import os
 import shutil
@@ -259,7 +260,7 @@ def live_pass() -> bool:
         live_info.clear()
         live_info.update(rid=rid, until=float(state.get("until", 0)), received=wav_seconds(part))
         try:
-            did = transcribe.partial(str(part), state, voices.whisper_prompt())
+            did = transcribe.partial(str(part), state, voices.whisper_prompt(), dur=live_info["received"])
         except Exception as e:
             log.warning("live part for %s failed: %s", rid, e)
             did = False
@@ -272,6 +273,37 @@ def live_pass() -> bool:
                 os.replace(tmp, st_path)
                 return True
     return False
+
+
+def live_now() -> list[dict]:
+    """Recordings streaming in from a watch right now (for the page): how much arrived, when the last audio came,
+    how far the live transcript is, and the transcript so far."""
+    out = []
+    now = time.time()
+    for st_path in settings.upload_dir.glob("*.live.json"):
+        rid = st_path.name[:-len(".live.json")]
+        part = settings.upload_dir / f"{rid}.part"
+        if not part.exists():
+            continue
+        age = now - part.stat().st_mtime
+        if age > 3 * 3600:
+            continue
+        try:
+            state = json.loads(st_path.read_text())
+        except ValueError:
+            state = {}
+        m = re.match(r"^(.*?)-((?:memo_|dict_)?\d{4}-\d{2}-\d{2}_\d{4})$", rid)
+        segs = state.get("segments") or []
+        out.append({
+            "rid": rid, "device": m.group(1) if m else rid, "name": m.group(2) if m else "",
+            "started": st_path.stat().st_ctime, "received_s": round(wav_seconds(part), 1),
+            "last_audio_s_ago": round(age, 1), "receiving": age < 30,
+            "transcribed_s": float(state.get("until", 0)), "language": state.get("language", ""),
+            "transcribing": current_job == f"live:{rid}",
+            "segments": [{"start": round(s.get("start", 0), 1), "text": (s.get("text") or "").strip()} for s in segs[-300:]],
+        })
+    out.sort(key=lambda x: x["started"])
+    return out
 
 
 def cleanup() -> None:

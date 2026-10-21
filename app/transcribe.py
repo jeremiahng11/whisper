@@ -276,17 +276,21 @@ def transcribe(path: str, language: Optional[str], progress: ProgressFn, diarize
     return tr
 
 
-def partial(path: str, state: dict, prompt: str = "", max_part_s: int = 600) -> bool:
-    """Live upload: transcribe audio that arrived since the last part, leaving the last ~20 s for later
-    (a sentence may still be going on). Updates `state` in place; returns True if anything was done."""
-    audio = load_audio(path)
-    dur = len(audio) / SR
+def partial(path: str, state: dict, prompt: str = "", max_part_s: int = 600, dur: Optional[float] = None) -> bool:
+    """Live upload: transcribe audio that arrived since the last part, leaving the last few seconds (LIVE_HOLD_S) for
+    later (a sentence may still be going on). Updates `state` in place; returns True if anything was done.
+    `dur` (the length so far, from the file size): only the new stretch is read, not the whole recording again."""
     until = float(state.get("until", 0))
-    cut = min(dur - 20, until + max_part_s)
+    if dur is None:
+        audio = load_audio(path)
+        dur = len(audio) / SR
+    else:
+        audio = None
+    cut = min(dur - settings.live_hold_s, until + max_part_s)
     if cut - until < min(settings.live_min_new_s, max_part_s):
         return False
-    segs, lang, _ = _run(audio[int(until * SR):int(cut * SR)], until, state.get("language") or None, prompt,
-                         lambda p, s: None, 0)
+    piece = audio[int(until * SR):int(cut * SR)] if audio is not None else load_range(path, until, cut)
+    segs, lang, _ = _run(piece, until, state.get("language") or None, prompt, lambda p, s: None, 0)
     keep = [s for s in segs if s.end <= cut - 3]
     if segs and not keep:                           # one very long segment that started well before the cut
         keep = [s for s in segs if s.start < cut - 30]

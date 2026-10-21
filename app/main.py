@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.17.6"
+VERSION = "1.18.0"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -1763,6 +1763,12 @@ def storage_kind(mountinfo: Optional[str] = None) -> str:
     if re.search(r"/volumes/[0-9a-f]{64}/_data", best[0]):
         return "temporary"                           # anonymous volume (64-hex name)
     return "persistent"
+
+
+@app.get("/api/live", dependencies=[Depends(auth)])
+def live_now():
+    """Recordings streaming in from a watch right now, with the live transcript so far."""
+    return {"live": worker.live_now()}
 
 
 @app.get("/api/health")

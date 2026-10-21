@@ -40,6 +40,17 @@ label.mute{display:inline-flex;gap:6px;align-items:center}
 
 /* shell: sidebar + workspace */
 .app{display:grid;grid-template-columns:320px 1fr;min-height:100%}
+.live{margin:8px 12px;border:1px solid var(--rule);border-left:4px solid var(--warn);border-radius:10px;background:var(--sunk);padding:10px 12px}
+.live .lh{display:flex;align-items:center;gap:8px;font-weight:600}
+.live .dot{width:10px;height:10px;border-radius:50%;background:var(--warn);animation:pulse 1.2s ease-in-out infinite}
+.live .dot.idle{background:var(--mute);animation:none}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.35;transform:scale(.8)}}
+.live .lm{font-size:12.5px;color:var(--mute);margin-top:3px}
+.live .lbar{height:5px;background:var(--chip);border-radius:3px;margin-top:7px;overflow:hidden;position:relative}
+.live .lbar i{position:absolute;inset:0 auto 0 0;background:var(--ok);border-radius:3px}
+.live .lt{margin-top:8px;max-height:220px;overflow:auto;font-size:13px;line-height:1.45}
+.live .lt p{margin:0 0 4px}.live .lt .ts{color:var(--mute);font-variant-numeric:tabular-nums;margin-right:6px}
+.live .lt .wait{color:var(--mute);font-style:italic}
 .side{background:var(--surface);border-right:1px solid var(--rule);display:flex;flex-direction:column;height:100vh;position:sticky;top:0}
 .brand{padding:18px 18px 10px}
 .brand h1{font-size:17px;margin:0;letter-spacing:-.01em;display:flex;align-items:center;gap:9px}
@@ -281,6 +292,7 @@ ul.replies{margin:4px 0;padding-left:20px;font-size:13.5px}
       </div>
     </details>
     <div id="up" class="hidden"><div class="mute" id="upText"></div><div class="bar"><i id="upBar"></i></div></div>
+    <div id="livePanel"></div>
     <div class="listhead"><strong>Recordings</strong><button class="ghost" id="refresh">Refresh</button></div>
     <div class="find"><input id="jobFind" type="search" placeholder="Find a recording" aria-label="Find a recording"></div>
     <div class="jobs"><table><thead><tr><th>Recording</th></tr></thead><tbody id="jobs"></tbody></table></div>
@@ -1624,6 +1636,49 @@ $("#fdel").onclick = async () => {
 
 health();
 setInterval(() => { load(); health(); }, 4000);
+
+// ---------------------------------------------------------------- live: recordings streaming in from a watch
+const liveSeen = {};                                   // rid -> segments shown (only new lines are added)
+async function pollLive() {
+  if (!KEY && !SESSION.user) return;
+  let data;
+  try { data = await (await api("/api/live")).json(); } catch (e) { return; }
+  const box = $("#livePanel"), live = data.live || [];
+  for (const el of [...box.children]) if (!live.some(l => "live-" + l.rid === el.id)) { el.remove(); delete liveSeen[el.dataset.rid]; load(); }
+  for (const l of live) {
+    let el = document.getElementById("live-" + l.rid);
+    if (!el) {
+      el = document.createElement("div");
+      el.className = "live"; el.id = "live-" + l.rid; el.dataset.rid = l.rid;
+      el.innerHTML = `<div class="lh"><span class="dot"></span><span class="ln"></span></div><div class="lm"></div>
+        <div class="lbar" title="transcribed / received"><i></i></div><div class="lt"></div>`;
+      box.append(el);
+      liveSeen[l.rid] = 0;
+    }
+    const started = new Date(l.started * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    el.querySelector(".dot").classList.toggle("idle", !l.receiving);
+    el.querySelector(".ln").textContent = `${l.receiving ? "Live" : "Paused"} · ${l.device} · since ${started}`;
+    const behind = Math.max(0, l.received_s - l.transcribed_s);
+    el.querySelector(".lm").textContent = `${mmss(l.received_s)} received · last audio ${l.last_audio_s_ago < 5 ? "just now" : Math.round(l.last_audio_s_ago) + " s ago"} · `
+      + (l.transcribing ? "transcribing now…" : `transcribed to ${mmss(l.transcribed_s)}${behind > 1 ? ` (${Math.round(behind)} s behind)` : ""}`)
+      + (l.receiving ? "" : " · waiting for the watch");
+    el.querySelector(".lbar i").style.width = (l.received_s ? Math.min(100, 100 * l.transcribed_s / l.received_s) : 0) + "%";
+    const lt = el.querySelector(".lt"), atEnd = lt.scrollHeight - lt.scrollTop - lt.clientHeight < 30;
+    const segs = l.segments || [];
+    if (segs.length < liveSeen[l.rid]) { lt.innerHTML = ""; liveSeen[l.rid] = 0; }
+    lt.querySelector(".wait")?.remove();
+    for (const s of segs.slice(liveSeen[l.rid])) {
+      const p = document.createElement("p");
+      p.innerHTML = `<span class="ts">${mmss(s.start)}</span>${esc(s.text)}`;
+      lt.append(p);
+    }
+    liveSeen[l.rid] = segs.length;
+    if (!segs.length) lt.insertAdjacentHTML("beforeend", `<p class="wait">The first words appear here about 30 s after the recording starts.</p>`);
+    if (atEnd) lt.scrollTop = lt.scrollHeight;
+  }
+}
+setInterval(pollLive, 3000);
+pollLive();
 </script>
 </body>
 </html>
