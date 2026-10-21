@@ -252,6 +252,9 @@ def tts_voices() -> dict:
     return out
 
 
+tts_error = ""          # why the last ElevenLabs call failed ("" = fine) - shown in /api/health
+
+
 def eleven_on() -> bool:
     return bool(settings.elevenlabs_key and settings.elevenlabs_voice) and settings.tts_backend != "none"
 
@@ -275,12 +278,38 @@ def _eleven(text: str) -> bytes:
     if p.exists():
         os.utime(p)
         return p.read_bytes()
-    req = urllib.request.Request(
-        f"https://api.elevenlabs.io/v1/text-to-speech/{settings.elevenlabs_voice}?output_format=pcm_16000",
-        data=_json.dumps({"text": text, "model_id": settings.elevenlabs_model}).encode(),
-        headers={"xi-api-key": settings.elevenlabs_key, "Content-Type": "application/json", "Accept": "audio/pcm"})
-    with urllib.request.urlopen(req, timeout=60) as r:
-        pcm = r.read()
+    import urllib.error
+    global tts_error
+
+    def call(model: str) -> bytes:
+        req = urllib.request.Request(
+            f"https://api.elevenlabs.io/v1/text-to-speech/{settings.elevenlabs_voice.strip()}?output_format=pcm_16000",
+            data=_json.dumps({"text": text, "model_id": model}).encode(),
+            # (a browser-like agent: Python's default one can be turned away by the API's firewall)
+            headers={"xi-api-key": settings.elevenlabs_key.strip(), "Content-Type": "application/json",
+                     "Accept": "audio/pcm, */*", "User-Agent": "OracleMinutes/1.23 (+https://github.com/jeremiahng11/whisper)"})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return r.read()
+    model = settings.elevenlabs_model.strip() or "eleven_multilingual_v2"
+    try:
+        pcm = call(model)
+    except urllib.error.HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode(errors="replace")[:300]
+        except Exception:                           # noqa: BLE001
+            pass
+        tts_error = f"ElevenLabs HTTP {e.code}: {body}"
+        log.warning("%s", tts_error)
+        # a model this account / voice can't use: try the standard one before giving up
+        if e.code in (400, 404, 422) and model != "eleven_multilingual_v2" and "model" in body.lower():
+            pcm = call("eleven_multilingual_v2")
+        else:
+            raise RuntimeError(tts_error) from e
+    except Exception as e:                          # noqa: BLE001 - no internet etc.
+        tts_error = f"ElevenLabs: {str(e)[:200]}"
+        raise
+    tts_error = ""
     if len(pcm) < 320:
         raise RuntimeError("ElevenLabs returned no audio")
     tmp = p.with_suffix(".tmp")

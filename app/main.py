@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.23.0"
+VERSION = "1.23.1"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -2016,6 +2016,7 @@ def health():
         "speaker_separation": ("error: " + transcribe.diarize_error) if transcribe.diarize_error else "ok",
         "speaker_libs": transcribe.lib_versions(),
         "tts": speech.tts_available(),
+        "tts_error": speech.tts_error,
         "tts_voice": ("ElevenLabs " + settings.elevenlabs_model) if speech.eleven_on() else
                      ("Piper " + str(speech.tts_voices().get("en", ""))) if speech.tts_available() else "",
         "jobs": db.counts(),

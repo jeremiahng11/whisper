@@ -2441,3 +2441,30 @@ def test_watch_everyday_questions(client, monkeypatch):
     assert "WEB(Who won the football match yesterday?|True)" in SYSTEMS[-1]
     h = client.get("/api/health").json()
     assert "tts_voice" in h
+
+
+def test_elevenlabs_error_shown_and_model_fallback(monkeypatch, tmp_path):
+    import io as _io, urllib.request, urllib.error
+    from app import speech
+    monkeypatch.setattr(settings, "elevenlabs_key", "k")
+    monkeypatch.setattr(settings, "elevenlabs_voice", "v2voice")
+    monkeypatch.setattr(settings, "elevenlabs_model", "eleven_v9")
+    seen = []
+
+    class R:
+        def __init__(self, b): self.b = b
+        def read(self): return self.b
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    def fake(req, timeout=0):
+        import json as _j
+        m = _j.loads(req.data)["model_id"]
+        seen.append(m)
+        assert "OracleMinutes" in req.headers["User-agent"]
+        if m == "eleven_v9":
+            raise urllib.error.HTTPError(req.full_url, 400, "bad", {}, _io.BytesIO(b'{"detail":"model not found"}'))
+        return R(b"\x00\x01" * 8000)
+    monkeypatch.setattr(urllib.request, "urlopen", fake)
+    speech.tts("A brand new sentence for the fallback test.")
+    assert seen == ["eleven_v9", "eleven_multilingual_v2"] and speech.tts_error == ""
