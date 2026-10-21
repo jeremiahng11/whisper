@@ -280,9 +280,18 @@ def rebuild() -> list[dict]:
             merged.setdefault(_norm(f["q"]), f)
         for f in _people_facts():
             merged.setdefault(_norm(f["q"]), f)
+        from . import watchfacts                    # more ways to ask: people's words, last meeting, your tasks...
+        for f in watchfacts.derived():
+            merged.setdefault(_norm(f["q"]), f)
         from . import core                          # the company profile (core.py): wins for the same question
         for f in core.core_facts():
             merged[_norm(f["q"])] = f
+        try:
+            from . import research
+            d = research.load()
+            watchfacts.company_alts(list(merged.values()), (d.get("topics") or d.get("found") or [""])[0])
+        except Exception as e:                      # noqa: BLE001
+            log.warning("company questions: %s", e)
         ov = overrides()
         byq = _asked_by_fact()
         out = []
@@ -620,8 +629,14 @@ def set_auto_learning(on: bool) -> None:
 
 def _sweep() -> None:
     time.sleep(180)
-    last_rag = 0.0
+    last_rag = last_rebuild = 0.0
     while True:
+        try:                                        # the watch's questions about people / your last meetings / your
+            if time.time() - last_rebuild > 3 * 3600:   # tasks: kept fresh (they're made from the latest meetings)
+                last_rebuild = time.time()
+                rebuild()
+        except Exception as e:                      # noqa: BLE001
+            log.info("rebuild: %s", e)
         try:
             from . import rag                       # find by meaning: embed what's new (no AI chat needed)
             if rag.enabled() and time.time() - last_rag > 300:

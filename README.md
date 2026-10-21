@@ -385,6 +385,13 @@ owners, dates, budgets, terms, and who people are. In the background it reads on
   other fact to treat it the same. The watch model learns the essentials and your pages/research first; meeting facts
   fill the rest (meeting questions are answered online). Find a fact shows the answer when one fact clearly answers
   it, and **Ask Oracle** asks the AI.
+- **More offline questions for the watch** (1.21.0): the knowledge base also makes, for each person: "what is
+  Priscilla's favourite word" (the phrases and words they use most), "what does Priscilla usually talk about",
+  "when did I last meet Priscilla", "how much does Priscilla talk", "what is Priscilla working on" (their action
+  items); and from your meetings: "what was the last meeting about", "what did we decide in the last meeting",
+  "what are my action items", "how many meetings did I have this week". "What is <company> about / what does it do"
+  ask the company profile's answer. Refreshed every 3 hours. The watch pack takes up to 400 questions; at most 400
+  spoken phrases in all (the watch's speech engine limit), later questions with one wording each.
 - **Watches: logs, status, updates over WiFi, Opus audio** (1.20.0):
   - `POST /api/devices/{id}/log` (text lines, state in `X-Status` JSON: battery, WiFi dBm, memory, storage, recording,
     audio format) every minute; `GET /api/devices`, `GET|DELETE /api/devices/{id}/log?lines=`. The **Watches** page

@@ -2353,3 +2353,28 @@ def test_bilingual_minutes(client):
     j = wait(client, j["id"])
     assert j["minutes_lang"] == "en"
     assert "# English" not in client.get(f"/api/jobs/{j['id']}/summary.md", headers=H).text
+
+
+def test_watch_facts_people_and_pack_size(monkeypatch):
+    from app import people, watchfacts, watchpack, knowledge
+    prof = {"name": "Priscilla Tan", "language": {"phrases": ["make sense", "by friday"], "words": ["vendor", "budget", "timeline"],
+                                                    "terms": ["Coolify"], "pace": "steady", "pace_wpm": 150, "questions": 20},
+            "note": "### Usually raises and owns\n- Vendor contracts\n- The Q4 budget\n\n### How they communicate\n- Direct",
+            "meetings": [{"id": "x", "title": "Budget review", "when": time.time() - 86400, "seconds": 300}],
+            "talk_seconds": 900}
+    monkeypatch.setattr(people, "all_names", lambda: ["Priscilla Tan"])
+    monkeypatch.setattr(people, "get", lambda n: prof)
+    fs = watchfacts.people_facts()
+    qs = {f["q"]: f for f in fs}
+    assert '"make sense"' in qs["What is Priscilla Tan's favourite word"]["a"]
+    assert "Vendor contracts" in qs["What does Priscilla Tan usually talk about"]["a"]
+    assert "Budget review" in qs["When did I last meet Priscilla Tan"]["a"]
+    assert "15 minutes" in qs["How much does Priscilla Tan talk"]["a"]
+    assert watchpack.phrase("What is Priscilla Tan's favourite word") == "what is priscilla tan s favourite word"
+    # a big pack never gives the watch more than 400 phrases
+    many = [{"id": f"{i:08x}", "q": f"What is product number {i}", "a": "x", "alts": [f"Tell me about product {i}", f"Product {i} please"],
+             "kind": "fact"} for i in range(500)]
+    monkeypatch.setattr(knowledge, "facts", lambda: many)
+    p = watchpack.build(300, True)
+    total = sum(len(it["say"]) for it in p["items"]) + sum(len(it["say"]) for it in p.get("extra", []))
+    assert p["count"] >= 250 and total <= 400

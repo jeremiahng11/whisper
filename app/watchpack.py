@@ -42,7 +42,7 @@ def phrase(q: str) -> str:
     return " ".join(words)
 
 
-MAX_PHRASES = 300                                   # what MultiNet7 takes in all
+MAX_PHRASES = 400                                   # what MultiNet7 takes in all (ESP_MN_MAX_PHRASE_NUM)
 
 
 # ---------------------------------------------------------------- spoken answers (read out offline)
@@ -91,7 +91,7 @@ def build(limit: int = MAX_ITEMS, extra: bool = False) -> dict:
     cid = {f["id"] for f in core}
     often = sorted((f for f in facts if f.get("asked") and f["id"] not in cid), key=lambda f: -f["asked"])
     oid = cid | {f["id"] for f in often}
-    people = [f for f in facts if f.get("kind") == "person" and f["id"] not in oid][: limit // 4]
+    people = [f for f in facts if f.get("kind") == "person" and f["id"] not in oid][: max(limit // 4, limit * 2 // 5 if limit > 150 else 0)]
     pid = oid | {f["id"] for f in people}
     rest = sorted((f for f in facts if f["id"] not in pid),
                   key=lambda f: (not f.get("job"), f.get("date") or ""), reverse=True)
@@ -103,6 +103,11 @@ def build(limit: int = MAX_ITEMS, extra: bool = False) -> dict:
         say = [p for p in dict.fromkeys(phrase(x) for x in [f["q"]] + (f.get("alts") or [])) if p and p not in seen]
         if not say:
             continue
+        used = sum(len(it["say"]) for it in items)
+        if used >= MAX_PHRASES:                     # the watch's speech engine takes 400 phrases in all
+            break
+        if used + 3 > MAX_PHRASES or (len(items) > limit // 2 and not f.get("core")):
+            say = say[:1]                           # a big pack: one way of asking for the later questions
         seen.update(say[:2])
         items.append({"id": f["id"], "q": f["q"], "say": say[:3 if f.get("core") else 2], "a": f["a"][:240],
                       "kind": f.get("kind", "fact"), "date": f.get("date") or ""})
