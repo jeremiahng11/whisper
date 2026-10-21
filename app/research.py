@@ -227,7 +227,7 @@ def research_question(q: str) -> dict:
     from . import sources
     name = company_name()
     words = knowledge._words(q)
-    search = q if not name or knowledge._words(name) & words else f"{name} {q}"
+    search = q if plain or not name or knowledge._words(name) & words else f"{name} {q}"   # (plain: about the world)
     m = sources.add("research", title=f"Asked: {q[:70]}", url=search)
     m.update(question=q, once=True, must=" ".join(sorted(words)), need=max(1, len(words) // 3))
     sources._save(m)
@@ -295,7 +295,7 @@ def summary() -> dict:
 
 
 # ---------------------------------------------------------------- a quick look on the web while you wait (Ask)
-def live_context(q: str, limit: int = 2500) -> str:
+def live_context(q: str, limit: int = 2500, plain: bool = False) -> str:
     """Ask, when the knowledge base knows nothing about the question: the top web and news results for it (titles
     and snippets, a few seconds) so the answer isn't from the AI's old general knowledge alone."""
     if not settings.research_live:
@@ -305,7 +305,7 @@ def live_context(q: str, limit: int = 2500) -> str:
     if len(words) < 1:
         return ""
     name = company_name()
-    search = q if not name or knowledge._words(name) & words else f"{name} {q}"
+    search = q if plain or not name or knowledge._words(name) & words else f"{name} {q}"   # (plain: about the world)
     try:
         hits = sources.web_search(search, 6)[:6]
         hits += [h for h in sources.news_search(search, 6)[:4] if h["url"] not in {x["url"] for x in hits}]

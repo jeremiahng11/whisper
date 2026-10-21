@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.22.0"
+VERSION = "1.23.0"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -719,6 +719,15 @@ def _ask_start(data: dict) -> dict:
         raise HTTPException(400, "SUMMARY_BACKEND is none - no LLM configured")
     context, system = "", sys_given
     q = " ".join(m["content"] for m in clean if m["role"] == "user")[-1000:]
+    from . import worldinfo
+    try:
+        tz = int(data["tz"]) if data.get("tz") is not None else None
+    except (TypeError, ValueError):
+        tz = None
+    city = str(data.get("city") or "")[:60]
+    # the date and time go with every question (the AI doesn't know them); the last question decides the rest
+    last_q = next((m["content"] for m in reversed(clean) if m["role"] == "user"), "")
+    now = worldinfo.now_line(tz, city)
     if data.get("recording"):
         context, system = recording_context(str(data["recording"]))
     elif data.get("scope") == "meetings":
@@ -740,25 +749,33 @@ def _ask_start(data: dict) -> dict:
             # that clearly matches is the answer - at once, without waiting for the AI (on a home server that's
             # the difference between a second and half a minute)
             f = knowledge.best_answer(q)
-            if f and (f.get("core") or f.get("kind") == "person") and len(knowledge._words(q)) <= 6:
+            if f and (f.get("core") or f.get("kind") == "person") and len(knowledge._words(q)) <= 6 \
+                    and not worldinfo.is_world(last_q):
                 return chat.instant(f["a"])
         # any other question (the watch's "Hey Oracle ...", Ask on the web): your company's knowledge goes along when
         # something matches - people, products, services, decisions - so "what is Aleta Planet" or "who is Ryan"
         # is answered from your meetings, website and documents instead of the AI's general knowledge
         web = len(knowledge.find(q, 4)) < 2 and not data.get("offline")
+        world = worldinfo.is_world(last_q) and not data.get("offline")
 
         def late() -> str:
             # found in the answer's thread (finding by meaning asks the embedding model): the company's knowledge
             # closest to the question, and - when little is known - a quick web search, so "what's new with Sanrio
-            # Aleta Adventure" is answered from today's web, not only the AI's old general knowledge
+            # Aleta Adventure" is answered from today's web, not only the AI's old general knowledge.
+            # A question about the world ("weather tomorrow", "who won the match", "price of gold"): the weather
+            # and a web search for the question as asked, like a phone assistant
+            if world:
+                out = worldinfo.context(last_q, tz, city)
+                if out:
+                    return out + "\n\nAnswer from this (it is current); say where it's from in a few words."
             out = company_context(q)
             if web and "closest in meaning" not in out:   # nothing close in your own knowledge either
                 w = research.live_context(q)
                 if w:
                     out = (out + "\n\n" if out else "") + w
             return out
-        return chat.start(clean, context, bool(data.get("best")), system, late=late)
-    return chat.start(clean, context, bool(data.get("best")), system)
+        return chat.start(clean, context, bool(data.get("best")), (system or chat.SYSTEM) + "\n\n" + now, late=late)
+    return chat.start(clean, context, bool(data.get("best")), (system or chat.SYSTEM) + "\n\n" + now)
 
 
 @app.get("/api/ask/{aid}", dependencies=[Depends(auth)])
@@ -1999,6 +2016,8 @@ def health():
         "speaker_separation": ("error: " + transcribe.diarize_error) if transcribe.diarize_error else "ok",
         "speaker_libs": transcribe.lib_versions(),
         "tts": speech.tts_available(),
+        "tts_voice": ("ElevenLabs " + settings.elevenlabs_model) if speech.eleven_on() else
+                     ("Piper " + str(speech.tts_voices().get("en", ""))) if speech.tts_available() else "",
         "jobs": db.counts(),
         "running": worker.current_job,
         "progress": worker.progress_info(),

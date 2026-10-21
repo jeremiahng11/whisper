@@ -2407,3 +2407,37 @@ def test_elevenlabs_voice_with_cache(monkeypatch):
     t1 = watchpack.voice_tag("Ryan is the CEO.")
     monkeypatch.setattr(settings, "elevenlabs_voice", "other")
     assert watchpack.voice_tag("Ryan is the CEO.") != t1           # a new voice: the watch fetches it again
+
+
+def test_watch_everyday_questions(client, monkeypatch):
+    from app import worldinfo, research
+    calls = []
+
+    def fake_json(url, timeout=6):
+        calls.append(url)
+        if "geocoding" in url:
+            return {"results": [{"name": "Tokyo", "country": "Japan", "latitude": 35.7, "longitude": 139.7}]}
+        return {"current": {"temperature_2m": 21.5, "apparent_temperature": 21, "relative_humidity_2m": 60,
+                            "precipitation": 0, "weather_code": 2, "wind_speed_10m": 9},
+                "daily": {"weather_code": [2, 61], "temperature_2m_min": [17, 16], "temperature_2m_max": [24, 22],
+                          "precipitation_probability_max": [10, 70]}}
+    monkeypatch.setattr(worldinfo, "_get_json", fake_json)
+    monkeypatch.setattr(research, "live_context", lambda q, limit=2500, plain=False: f"WEB({q}|{plain})")
+    assert worldinfo.is_world("what's the weather in Tokyo tomorrow") and not worldinfo.is_world("what did we decide")
+    assert "Wednesday" in worldinfo.now_line(480) or "day" in worldinfo.now_line(480)
+
+    def ask(text, **extra):
+        r = client.post("/api/ask", json={"messages": [{"role": "user", "content": text}], **extra}, headers=H)
+        assert r.status_code in (200, 202), r.text
+        for _ in range(400):
+            a = client.get(f"/api/ask/{r.json()['id']}", headers=H).json()
+            if a["status"] != "pending":
+                return a
+            time.sleep(0.05)
+    ask("What's the weather in Tokyo tomorrow?", tz=540)
+    assert "Weather now in Tokyo, Japan" in SYSTEMS[-1] and "Tomorrow: light rain" in SYSTEMS[-1]
+    assert "Right now it is" in SYSTEMS[-1] and "UTC+9" in SYSTEMS[-1]
+    ask("Who won the football match yesterday?")
+    assert "WEB(Who won the football match yesterday?|True)" in SYSTEMS[-1]
+    h = client.get("/api/health").json()
+    assert "tts_voice" in h

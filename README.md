@@ -385,6 +385,11 @@ owners, dates, budgets, terms, and who people are. In the background it reads on
   other fact to treat it the same. The watch model learns the essentials and your pages/research first; meeting facts
   fill the rest (meeting questions are answered online). Find a fact shows the answer when one fact clearly answers
   it, and **Ask Oracle** asks the AI.
+- **Everyday questions like a phone assistant** (1.23.0): every question gets today's date and time (the watch's
+  time zone, else `TZ_OFFSET_MIN`, 480); weather questions get the current weather and tomorrow's forecast from
+  Open-Meteo (no key) for the city named, else `HOME_CITY` (Singapore); questions about the world (news, scores,
+  prices, people, places) get a web search for the question as asked. `/api/health` shows `tts_voice` (ElevenLabs
+  or Piper).
 - **ElevenLabs voice** (1.22.0): set `ELEVENLABS_API_KEY` and `ELEVENLABS_VOICE_ID` (and `ELEVENLABS_MODEL`, default
   `eleven_multilingual_v2`) and everything spoken uses that voice: answers on the watch, the morning brief, the
   watch's offline answers and prompts. Each sentence is made once and kept (`ELEVENLABS_CACHE_MB`, 300), so the same
