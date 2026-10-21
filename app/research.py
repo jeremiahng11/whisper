@@ -227,7 +227,7 @@ def research_question(q: str) -> dict:
     from . import sources
     name = company_name()
     words = knowledge._words(q)
-    search = q if plain or not name or knowledge._words(name) & words else f"{name} {q}"   # (plain: about the world)
+    search = q if not name or knowledge._words(name) & words else f"{name} {q}"
     m = sources.add("research", title=f"Asked: {q[:70]}", url=search)
     m.update(question=q, once=True, must=" ".join(sorted(words)), need=max(1, len(words) // 3))
     sources._save(m)
