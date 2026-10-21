@@ -48,9 +48,17 @@ label.mute{display:inline-flex;gap:6px;align-items:center}
 .live .lm{font-size:12.5px;color:var(--mute);margin-top:3px}
 .live .lbar{height:5px;background:var(--chip);border-radius:3px;margin-top:7px;overflow:hidden;position:relative}
 .live .lbar i{position:absolute;inset:0 auto 0 0;background:var(--ok);border-radius:3px}
-.live .lt{margin-top:8px;max-height:220px;overflow:auto;font-size:13px;line-height:1.45}
-.live .lt p{margin:0 0 4px}.live .lt .ts{color:var(--mute);font-variant-numeric:tabular-nums;margin-right:6px}
-.live .lt .wait{color:var(--mute);font-style:italic}
+.live{cursor:pointer}.live:hover{border-color:var(--warn)}.live.on{outline:2px solid var(--focus)}
+.live .last{margin-top:6px;font-size:12.5px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lvdot{display:inline-block;width:12px;height:12px;border-radius:50%;background:var(--warn);margin-right:10px;vertical-align:middle;animation:pulse 1.2s ease-in-out infinite}
+.lvdot.idle{background:var(--mute);animation:none}
+.lvbar{height:6px;background:var(--chip);border-radius:3px;margin:10px 0 14px;overflow:hidden;position:relative}
+.lvbar i{position:absolute;inset:0 auto 0 0;background:var(--ok);border-radius:3px;transition:width .6s}
+.lvtext{font-size:17px;line-height:1.65;max-height:calc(100vh - 230px);overflow:auto;padding-right:6px}
+.lvtext p{margin:0 0 10px}.lvtext .ts{display:inline-block;min-width:54px;color:var(--mute);font-size:13px;font-variant-numeric:tabular-nums}
+.lvtext p.new{animation:fadein .8s ease}
+@keyframes fadein{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+.lvtext .wait{color:var(--mute);font-style:italic}
 .side{background:var(--surface);border-right:1px solid var(--rule);display:flex;flex-direction:column;height:100vh;position:sticky;top:0}
 .brand{padding:18px 18px 10px}
 .brand h1{font-size:17px;margin:0;letter-spacing:-.01em;display:flex;align-items:center;gap:9px}
@@ -308,6 +316,14 @@ ul.replies{margin:4px 0;padding-left:20px;font-size:13.5px}
 
     <section class="panel" data-panel="meetings">
       <div class="empty" id="noMeeting"><strong>Pick a recording</strong>Its minutes, speakers and transcript open here.</div>
+      <div class="hidden" id="liveView">
+        <div class="mhead">
+          <div><h2><span class="lvdot"></span><span id="lvTitle"></span></h2><div class="mute" id="lvMeta"></div></div>
+          <div class="mtools noprint"><label class="mute"><input type="checkbox" id="lvFollow" checked> Follow the newest words</label></div>
+        </div>
+        <div class="lvbar" title="transcribed / received"><i id="lvBar"></i></div>
+        <div id="lvText" class="lvtext"></div>
+      </div>
       <div class="hidden" id="viewCard">
         <div class="mhead">
           <div><h2 id="mTitle" title="Click to rename"></h2><div class="mute" id="mMeta"></div></div>
@@ -888,6 +904,7 @@ function md(src) {   // tiny Markdown renderer: headings, lists, checkboxes, bol
 
 async function show(id) {
   current = id;
+  if (liveOpen) closeLive();
   go("meetings");
   document.querySelectorAll("tr.job").forEach(tr => tr.classList.toggle("on", tr.dataset.id === id));
   const j = await (await api(`/api/jobs/${id}`)).json();
@@ -1638,46 +1655,85 @@ health();
 setInterval(() => { load(); health(); }, 4000);
 
 // ---------------------------------------------------------------- live: recordings streaming in from a watch
-const liveSeen = {};                                   // rid -> segments shown (only new lines are added)
+// The sidebar shows a small card per stream (the newest line underneath); clicking it opens the live transcript in
+// the main area, where it keeps growing. When the recording ends, the finished meeting opens in its place.
+let liveOpen = null, liveShown = 0, liveLastData = {};
+function showLive(rid) {
+  liveOpen = rid; liveShown = 0; current = null;
+  go("meetings");
+  document.querySelectorAll("tr.job").forEach(tr => tr.classList.remove("on"));
+  document.querySelectorAll(".live").forEach(el => el.classList.toggle("on", el.dataset.rid === rid));
+  $("#viewCard").classList.add("hidden"); $("#noMeeting").classList.add("hidden"); $("#liveView").classList.remove("hidden");
+  $("#lvText").innerHTML = "";
+  if (liveLastData[rid]) renderLiveMain(liveLastData[rid]);
+}
+function closeLive() { liveOpen = null; $("#liveView").classList.add("hidden"); document.querySelectorAll(".live").forEach(el => el.classList.remove("on")); }
+function liveMetaText(l) {
+  const behind = Math.max(0, l.received_s - l.transcribed_s);
+  return `${mmss(l.received_s)} received · last audio ${l.last_audio_s_ago < 5 ? "just now" : Math.round(l.last_audio_s_ago) + " s ago"} · `
+    + (l.transcribing ? "transcribing now…" : `transcribed to ${mmss(l.transcribed_s)}${behind > 1 ? ` (${Math.round(behind)} s behind)` : ""}`)
+    + (l.receiving ? "" : " · waiting for the watch");
+}
+function renderLiveMain(l) {
+  const started = new Date(l.started * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  $("#lvTitle").textContent = `${l.receiving ? "Live" : "Paused"} - ${l.device}, since ${started}`;
+  document.querySelector(".lvdot").classList.toggle("idle", !l.receiving);
+  $("#lvMeta").textContent = liveMetaText(l) + (l.language ? ` · ${l.language}` : "");
+  $("#lvBar").style.width = (l.received_s ? Math.min(100, 100 * l.transcribed_s / l.received_s) : 0) + "%";
+  const box = $("#lvText"), segs = l.segments || [];
+  if (segs.length < liveShown) { box.innerHTML = ""; liveShown = 0; }
+  box.querySelector(".wait")?.remove();
+  for (const s of segs.slice(liveShown)) {
+    const p = document.createElement("p");
+    if (liveShown) p.className = "new";
+    p.innerHTML = `<span class="ts">${mmss(s.start)}</span>${esc(s.text)}`;
+    box.append(p);
+  }
+  liveShown = segs.length;
+  if (!segs.length) box.insertAdjacentHTML("beforeend", `<p class="wait">Listening… the first words appear here about 30 s after the recording starts.</p>`);
+  if ($("#lvFollow").checked) box.scrollTop = box.scrollHeight;
+}
 async function pollLive() {
   if (!KEY && !SESSION.user) return;
   let data;
   try { data = await (await api("/api/live")).json(); } catch (e) { return; }
-  const box = $("#livePanel"), live = data.live || [];
-  for (const el of [...box.children]) if (!live.some(l => "live-" + l.rid === el.id)) { el.remove(); delete liveSeen[el.dataset.rid]; load(); }
+  const side = $("#livePanel"), live = data.live || [];
+  for (const el of [...side.children]) if (!live.some(l => "live-" + l.rid === el.id)) {
+    const rid = el.dataset.rid, name = el.dataset.name;
+    el.remove(); delete liveLastData[rid];
+    await load();
+    if (liveOpen === rid) {                            // it finished: open the meeting it became
+      closeLive();
+      try {
+        const all = await (await api("/api/jobs?limit=20")).json();
+        const j = all.find(x => name && (x.filename || "").startsWith(name)) || all[0];
+        if (j) show(j.id); else $("#noMeeting").classList.remove("hidden");
+      } catch (e) {}
+    }
+  }
   for (const l of live) {
+    liveLastData[l.rid] = l;
     let el = document.getElementById("live-" + l.rid);
     if (!el) {
       el = document.createElement("div");
-      el.className = "live"; el.id = "live-" + l.rid; el.dataset.rid = l.rid;
+      el.className = "live"; el.id = "live-" + l.rid; el.dataset.rid = l.rid; el.dataset.name = l.name;
+      el.title = "Open the live transcript";
       el.innerHTML = `<div class="lh"><span class="dot"></span><span class="ln"></span></div><div class="lm"></div>
-        <div class="lbar" title="transcribed / received"><i></i></div><div class="lt"></div>`;
-      box.append(el);
-      liveSeen[l.rid] = 0;
+        <div class="lbar"><i></i></div><div class="last"></div>`;
+      el.onclick = () => showLive(l.rid);
+      side.append(el);
     }
     const started = new Date(l.started * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     el.querySelector(".dot").classList.toggle("idle", !l.receiving);
     el.querySelector(".ln").textContent = `${l.receiving ? "Live" : "Paused"} · ${l.device} · since ${started}`;
-    const behind = Math.max(0, l.received_s - l.transcribed_s);
-    el.querySelector(".lm").textContent = `${mmss(l.received_s)} received · last audio ${l.last_audio_s_ago < 5 ? "just now" : Math.round(l.last_audio_s_ago) + " s ago"} · `
-      + (l.transcribing ? "transcribing now…" : `transcribed to ${mmss(l.transcribed_s)}${behind > 1 ? ` (${Math.round(behind)} s behind)` : ""}`)
-      + (l.receiving ? "" : " · waiting for the watch");
+    el.querySelector(".lm").textContent = liveMetaText(l);
     el.querySelector(".lbar i").style.width = (l.received_s ? Math.min(100, 100 * l.transcribed_s / l.received_s) : 0) + "%";
-    const lt = el.querySelector(".lt"), atEnd = lt.scrollHeight - lt.scrollTop - lt.clientHeight < 30;
     const segs = l.segments || [];
-    if (segs.length < liveSeen[l.rid]) { lt.innerHTML = ""; liveSeen[l.rid] = 0; }
-    lt.querySelector(".wait")?.remove();
-    for (const s of segs.slice(liveSeen[l.rid])) {
-      const p = document.createElement("p");
-      p.innerHTML = `<span class="ts">${mmss(s.start)}</span>${esc(s.text)}`;
-      lt.append(p);
-    }
-    liveSeen[l.rid] = segs.length;
-    if (!segs.length) lt.insertAdjacentHTML("beforeend", `<p class="wait">The first words appear here about 30 s after the recording starts.</p>`);
-    if (atEnd) lt.scrollTop = lt.scrollHeight;
+    el.querySelector(".last").textContent = segs.length ? "“" + segs[segs.length - 1].text + "”" : "Click to follow the transcript live";
+    if (liveOpen === l.rid) renderLiveMain(l);
   }
 }
-setInterval(pollLive, 3000);
+setInterval(pollLive, 2000);
 pollLive();
 </script>
 </body>
