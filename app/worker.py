@@ -29,6 +29,9 @@ def wav_seconds(path) -> float:
         size = os.path.getsize(path)
         fmt = int.from_bytes(h[20:22], "little") if len(h) >= 22 else 1
         rate = int.from_bytes(h[24:28], "little") or 16000
+        if fmt == 0x704F:                           # Opus packets (watch1b): bytes per second in the header
+            br = int.from_bytes(h[28:32], "little") or 2000
+            return max(0.0, (size - 48) / br)
         if fmt == 0x11:                             # IMA ADPCM: 256-byte blocks of 505 samples (mono)
             return max(0.0, (size - 48) / 256 * 505 / rate)
         ch = int.from_bytes(h[22:24], "little") or 1

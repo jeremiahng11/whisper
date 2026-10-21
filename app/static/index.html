@@ -38,6 +38,17 @@ button.danger{background:transparent;color:var(--warn);border-color:var(--rule);
 button:disabled{opacity:.5;cursor:default}
 label.mute{display:inline-flex;gap:6px;align-items:center}
 
+/* watches */
+.wgrid{display:grid;grid-template-columns:minmax(260px,360px) 1fr;gap:20px;align-items:start}
+@media (max-width:900px){.wgrid{grid-template-columns:1fr}}
+.wlist .w{border:1px solid var(--rule);border-radius:10px;padding:9px 12px;margin-bottom:8px;cursor:pointer;background:var(--surface)}
+.wlist .w:hover{border-color:var(--mute)}.wlist .w.on{outline:2px solid var(--focus)}
+.wlist .w .t{display:flex;justify-content:space-between;gap:8px;font-weight:600}.wlist .w .m{font-size:12.5px;color:var(--mute);margin-top:3px}
+.wlist .w .rec{color:var(--warn);font-weight:600}
+.wlog{font:12.5px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--sunk);border:1px solid var(--rule);border-radius:10px;padding:10px 12px;height:calc(100vh - 260px);min-height:300px;overflow:auto;white-space:pre-wrap;word-break:break-word;margin:0}
+.fw{display:flex;justify-content:space-between;align-items:center;gap:8px;border-bottom:1px solid var(--rule);padding:7px 0;font-size:13.5px}
+.fw .mute{font-size:12px}
+
 /* shell: sidebar + workspace */
 .app{display:grid;grid-template-columns:320px 1fr;min-height:100%}
 .live{margin:8px 12px;border:1px solid var(--rule);border-left:4px solid var(--warn);border-radius:10px;background:var(--sunk);padding:10px 12px}
@@ -67,8 +78,8 @@ label.mute{display:inline-flex;gap:6px;align-items:center}
 .brand h1{font-size:17px;margin:0;letter-spacing:-.01em;display:flex;align-items:center;gap:9px}
 .brand h1 svg{flex:none}
 #health{display:block;margin-top:4px;min-height:18px}
-.nav{display:flex;gap:2px;padding:0 10px 10px;border-bottom:1px solid var(--rule)}
-.nav button{flex:1;background:transparent;color:var(--mute);border:0;border-radius:7px;padding:6px 4px;font-weight:500;font-size:13px}
+.nav{display:flex;flex-wrap:wrap;gap:2px;padding:0 10px 10px;border-bottom:1px solid var(--rule)}
+.nav button{flex:1 0 auto;background:transparent;color:var(--mute);border:0;border-radius:7px;padding:6px 4px;font-weight:500;font-size:13px}
 .nav button[aria-current=true]{background:var(--chip);color:var(--ink)}
 #drop{margin:12px 14px 4px;border:1.5px dashed var(--rule);border-radius:var(--r);padding:14px;text-align:center;color:var(--mute);cursor:pointer;font-size:13.5px}
 #drop:hover,#drop.over{border-color:var(--action);color:var(--ink)}
@@ -278,6 +289,7 @@ ul.replies{margin:4px 0;padding-left:20px;font-size:13.5px}
       <button data-go="people">People</button>
       <button data-go="names">Names</button>
       <button data-go="notes">Notes</button>
+      <button data-go="watches" title="Your watches: status, logs and firmware updates">Watches</button>
       <button data-go="key" title="Sign-in, Face ID / Touch ID, API key">Account</button>
     </nav>
     <div id="drop"><strong>Add a recording</strong>Drop audio here or click to choose</div>
@@ -448,6 +460,31 @@ ul.replies{margin:4px 0;padding-left:20px;font-size:13.5px}
       </div>
     </section>
 
+    <section class="panel hidden" data-panel="watches">
+      <h2>Watches</h2>
+      <p class="mute">Each watch sends its log and state here about once a minute (Settings &gt; About &gt; Send logs on the watch).</p>
+      <div class="wgrid">
+        <div>
+          <div id="wlist" class="wlist"><span class="mute">No watch has reported yet.</span></div>
+          <h3 style="margin-top:22px">Firmware updates</h3>
+          <p class="mute" style="margin:4px 0 8px">Upload <code>firmware.bin</code> from <code>.pio/build/&lt;board&gt;/</code>. Watches of that board install the newest active version over WiFi.</p>
+          <div class="row"><input type="file" id="fwFile" accept=".bin"><input type="text" id="fwNotes" placeholder="What's new (optional)" style="flex:1;min-width:140px"></div>
+          <div id="fwMsg" class="mute" style="margin:6px 0"></div>
+          <div id="fwList"></div>
+        </div>
+        <div>
+          <div class="row" style="justify-content:space-between;margin-bottom:8px">
+            <strong id="wTitle" class="mute">Pick a watch</strong>
+            <div class="row"><input type="text" id="wFind" placeholder="Filter, e.g. live: or wifi" style="width:190px">
+              <label class="mute"><input type="checkbox" id="wFollow" checked> Follow</label>
+              <button class="ghost" id="wDl" disabled>Download</button><button class="danger" id="wClear" disabled>Clear</button></div>
+          </div>
+          <div id="wStat" class="mute" style="margin-bottom:6px"></div>
+          <pre id="wLog" class="wlog"></pre>
+        </div>
+      </div>
+    </section>
+
     <section class="panel hidden" data-panel="key">
       <h2>Account</h2>
       <div class="block" id="acctBox">
@@ -561,6 +598,7 @@ function status(j) {
 // ---------------------------------------------------------------- layout: sections, tabs, meeting header
 function go(name) {
   if (name === "people") loadPeople();
+  if (name === "watches") loadWatches();
   document.querySelectorAll(".panel").forEach(p => p.classList.toggle("hidden", p.dataset.panel !== name));
   document.querySelectorAll(".nav button").forEach(b => b.setAttribute("aria-current", b.dataset.go === name));
 }
@@ -1601,6 +1639,78 @@ $("#file").onchange = e => { for (const f of e.target.files) upload(f); e.target
 ["dragenter", "dragover"].forEach(ev => $("#drop").addEventListener(ev, e => { e.preventDefault(); $("#drop").classList.add("over"); }));
 ["dragleave", "drop"].forEach(ev => $("#drop").addEventListener(ev, e => { e.preventDefault(); $("#drop").classList.remove("over"); }));
 $("#drop").addEventListener("drop", e => { for (const f of e.dataTransfer.files) upload(f); });
+
+// ---------------------------------------------------------------- watches: status, logs, firmware
+let WATCH = "", wTimer = null, wText = "";
+const ago = t => { const s = Math.max(0, Date.now() / 1000 - t); return s < 90 ? `${Math.round(s)} s ago` : s < 5400 ? `${Math.round(s / 60)} min ago` : s < 172800 ? `${Math.round(s / 3600)} h ago` : new Date(t * 1000).toLocaleDateString(); };
+function wStatText(st) {
+  const p = [];
+  if (st.bat != null) p.push(`battery ${Math.round(st.bat)}%${st.usb ? " (charging)" : ""}`);
+  if (st.rssi) p.push(`WiFi ${st.rssi} dBm`);
+  if (st.heap_kb != null) p.push(`RAM ${st.heap_kb} KB free${st.big_kb != null ? ` (block ${st.big_kb})` : ""}`);
+  if (st.psram_kb != null) p.push(`PSRAM ${st.psram_kb} KB`);
+  if (st.free_mb != null) p.push(`storage ${st.free_mb >= 1024 ? (st.free_mb / 1024).toFixed(1) + " GB" : st.free_mb + " MB"} free`);
+  if (st.up_s != null) p.push(`up ${st.up_s < 3600 ? Math.round(st.up_s / 60) + " min" : (st.up_s / 3600).toFixed(1) + " h"}`);
+  if (st.fmt) p.push(`audio ${st.fmt}`);
+  return p.join(" · ");
+}
+async function loadWatches() {
+  if (!KEY && !SESSION.user) return;
+  let devs = [], fws = [];
+  try { devs = (await (await api("/api/devices")).json()).devices; } catch (e) {}
+  try { fws = (await (await api("/api/firmware")).json()).items; } catch (e) {}
+  $("#wlist").innerHTML = devs.length ? devs.map(d => { const st = d.status || {}; return `<div class="w${d.id === WATCH ? " on" : ""}" data-id="${esc(d.id)}">
+    <div class="t"><span>${esc(d.id)}</span><span class="mute">${esc(d.fw || "")}</span></div>
+    <div class="m">${st.rec ? '<span class="rec">● recording</span> · ' : ""}${esc(ago(d.last_seen))}${st.bat != null ? ` · ${Math.round(st.bat)}%${st.usb ? "⚡" : ""}` : ""}${st.rssi ? ` · ${st.rssi} dBm` : ""}</div></div>`; }).join("")
+    : '<span class="mute">No watch has reported yet.</span>';
+  $("#wlist").querySelectorAll(".w").forEach(el => el.onclick = () => openWatch(el.dataset.id));
+  const running = {};
+  for (const d of devs) if (d.fw) (running[d.fw] = running[d.fw] || []).push(d.id);
+  $("#fwList").innerHTML = fws.length ? fws.map(f => `<div class="fw"><div><strong>${esc(f.version)}</strong> <span class="mute">${esc(f.board)} · ${Math.round(f.size / 1024)} KB · ${esc(ago(f.uploaded_at))}${running[f.version] ? " · on " + esc(running[f.version].join(", ")) : ""}</span>${f.notes ? `<div class="mute">${esc(f.notes)}</div>` : ""}</div>
+    <div class="row"><label class="mute"><input type="checkbox" data-fw="${esc(f.board)}/${esc(f.version)}" ${f.active ? "checked" : ""}> offer</label><button class="danger" data-fwdel="${esc(f.board)}/${esc(f.version)}">Delete</button></div></div>`).join("")
+    : '<span class="mute">No firmware uploaded yet.</span>';
+  $("#fwList").querySelectorAll("input[data-fw]").forEach(c => c.onchange = async () => {
+    await api(`/api/firmware/${c.dataset.fw}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ active: c.checked }) }); loadWatches(); });
+  $("#fwList").querySelectorAll("button[data-fwdel]").forEach(b => b.onclick = async () => {
+    if (!confirm(`Delete firmware ${b.dataset.fwdel}?`)) return;
+    await api(`/api/firmware/${b.dataset.fwdel}`, { method: "DELETE" }); loadWatches(); });
+  const cur = devs.find(d => d.id === WATCH);
+  if (cur) $("#wStat").textContent = wStatText(cur.status || {}) + (cur.last_seen ? ` · last report ${ago(cur.last_seen)}` : "");
+}
+function renderWatchLog() {
+  const q = ($("#wFind").value || "").trim().toLowerCase();
+  const rows = q ? wText.split("\n").filter(l => l.toLowerCase().includes(q)) : wText.split("\n");
+  const box = $("#wLog"), atEnd = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+  box.textContent = rows.join("\n") || (WATCH ? "Nothing logged yet." : "");
+  if ($("#wFollow").checked || atEnd) box.scrollTop = box.scrollHeight;
+}
+async function refreshWatchLog() {
+  if (!WATCH) return;
+  try { wText = await (await api(`/api/devices/${encodeURIComponent(WATCH)}/log?lines=3000`)).text(); } catch (e) { return; }
+  renderWatchLog();
+}
+function openWatch(id) {
+  WATCH = id; $("#wTitle").textContent = id; $("#wTitle").classList.remove("mute");
+  $("#wDl").disabled = $("#wClear").disabled = false;
+  document.querySelectorAll("#wlist .w").forEach(el => el.classList.toggle("on", el.dataset.id === id));
+  wText = ""; refreshWatchLog(); loadWatches();
+  clearInterval(wTimer);
+  wTimer = setInterval(() => { if ($('[data-panel="watches"]').classList.contains("hidden")) return; refreshWatchLog(); loadWatches(); }, 5000);
+}
+$("#wFind").oninput = renderWatchLog;
+$("#wDl").onclick = () => { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([wText], { type: "text/plain" })); a.download = `${WATCH}-log.txt`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000); };
+$("#wClear").onclick = async () => { if (!WATCH || !confirm(`Clear the log of ${WATCH}?`)) return; await api(`/api/devices/${encodeURIComponent(WATCH)}/log`, { method: "DELETE" }); wText = ""; renderWatchLog(); };
+$("#fwFile").onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  $("#fwMsg").textContent = `Uploading ${f.name}…`;
+  try {
+    const r = await api(`/api/firmware?notes=${encodeURIComponent($("#fwNotes").value || "")}`, { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: f });
+    const j = await r.json();
+    $("#fwMsg").textContent = `Added ${j.version} for ${j.board} (${Math.round(j.size / 1024)} KB). Watches of that board will offer it.`;
+    $("#fwNotes").value = "";
+  } catch (x) { $("#fwMsg").textContent = x.message; }
+  e.target.value = ""; loadWatches();
+};
 
 // ---------------------------------------------------------------- synced notes
 let DEV = "", FILE = null;

@@ -15,12 +15,12 @@ from typing import Optional
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse, FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
 
-from . import agenda, autotag, chat, db, dynamics, knowledge, login, sources, watchlm, watchpack, people, rag, research, vocab, redact, render, search, speech, summarize, terms, transcribe, voices, wakeword, worker
+from . import agenda, autotag, chat, db, devices, dynamics, knowledge, login, sources, watchlm, watchpack, people, rag, research, vocab, redact, render, search, speech, summarize, terms, transcribe, voices, wakeword, worker
 from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.19.0"
+VERSION = "1.20.0"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -284,9 +284,12 @@ async def upload_chunk(rid: str, request: Request, x_offset: int = Header(0), x_
         if language and language.lower() != "auto":
             st["language"] = language.lower()
         worker.live_state_path(rid).write_text(_json.dumps(st))
+    out = {"recording_id": rid, "received": n, "job": None}
     if worker.live_state_path(rid).exists():
         worker.wake()
-    return {"recording_id": rid, "received": n, "job": None}
+        if x_live == "1" and (b := _brief(rid)) is not None:
+            out["brief"] = {k: v for k, v in b.items() if k != "rid"}   # the watch's caption, no extra request
+    return out
 
 
 async def body_extra(request: Request) -> dict:
@@ -584,6 +587,46 @@ def meeting_context(j: dict, limit: int = 0) -> str:
     return "Meeting minutes and transcript:\n\"\"\"\n" + md + "\n\"\"\""
 
 
+MEETING_LIVE_SYSTEM = MEETING_SYSTEM + (" The meeting is still going on: the transcript below is what has been said so "
+                                        "far, the newest at the end. Answer from that; if something hasn't come up yet, "
+                                        "say so.")
+
+
+def recording_context(ref: str) -> tuple[str, str]:
+    """(context, system) for a question about one recording: the minutes when it's done; while it's still streaming
+    in from a watch or being processed, the transcript so far."""
+    j = db.get(ref) or db.get_by_recording(ref)
+    if j and j["status"] == "done":
+        return meeting_context(j), MEETING_SYSTEM
+    segs, names = None, {}
+    if SAFE_ID.match(ref) and (lp := worker.live_state_path(ref)).exists():
+        try:
+            st = json.loads(lp.read_text())
+        except (OSError, ValueError):
+            st = {}
+        segs, names = st.get("segments") or [], st.get("names") or {}
+    elif j:
+        tr = worker.load_transcript(j["id"])
+        if tr:
+            segs, names = tr.get("segments") or [], (j.get("options") or {}).get("speaker_names") or {}
+        elif (d := worker.load_json(j["id"], "draft.json")) and d.get("segments") is not None:
+            segs = d["segments"]
+        else:
+            lv = worker.load_json(j["id"], "live.json") or {}
+            segs, names = lv.get("segments") or [], lv.get("names") or {}
+    if segs is None:
+        raise HTTPException(404, "unknown recording")
+    lines = []
+    for x in segs:
+        who = names.get(x.get("speaker") or "", x.get("speaker") or "")
+        lines.append(f"[{render.ts(float(x.get('start') or 0))}] " + (f"{who}: " if who else "") + str(x.get("text") or "").strip())
+    text = "\n".join(lines) or "(nothing has been transcribed yet)"
+    limit = max(8000, settings.ollama_num_ctx * 3 - 6000)
+    if len(text) > limit:                            # keep the most recent part
+        text = "(earlier part left out)\n" + text[-limit:]
+    return "Meeting in progress - transcript so far:\n\"\"\"\n" + text + "\n\"\"\"", MEETING_LIVE_SYSTEM
+
+
 def search_context(q: str) -> str:
     hits = search.search(q, 14)
     if not hits:
@@ -677,7 +720,7 @@ def _ask_start(data: dict) -> dict:
     context, system = "", sys_given
     q = " ".join(m["content"] for m in clean if m["role"] == "user")[-1000:]
     if data.get("recording"):
-        context, system = meeting_context(_job_for(str(data["recording"]))), MEETING_SYSTEM
+        context, system = recording_context(str(data["recording"]))
     elif data.get("scope") == "meetings":
         context, system = search_context(q), MEETING_SYSTEM
     if data.get("recording") or data.get("scope") == "meetings":
@@ -1097,7 +1140,7 @@ async def fix_fact(fid: str, request: Request):
 def watch_pack(limit: int = watchpack.MAX_ITEMS, extra: bool = False):
     """The watch's offline answers: {"version", "count", "items": [{"id", "q", "say": [phrases], "a", ...}]};
     extra=1 also lists more questions (no answers) for the watch's own model: "extra": [{"id", "q", "say"}]."""
-    return watchpack.build(max(1, min(limit, 300)), extra)
+    return watchpack.build(max(1, min(limit, 400)), extra)
 
 
 @app.get("/api/watch/voice/{fid}", dependencies=[Depends(auth)])
@@ -1794,6 +1837,141 @@ def storage_kind(mountinfo: Optional[str] = None) -> str:
 def live_now():
     """Recordings streaming in from a watch right now, with the live transcript so far."""
     return {"live": worker.live_now()}
+
+
+@app.get("/api/live/{rid}/brief", dependencies=[Depends(auth)])
+def live_brief(rid: str):
+    """For the watch while it records: the last line heard, who said it, who has talked so far. Small and quick."""
+    b = _brief(check_id(rid))
+    if b is None:
+        raise HTTPException(404, "not streaming")
+    return b
+
+
+def _brief(rid: str) -> Optional[dict]:
+    lp = worker.live_state_path(rid)
+    if not lp.exists():
+        return None
+    try:
+        st = json.loads(lp.read_text())
+    except (OSError, ValueError):
+        st = {}
+    names = st.get("names") or {}
+    segs = st.get("segments") or []
+    last = segs[-1] if segs else {}
+    part = settings.upload_dir / f"{rid}.part"
+    rec = round(worker.wav_seconds(part), 1) if part.exists() else 0.0
+    done = float(st.get("until", 0))
+    lab = last.get("speaker") or ""
+    sp = sorted(st.get("voices") or [], key=lambda v: v.get("secs", 0), reverse=True)[:4]
+    return {"rid": rid, "line": (last.get("text") or "").strip()[:140], "speaker": names.get(lab, lab),
+            "speakers": [{"name": names.get(v["label"], v["label"]), "seconds": round(v.get("secs", 0))} for v in sp],
+            "transcribed_s": done, "received_s": rec, "behind_s": round(max(0.0, rec - done), 1)}
+
+
+# ---------------------------------------------------------------- watches: logs, status, firmware updates
+def _did(did: str) -> str:
+    if not devices.DEV_ID.match(did or ""):
+        raise HTTPException(400, "device id may only use letters, digits, _ - (max 40)")
+    return did
+
+
+@app.post("/api/devices/{did}/log", dependencies=[Depends(auth)])
+async def device_log(did: str, request: Request, x_status: Optional[str] = Header(None)):
+    """The watch's log lines (text/plain) and, in X-Status, its state (battery, WiFi, memory...) - every minute."""
+    _did(did)
+    body = await request.body()
+    if len(body) > 256 * 1024:
+        raise HTTPException(413, "send at most 256 KB of log at a time")
+    status = None
+    if x_status:
+        try:
+            status = json.loads(x_status)
+            if not isinstance(status, dict):
+                status = None
+        except ValueError:
+            status = None
+    devices.add_log(did, body.decode("utf-8", "replace"), status)
+    return {"ok": True, "next_s": devices.POST_EVERY_S}
+
+
+@app.get("/api/devices", dependencies=[Depends(auth)])
+def devices_list():
+    return {"devices": devices.list_devices()}
+
+
+@app.get("/api/devices/{did}/log", dependencies=[Depends(auth)])
+def device_log_read(did: str, lines: int = Query(500, ge=1, le=5000)):
+    return PlainTextResponse(devices.read_log(_did(did), lines))
+
+
+@app.delete("/api/devices/{did}/log", dependencies=[Depends(auth)])
+def device_log_clear(did: str):
+    devices.clear_log(_did(did))
+    return {"ok": True}
+
+
+@app.post("/api/firmware", dependencies=[Depends(auth)])
+async def firmware_upload(request: Request, notes: str = Query("")):
+    """A firmware .bin for watches to install over WiFi; its board and version are read from the file."""
+    data = bytearray()
+    async for chunk in request.stream():
+        data += chunk
+        if len(data) > devices.FW_MAX:
+            raise HTTPException(413, "firmware bigger than 8 MB")
+    try:
+        m = devices.save_firmware(bytes(data), notes)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"board": m["board"], "version": m["version"], "size": m["size"], "sha256": m["sha256"]}
+
+
+@app.get("/api/firmware", dependencies=[Depends(auth)])
+def firmware_list():
+    return {"items": devices.list_firmware()}
+
+
+@app.get("/api/firmware/latest", dependencies=[Depends(auth)])
+def firmware_latest(board: str = Query(...), current: str = Query("")):
+    if not devices.BOARD.match(board):
+        raise HTTPException(400, "bad board")
+    r = devices.latest(board, current)
+    if not r:
+        raise HTTPException(404, "no firmware for this board")
+    return r
+
+
+def _fw(board: str, version: str) -> tuple[str, str]:
+    if not devices.BOARD.match(board or "") or not devices.VERSION.match(version or ""):
+        raise HTTPException(400, "bad board or version")
+    return board, version
+
+
+@app.get("/api/firmware/{board}/{fname}", dependencies=[Depends(auth)])
+def firmware_file(board: str, fname: str):
+    if not fname.endswith(".bin"):
+        raise HTTPException(404, "not found")
+    p = devices.firmware_path(*_fw(board, fname[:-4]))
+    if not p:
+        raise HTTPException(404, "no such firmware")
+    return FileResponse(p, media_type="application/octet-stream", filename=f"{board}-{fname}")
+
+
+@app.post("/api/firmware/{board}/{version}", dependencies=[Depends(auth)])
+async def firmware_set(board: str, version: str, request: Request):
+    _fw(board, version)
+    d = await body_extra(request)
+    m = devices.set_active(board, version, bool(d.get("active", True)))
+    if not m:
+        raise HTTPException(404, "no such firmware")
+    return m
+
+
+@app.delete("/api/firmware/{board}/{version}", dependencies=[Depends(auth)])
+def firmware_delete(board: str, version: str):
+    if not devices.delete_firmware(*_fw(board, version)):
+        raise HTTPException(404, "no such firmware")
+    return {"deleted": f"{board}/{version}"}
 
 
 @app.get("/api/health")

@@ -475,7 +475,15 @@ def test_live_upload_transcribes_while_recording(client, monkeypatch):
     # who's talking, while it streams in (test voices: two people taking turns every 10 s)
     assert [x["speaker"] for x in one["segments"]] == ["Speaker 1", "Speaker 1", "Speaker 2"]
     assert [v["label"] for v in one["speakers"]] == ["Speaker 1", "Speaker 2"] and one["seg_from"] == 0
-    client.put(f"/api/uploads/{rid}", content=bytes(data[first:]), headers={**H, "X-Offset": str(first), "X-Live": "1"})
+    # the watch's caption while it records: the last line and who's talking
+    b = client.get(f"/api/live/{rid}/brief", headers=H).json()
+    assert b["line"] == one["segments"][-1]["text"] and b["speaker"] == "Speaker 2"
+    assert b["speakers"] == [{"name": "Speaker 1", "seconds": 10}, {"name": "Speaker 2", "seconds": 5}]
+    assert b["transcribed_s"] == 15 and abs(b["behind_s"] - 25) < 0.2
+    assert client.get("/api/live/dev1-nothing/brief", headers=H).status_code == 404
+    pr = client.put(f"/api/uploads/{rid}", content=bytes(data[first:]), headers={**H, "X-Offset": str(first), "X-Live": "1"}).json()
+    assert pr["received"] == len(data) and pr["brief"]["line"] == b["line"] and pr["brief"]["speaker"] == "Speaker 2"
+    assert pr["brief"]["speakers"] == b["speakers"] and "rid" not in pr["brief"] and pr["brief"]["received_s"] == 60
     r = client.post(f"/api/uploads/{rid}/complete?filename=2026-10-09_1100.wav", headers={**H, "X-Total-Size": str(len(data))})
     j = wait(client, r.json()["id"])
     assert j["status"] == "done" and abs(j["duration"] - 60) < 0.1
@@ -485,6 +493,155 @@ def test_live_upload_transcribes_while_recording(client, monkeypatch):
     assert not st.exists() and (worker.result_dir(j["id"]) / "live.json").exists()
     d = client.get(f"/api/jobs/{j['id']}/draft", headers=H).json()
     assert d["speakers_done"] and len(d["segments"]) == 12 and not (worker.result_dir(j["id"]) / "draft.json").exists()
+
+
+# ---------------------------------------------------------------- watch1b: Opus recordings, logs, firmware, live ask
+def opus_packets(seconds, kbps=16, vbr=False):
+    import av
+    import numpy as np
+    c = av.CodecContext.create("libopus", "w")
+    c.sample_rate, c.layout, c.format, c.bit_rate = 16000, "mono", "s16", kbps * 1000
+    c.options = {"vbr": "on" if vbr else "off", "frame_duration": "20", "application": "voip"}
+    c.open()
+    t = np.arange(int(seconds * 16000)) / 16000
+    x = (np.sin(2 * np.pi * 300 * t) * 6000).astype(np.int16)
+    pk = []
+    for i in range(0, len(x), 320):
+        fr = av.AudioFrame.from_ndarray(x[i:i + 320].reshape(1, -1), format="s16", layout="mono")
+        fr.sample_rate, fr.pts = 16000, i
+        pk += [bytes(p) for p in c.encode(fr)]
+    return pk[: int(seconds * 50)]
+
+
+def opus_pad(pk: bytes, n: int) -> bytes:
+    """What the watch does (opus_packet_pad): one frame (code 0) -> code 3 with in-band padding up to n bytes."""
+    assert pk[0] & 3 == 0
+    p = n - 3 - (len(pk) - 1)
+    assert 0 <= p <= 254
+    return bytes([pk[0] | 3, 0x41, p]) + pk[1:] + bytes(p)
+
+
+def opus_wav(packets, align, sizes=True):
+    raw = b"".join(opus_pad(p, align) if len(p) < align else p for p in packets)
+    fmt = struct.pack("<HHIIHHHH", 0x704F, 1, 16000, align * 50, align, 0, 2, 320)
+    return (b"RIFF" + struct.pack("<I", 4 + 8 + len(fmt) + 8 + len(raw) if sizes else 0) + b"WAVE" + b"fmt " +
+            struct.pack("<I", len(fmt)) + fmt + b"data" + struct.pack("<I", len(raw) if sizes else 0) + raw)
+
+
+def test_opus_recordings_from_the_watch(client, tmp_path, monkeypatch):
+    import numpy as np
+    from app import transcribe, worker
+    pk = opus_packets(60)
+    assert {len(p) for p in pk} == {40}                                   # CBR: every packet the same size
+    # padded packets (the watch pads every one to the frame size) decode the same
+    vb = opus_packets(2, vbr=True)
+    assert all(p[0] & 3 == 0 for p in vb)
+    n = max(len(p) for p in vb) + 3
+    b = transcribe.opus_decode(b"".join(opus_pad(p, n) for p in vb), n)
+    assert len(b) == 32000 and float(np.sqrt(np.mean(b[3200:] ** 2))) > 0.05   # heard, not 20 ms silences
+    f = tmp_path / "o.wav"
+    f.write_bytes(opus_wav(pk, 40, sizes=False))                          # still being recorded: sizes 0
+    assert abs(worker.wav_seconds(f) - 60) < 0.05 and abs(len(transcribe.load_audio(str(f))) / 16000 - 60) < 0.05
+    whole = transcribe.load_audio(str(f))
+    clip = transcribe.load_range(str(f), 12.5, 14.0)
+    assert len(clip) == 24000 and float(np.max(np.abs(clip - whole[200000:224000]))) < 0.01
+    transcribe.fix_wav_header(str(f))
+    assert struct.unpack("<I", f.read_bytes()[44:48])[0] == 3000 * 40
+    # streamed live from the watch, then completed: transcribed in parts, no gaps
+    monkeypatch.setattr(settings, "live_min_new_s", 5)
+    monkeypatch.setattr(settings, "live_hold_s", 20)
+    rid = "w1b-test-2026-10-21_1500"
+    data = opus_wav(pk, 40, sizes=False)
+    first = 48 + 40 * 50 * 40
+    assert client.put(f"/api/uploads/{rid}", content=data[:first], headers={**H, "X-Offset": "0", "X-Live": "1"}).status_code == 200
+    st = worker.live_state_path(rid)
+    for _ in range(400):
+        if st.exists() and '"until": 15' in st.read_text():
+            break
+        time.sleep(0.05)
+    assert '"until": 15' in st.read_text()
+    client.put(f"/api/uploads/{rid}", content=data[first:], headers={**H, "X-Offset": str(first), "X-Live": "1"})
+    r = client.post(f"/api/uploads/{rid}/complete?filename=2026-10-21_1500.wav", headers={**H, "X-Total-Size": str(len(data))})
+    j = wait(client, r.json()["id"])
+    assert j["status"] == "done" and abs(j["duration"] - 60) < 0.1
+    segs = client.get(f"/api/jobs/{j['id']}/transcript.json", headers=H).json()["segments"]
+    assert [int(x["text"].split()[-1].rstrip(".")) for x in segs] == list(range(1, 13))
+    c = client.get(f"/api/jobs/{j['id']}/clip?start=10&end=12&enhance=false", headers=H)
+    assert c.status_code == 200 and c.content[:4] == b"RIFF" and len(c.content) == 44 + 2 * 16000 * 2
+
+
+def test_watch_logs_and_status(client):
+    st = {"fw": "W1B-1.4.0", "board": "watch1b", "bat": 82, "usb": False, "rssi": -61, "heap_kb": 120, "rec": True}
+    import json as _j
+    r = client.post("/api/devices/w1b-abc123/log", content="[  12s] wifi: connected\n[  13s] live: 32 KB\n",
+                    headers={**H, "Content-Type": "text/plain", "X-Status": _j.dumps(st)})
+    assert r.json() == {"ok": True, "next_s": 60}
+    client.post("/api/devices/w1b-abc123/log", content="[  70s] mem: internal 110 KB free", headers={**H, "Content-Type": "text/plain"})
+    d = [x for x in client.get("/api/devices", headers=H).json()["devices"] if x["id"] == "w1b-abc123"][0]
+    assert d["fw"] == "W1B-1.4.0" and d["board"] == "watch1b" and d["status"]["bat"] == 82 and d["last_line"].endswith("110 KB free")
+    log = client.get("/api/devices/w1b-abc123/log?lines=2", headers=H).text.splitlines()
+    assert len(log) == 2 and log[0].endswith("[  13s] live: 32 KB") and log[0][:2] == "20"
+    assert client.post("/api/devices/bad id!/log", content="x", headers=H).status_code in (400, 404)
+    assert client.get("/api/devices", headers={}).status_code == 401
+    client.delete("/api/devices/w1b-abc123/log", headers=H)
+    assert client.get("/api/devices/w1b-abc123/log", headers=H).text == ""
+
+
+def fw_image(board, version, size=4096):
+    body = b"\xe9" + bytes(200) + f"ORACLEFW|{board}|{version}|".encode() + bytes(size)
+    return body
+
+
+def test_firmware_updates_over_wifi(client):
+    H2 = {**H, "Content-Type": "application/octet-stream"}
+    assert client.post("/api/firmware", content=b"\x00" + bytes(100), headers=H2).status_code == 400   # not a firmware
+    assert client.post("/api/firmware", content=b"\xe9" + bytes(100), headers=H2).status_code == 400   # no marker
+    for v in ("W1B-1.3.0", "W1B-1.10.0", "W1B-1.9.2"):
+        r = client.post("/api/firmware?notes=" + v, content=fw_image("watch1b", v), headers=H2)
+        assert r.status_code == 200 and r.json()["board"] == "watch1b" and r.json()["version"] == v
+    client.post("/api/firmware", content=fw_image("round", "R1.7.20"), headers=H2)
+    lt = client.get("/api/firmware/latest?board=watch1b&current=W1B-1.3.0", headers=H).json()
+    assert lt["version"] == "W1B-1.10.0" and lt["newer"] and lt["url"] == "/api/firmware/watch1b/W1B-1.10.0.bin"
+    import hashlib
+    b = client.get(lt["url"], headers=H)
+    assert b.status_code == 200 and hashlib.sha256(b.content).hexdigest() == lt["sha256"] and len(b.content) == lt["size"]
+    assert not client.get("/api/firmware/latest?board=watch1b&current=W1B-1.10.0", headers=H).json()["newer"]
+    # hold back 1.10.0: 1.9.2 is offered instead
+    assert client.post("/api/firmware/watch1b/W1B-1.10.0", json={"active": False}, headers=H).json()["active"] is False
+    assert client.get("/api/firmware/latest?board=watch1b&current=W1B-1.3.0", headers=H).json()["version"] == "W1B-1.9.2"
+    assert client.get("/api/firmware/latest?board=round", headers=H).json()["version"] == "R1.7.20"
+    assert client.get("/api/firmware/latest?board=nope", headers=H).status_code == 404
+    items = client.get("/api/firmware", headers=H).json()["items"]
+    assert {i["version"] for i in items} >= {"W1B-1.3.0", "W1B-1.10.0", "W1B-1.9.2", "R1.7.20"}
+    for v in ("W1B-1.3.0", "W1B-1.10.0", "W1B-1.9.2"):
+        assert client.delete(f"/api/firmware/watch1b/{v}", headers=H).status_code == 200
+    client.delete("/api/firmware/round/R1.7.20", headers=H)
+    assert client.get("/api/firmware/latest?board=watch1b", headers=H).status_code == 404
+
+
+def test_ask_while_the_meeting_is_still_going(client):
+    import json as _j
+    from app import worker
+    rid = "w1b-ask-2026-10-21_1600"
+    st = worker.live_state_path(rid)
+    st.write_text(_j.dumps({"until": 30, "segments": [
+        {"start": 3, "end": 8, "text": "The budget for Q4 is 40k.", "speaker": "Speaker 1"},
+        {"start": 9, "end": 14, "text": "We ship on Friday.", "speaker": "Speaker 2"}], "names": {"Speaker 1": "San"}}))
+    try:
+        r = client.post("/api/ask", json={"recording": rid, "messages": [{"role": "user", "content": "what's the budget?"}]}, headers=H)
+        assert r.status_code == 202, r.text
+        for _ in range(400):
+            a = client.get(f"/api/ask/{r.json()['id']}", headers=H).json()
+            if a["status"] != "pending":
+                break
+            time.sleep(0.05)
+        assert a["status"] == "done"
+        assert "still going on" in SYSTEMS[-1] and "[00:03] San: The budget for Q4 is 40k." in SYSTEMS[-1]
+        assert "Speaker 2: We ship on Friday." in SYSTEMS[-1]
+    finally:
+        st.unlink(missing_ok=True)
+    r = client.post("/api/ask", json={"recording": "w1b-none", "messages": [{"role": "user", "content": "x"}]}, headers=H)
+    assert r.status_code == 404
 
 
 def test_words_show_before_the_speakers_are_separated(tmp_path, monkeypatch):

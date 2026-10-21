@@ -65,6 +65,8 @@ def _wav_pcm16(path: str) -> Optional[np.ndarray]:
                 if not fmt:
                     return None
                 raw = f.read()
+                if fmt[0] == OPUS_TAG and fmt[4] > 0:          # Opus frames (watch1b's compact recordings)
+                    return opus_decode(raw, fmt[4])
                 if fmt[0] == 0x11 and fmt[1] == 1:             # IMA ADPCM (the round Idea Saver records this)
                     a = ima_adpcm_decode(raw, fmt[4]).astype(np.float32) / 32768.0
                     return _resample(a, fmt[2])
@@ -104,6 +106,48 @@ def ima_adpcm_decode(raw: bytes, block_align: int) -> np.ndarray:
         out.append(struct.pack("<h", pred))
         out.append(pcm)
     return np.frombuffer(b"".join(out), dtype="<i2")
+
+
+OPUS_TAG = 0x704F       # "Op": the watch's compact format - fixed-size Opus packets (20 ms each) in a WAV data chunk
+OPUS_FRAME = 320        # samples per packet at 16 kHz
+
+
+def opus_decode(raw: bytes, align: int, skip: int = 0) -> np.ndarray:
+    """Back-to-back Opus packets of `align` bytes each (CBR, padded) -> 16 kHz float32. A cut-off last packet (file
+    still being recorded) is dropped; a damaged packet becomes 20 ms of silence so the timing stays right.
+    skip = packets decoded only to warm the decoder up, then dropped."""
+    import av
+    n = len(raw) // align if align else 0
+    if not n:
+        return np.zeros(0, np.float32)
+    dec = av.CodecContext.create("libopus", "r")
+    dec.sample_rate = 48000
+    dec.layout = "mono"
+    parts, rate = [], 48000
+    for i in range(n):
+        pk = raw[i * align:(i + 1) * align]
+        got = None
+        try:
+            for fr in dec.decode(av.Packet(pk)):
+                a = fr.to_ndarray().reshape(-1)
+                if fr.format.name.startswith("s16"):
+                    a = a.astype(np.float32) / 32768.0
+                elif fr.format.name.startswith("s32"):
+                    a = a.astype(np.float32) / 2147483648.0
+                else:
+                    a = a.astype(np.float32)
+                rate = fr.sample_rate or rate
+                got = a if got is None else np.concatenate([got, a])
+        except Exception as e:                               # noqa: BLE001 - one bad packet must not lose the rest
+            log.debug("opus packet %d: %s", i, e)
+        if got is None:
+            got = np.zeros(rate // 50, np.float32)
+        if i >= skip:
+            parts.append(got)
+    a = np.concatenate(parts) if parts else np.zeros(0, np.float32)
+    if rate == 48000:                                         # speech below 8 kHz: every 3rd sample is exact enough
+        return np.ascontiguousarray(a[::3])
+    return _resample(a, rate)
 
 
 def load_audio(path: str) -> np.ndarray:
@@ -358,6 +402,13 @@ def load_range(path: str, start: float, end: float) -> np.ndarray:
                     elif cid == b"data" and fmt:
                         tag, chans, rate, _, align, bits = fmt
                         base = f.tell()
+                        if tag == OPUS_TAG and align > 0:                  # Opus packets, 20 ms each
+                            f0, f1 = int(start * 50), int(end * 50) + 1
+                            warm = min(f0, 5)                              # decoder warm-up before the clip
+                            f.seek(base + (f0 - warm) * align)
+                            a = opus_decode(f.read((f1 - f0 + warm) * align), align, warm)
+                            off = int(start * SR) - f0 * OPUS_FRAME
+                            return a[max(0, off):max(0, off) + int(end * SR) - int(start * SR)]
                         if tag == 0x11 and chans == 1:                     # IMA ADPCM blocks
                             spb = (align - 4) * 2 + 1
                             b0, b1 = int(start * rate) // spb, int(end * rate) // spb + 1

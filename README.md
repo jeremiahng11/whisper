@@ -385,6 +385,20 @@ owners, dates, budgets, terms, and who people are. In the background it reads on
   other fact to treat it the same. The watch model learns the essentials and your pages/research first; meeting facts
   fill the rest (meeting questions are answered online). Find a fact shows the answer when one fact clearly answers
   it, and **Ask Oracle** asks the AI.
+- **Watches: logs, status, updates over WiFi, Opus audio** (1.20.0):
+  - `POST /api/devices/{id}/log` (text lines, state in `X-Status` JSON: battery, WiFi dBm, memory, storage, recording,
+    audio format) every minute; `GET /api/devices`, `GET|DELETE /api/devices/{id}/log?lines=`. The **Watches** page
+    lists them with a live, filterable log (download / clear).
+  - Firmware: `POST /api/firmware` (the .bin; board and version are read from its `ORACLEFW|board|version|` marker, so
+    a Round build is never offered to a watch1b), `GET /api/firmware`, `GET /api/firmware/latest?board=&current=`,
+    `GET /api/firmware/{board}/{version}.bin`, `POST /api/firmware/{board}/{version}` `{"active": false}` holds a
+    version back, `DELETE` removes it. Watches install the newest active version for their board.
+  - Opus recordings: WAV with format tag `0x704F`, fixed-size 20 ms Opus packets (16 kbps = 2 KB/s, a quarter of
+    IMA ADPCM) - decoded everywhere (transcription, live parts, clips, durations) with PyAV.
+  - `GET /api/live/{rid}/brief`: the last line, who said it and who has talked so far (the watch's caption); also in
+    the reply to each live `PUT` (`"brief"`), so the watch needs no extra request.
+  - Ask about a meeting that is still going on (or still being processed): `/api/ask` with `"recording"` answers
+    from the transcript so far. `/api/watch/pack?limit=` up to 400 (watches with an SD card).
 - **Transcript while it works, speakers live** (1.19.0): a recording that's still being processed shows its
   transcript right away (what came in live, then the words as they're found), with the stage above it; it stays
   visible while speakers are separated and the minutes written, and turns into the finished view by itself.
