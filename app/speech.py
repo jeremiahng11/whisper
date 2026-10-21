@@ -9,6 +9,7 @@ import io
 import struct
 import json
 import logging
+import os
 import re
 import threading
 import time
@@ -251,7 +252,51 @@ def tts_voices() -> dict:
     return out
 
 
+def eleven_on() -> bool:
+    return bool(settings.elevenlabs_key and settings.elevenlabs_voice) and settings.tts_backend != "none"
+
+
+def voice_name() -> str:
+    """Which voice speaks (spoken files made earlier are made again when it changes)."""
+    if eleven_on():
+        return f"eleven:{settings.elevenlabs_voice}:{settings.elevenlabs_model}"
+    return str(tts_voices().get("en", ""))
+
+
+def _eleven(text: str) -> bytes:
+    """16 kHz PCM from ElevenLabs, kept on disk (the same sentence is never paid for twice)."""
+    import hashlib
+    import json as _json
+    import urllib.request
+    d = settings.data_dir / "tts_cache"
+    d.mkdir(parents=True, exist_ok=True)
+    key = hashlib.sha1((voice_name() + "|" + text).encode()).hexdigest()
+    p = d / f"{key}.pcm"
+    if p.exists():
+        os.utime(p)
+        return p.read_bytes()
+    req = urllib.request.Request(
+        f"https://api.elevenlabs.io/v1/text-to-speech/{settings.elevenlabs_voice}?output_format=pcm_16000",
+        data=_json.dumps({"text": text, "model_id": settings.elevenlabs_model}).encode(),
+        headers={"xi-api-key": settings.elevenlabs_key, "Content-Type": "application/json", "Accept": "audio/pcm"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        pcm = r.read()
+    if len(pcm) < 320:
+        raise RuntimeError("ElevenLabs returned no audio")
+    tmp = p.with_suffix(".tmp")
+    tmp.write_bytes(pcm)
+    tmp.replace(p)
+    files = sorted(d.glob("*.pcm"), key=lambda f: f.stat().st_mtime)   # keep the cache to its size: oldest go
+    total = sum(f.stat().st_size for f in files)
+    while files and total > settings.elevenlabs_cache_mb * 1024 * 1024:
+        total -= files[0].stat().st_size
+        files.pop(0).unlink(missing_ok=True)
+    return pcm
+
+
 def tts_available() -> bool:
+    if eleven_on():
+        return True
     if settings.tts_backend != "piper":
         return False
     try:
@@ -348,6 +393,14 @@ def tts(text: str, lang: str = "en") -> bytes:
     text = re.sub(r"[*#`_>\[\]]", "", text or "").strip()[:2000]
     if not text:
         return to_wav16k(np.zeros(1600), 16000)
+    if eleven_on():
+        try:
+            pcm = np.frombuffer(_eleven(text), dtype="<i2")
+            return to_wav16k(pcm, 16000)
+        except Exception as e:                      # noqa: BLE001 - no internet / quota: Piper says it instead
+            log.warning("ElevenLabs failed (%s) - using Piper", e)
+            if settings.tts_backend != "piper":
+                raise
     voice = _get_voice(lang)
     buf = io.BytesIO()
     with wave.open(buf, "wb") as w:

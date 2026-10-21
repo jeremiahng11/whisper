@@ -47,7 +47,9 @@ MAX_PHRASES = 400                                   # what MultiNet7 takes in al
 
 # ---------------------------------------------------------------- spoken answers (read out offline)
 def voice_tag(answer: str) -> str:
-    return hashlib.sha1(answer.encode()).hexdigest()[:8]
+    """Changes with the answer and with the voice that reads it (so the watch fetches it again in a new voice)."""
+    from . import speech
+    return hashlib.sha1((answer + "|" + speech.voice_name()).encode()).hexdigest()[:8]
 
 
 def voice_dir():
@@ -157,7 +159,7 @@ def prompt_file(name: str):
     text = PROMPTS.get(name)
     if not text or not speech.tts_available():
         return None
-    tag = voice_tag(text + "|" + str(speech.tts_voices().get("en", "")))
+    tag = voice_tag(text)
     p = voice_dir() / f"prompt-{name}-{tag}.wav"
     if not p.exists():
         for old in voice_dir().glob(f"prompt-{name}-*.wav"):
@@ -189,5 +191,5 @@ def prompts_info() -> dict:
     from . import speech
     if not speech.tts_available():
         return {"voice": "", "names": []}
-    return {"voice": voice_tag(json.dumps(PROMPTS, sort_keys=True) + str(speech.tts_voices().get("en", ""))),
+    return {"voice": voice_tag(json.dumps(PROMPTS, sort_keys=True)),
             "names": sorted(PROMPTS)}

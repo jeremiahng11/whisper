@@ -385,6 +385,11 @@ owners, dates, budgets, terms, and who people are. In the background it reads on
   other fact to treat it the same. The watch model learns the essentials and your pages/research first; meeting facts
   fill the rest (meeting questions are answered online). Find a fact shows the answer when one fact clearly answers
   it, and **Ask Oracle** asks the AI.
+- **ElevenLabs voice** (1.22.0): set `ELEVENLABS_API_KEY` and `ELEVENLABS_VOICE_ID` (and `ELEVENLABS_MODEL`, default
+  `eleven_multilingual_v2`) and everything spoken uses that voice: answers on the watch, the morning brief, the
+  watch's offline answers and prompts. Each sentence is made once and kept (`ELEVENLABS_CACHE_MB`, 300), so the same
+  text is never paid for twice; the watch fetches its offline answers again in the new voice. If ElevenLabs can't be
+  reached, Piper speaks instead.
 - **More offline questions for the watch** (1.21.0): the knowledge base also makes, for each person: "what is
   Priscilla's favourite word" (the phrases and words they use most), "what does Priscilla usually talk about",
   "when did I last meet Priscilla", "how much does Priscilla talk", "what is Priscilla working on" (their action

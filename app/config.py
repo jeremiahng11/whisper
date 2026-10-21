@@ -103,6 +103,12 @@ class Settings:
     # --- voice (round Idea Saver): text-to-speech ---
     tts_backend: str = os.getenv("TTS", "piper").lower()          # piper | none
     tts_voices: str = os.getenv("TTS_VOICES", "en=en_US-lessac-medium,zh=zh_CN-huayan-medium")
+    # ElevenLabs voice for everything spoken (answers, the morning brief, the watch's offline answers and prompts):
+    # set the API key and the voice id (ElevenLabs > Voices > your voice > ID). Piper stays as the fallback.
+    elevenlabs_key: str = os.getenv("ELEVENLABS_API_KEY", "")
+    elevenlabs_voice: str = os.getenv("ELEVENLABS_VOICE_ID", "")
+    elevenlabs_model: str = os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2")
+    elevenlabs_cache_mb: int = int(os.getenv("ELEVENLABS_CACHE_MB", "300") or 300)
 
     # --- calendar (device Agenda app) ---
     calendar_ics_urls: str = os.getenv("CALENDAR_ICS_URLS", "")   # private ICS links, comma separated

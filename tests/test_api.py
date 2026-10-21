@@ -2378,3 +2378,32 @@ def test_watch_facts_people_and_pack_size(monkeypatch):
     p = watchpack.build(300, True)
     total = sum(len(it["say"]) for it in p["items"]) + sum(len(it["say"]) for it in p.get("extra", []))
     assert p["count"] >= 250 and total <= 400
+
+
+def test_elevenlabs_voice_with_cache(monkeypatch):
+    import io as _io, wave as _wave, urllib.request
+    from app import speech, watchpack
+    monkeypatch.setattr(settings, "elevenlabs_key", "k")
+    monkeypatch.setattr(settings, "elevenlabs_voice", "brittney")
+    calls = []
+
+    class R:
+        def __init__(self, b): self.b = b
+        def read(self): return self.b
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    def fake(req, timeout=0):
+        calls.append(req.full_url)
+        assert req.headers["Xi-api-key"] == "k" and "pcm_16000" in req.full_url and "/brittney" in req.full_url
+        return R(struct.pack("<h", 1000) * 16000)
+    monkeypatch.setattr(urllib.request, "urlopen", fake)
+    assert speech.tts_available() and speech.voice_name().startswith("eleven:brittney")
+    w = speech.tts("Good morning, here is your day.")
+    with _wave.open(_io.BytesIO(w)) as r:
+        assert r.getframerate() == 16000 and r.getnframes() == 16000
+    speech.tts("Good morning, here is your day.")
+    assert len(calls) == 1                                         # the same sentence: from the cache
+    t1 = watchpack.voice_tag("Ryan is the CEO.")
+    monkeypatch.setattr(settings, "elevenlabs_voice", "other")
+    assert watchpack.voice_tag("Ryan is the CEO.") != t1           # a new voice: the watch fetches it again
