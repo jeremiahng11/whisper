@@ -472,6 +472,9 @@ def test_live_upload_transcribes_while_recording(client, monkeypatch):
     one = [x for x in lv if x["rid"] == rid][0]
     assert one["receiving"] and abs(one["received_s"] - 40) < 0.1 and one["transcribed_s"] == 15
     assert one["segments"] and one["segments"][0]["text"]
+    # who's talking, while it streams in (test voices: two people taking turns every 10 s)
+    assert [x["speaker"] for x in one["segments"]] == ["Speaker 1", "Speaker 1", "Speaker 2"]
+    assert [v["label"] for v in one["speakers"]] == ["Speaker 1", "Speaker 2"] and one["seg_from"] == 0
     client.put(f"/api/uploads/{rid}", content=bytes(data[first:]), headers={**H, "X-Offset": str(first), "X-Live": "1"})
     r = client.post(f"/api/uploads/{rid}/complete?filename=2026-10-09_1100.wav", headers={**H, "X-Total-Size": str(len(data))})
     j = wait(client, r.json()["id"])
@@ -480,6 +483,42 @@ def test_live_upload_transcribes_while_recording(client, monkeypatch):
     nums = [int(s["text"].split()[-1].rstrip(".")) for s in segs]
     assert nums == list(range(1, 13))                                  # no gaps, no doubles
     assert not st.exists() and (worker.result_dir(j["id"]) / "live.json").exists()
+    d = client.get(f"/api/jobs/{j['id']}/draft", headers=H).json()
+    assert d["speakers_done"] and len(d["segments"]) == 12 and not (worker.result_dir(j["id"]) / "draft.json").exists()
+
+
+def test_words_show_before_the_speakers_are_separated(tmp_path, monkeypatch):
+    from app import transcribe
+    p = tmp_path / "a.wav"
+    p.write_bytes(wav_bytes(30))
+    seen = []
+    orig = transcribe.assign_speakers
+
+    def slow(audio, tr, n=None, progress=None):
+        seen.append(("diarize", len(drafts[-1][0]) if drafts else -1))
+        return orig(audio, tr, n, progress)
+    drafts = []
+    monkeypatch.setattr(transcribe, "assign_speakers", slow)
+    prior = {"until": 10, "segments": [{"start": 0, "end": 5, "text": "Earlier one.", "speaker": "Speaker 1"},
+                                       {"start": 5, "end": 10, "text": "Earlier two.", "speaker": "Speaker 1"}]}
+    tr = transcribe.transcribe(str(p), "en", lambda f, s: None, diarize=True, prior=prior,
+                               on_text=lambda segs, done: drafts.append((list(segs), done)))
+    assert drafts[0][0][0].text == "Earlier one." and not drafts[0][1]       # what came in live: shown at once
+    assert drafts[-1][1] and len(drafts[-1][0]) == 6                          # all the words, then the speakers
+    assert seen == [("diarize", 6)] and len(tr.segments) >= 6
+
+
+def test_live_voices_get_labels_and_names(tmp_path, monkeypatch):
+    from app import livetag, voices
+    p = tmp_path / "b.wav"
+    p.write_bytes(wav_bytes(40))
+    st = {"segments": [{"start": float(t), "end": float(t + 5), "text": f"line {t}"} for t in range(0, 40, 5)]
+          + [{"start": 40.2, "end": 40.6, "text": "ok"}]}
+    monkeypatch.setattr(voices, "match", lambda spk: {"Speaker 2": "San"} if spk["Speaker 2"]["seconds"] >= 3 else {})
+    assert livetag.tag(str(p), st, 0) == 8
+    assert [s["speaker"] for s in st["segments"]] == ["Speaker 1"] * 2 + ["Speaker 2"] * 2 + ["Speaker 1"] * 2 + \
+        ["Speaker 2"] * 3                                                 # "ok": too short, takes the voice before
+    assert st["names"] == {"Speaker 2": "San"} and livetag.speakers(st)["Speaker 1"]["seconds"] == 20
 
 
 # ---------------------------------------------------------------- round Idea Saver: voice

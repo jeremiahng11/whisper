@@ -206,7 +206,8 @@ quick = threading.local()                           # quick.on: a short spoken q
 
 
 def _run(audio: np.ndarray, offset: float, language: Optional[str], prompt: str,
-         progress: ProgressFn, total: float, vad_threshold: Optional[float] = None) -> tuple[list[Segment], str, float]:
+         progress: ProgressFn, total: float, vad_threshold: Optional[float] = None,
+         on_segs: Optional[Callable[[list], None]] = None) -> tuple[list[Segment], str, float]:
     """Transcribe one stretch of audio; returns (segments with absolute times, language, probability).
     vad_threshold = a more sensitive speech detector for one pass (quiet or far-away voices)."""
     if len(audio) < SR // 2:
@@ -222,6 +223,8 @@ def _run(audio: np.ndarray, offset: float, language: Optional[str], prompt: str,
             step = (end - t) / len(ws)
             words = [[round(offset + t + k * step, 2), round(offset + t + (k + 1) * step, 2), w] for k, w in enumerate(ws)]
             segs.append(Segment(round(offset + t, 2), round(offset + end, 2), text, words=words))
+            if on_segs:
+                on_segs(segs)
             progress(min(1.0, (offset + end) / total) if total else 1.0, "transcribing")
             t = end
         return segs, language or settings.default_language or "en", 1.0
@@ -249,14 +252,19 @@ def _run(audio: np.ndarray, offset: float, language: Optional[str], prompt: str,
             words = [[round(offset + float(w.start), 2), round(offset + float(w.end), 2), w.word]
                      for w in (getattr(s, "words", None) or []) if (w.word or "").strip()]
             out.append(Segment(round(offset + float(s.start), 2), round(offset + float(s.end), 2), text, words=words))
+            if on_segs:
+                on_segs(out)
         if total > 0:
             progress(min(1.0, (offset + s.end) / total), "transcribing")
     return out, info.language, float(info.language_probability or 0)
 
 
 def transcribe(path: str, language: Optional[str], progress: ProgressFn, diarize: bool = False,
-               prompt: str = "", num_speakers: Optional[int] = None, prior: Optional[dict] = None) -> Transcript:
-    """prior = state from partial() for live uploads: only the audio after prior["until"] is transcribed."""
+               prompt: str = "", num_speakers: Optional[int] = None, prior: Optional[dict] = None,
+               on_text: Optional[Callable[[list, bool], None]] = None) -> Transcript:
+    """prior = state from partial() for live uploads: only the audio after prior["until"] is transcribed.
+    on_text(segments, done) = the text as it is found, before the (slow) speaker separation: the page shows it
+    while the speakers are still being worked out. done=True once all the words are in."""
     progress(0.0, "loading audio")
     audio = load_audio(path)
     total = len(audio) / SR
@@ -267,7 +275,12 @@ def transcribe(path: str, language: Optional[str], progress: ProgressFn, diarize
         progress(min(1.0, until / total) if total else 0, f"transcribing the last {int((total - until) / 60) + 1} min")
     else:
         progress(0.0, "loading model" if settings.transcriber != "fake" and not model_loaded() else "transcribing")
-    new, detected, prob = _run(audio[int(until * SR):], until, lang, prompt, progress, total)
+    if on_text and segs:
+        on_text(segs, False)
+    hook = (lambda out: on_text(segs + out, False)) if on_text else None
+    new, detected, prob = _run(audio[int(until * SR):], until, lang, prompt, progress, total, on_segs=hook)
+    if on_text:
+        on_text(segs + new, True)
     tr = Transcript(lang or detected, prob if not lang else 1.0, total,
                     "fake" if settings.transcriber == "fake" else settings.whisper_model, segs + new)
     if diarize and tr.segments:

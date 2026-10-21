@@ -59,6 +59,9 @@ label.mute{display:inline-flex;gap:6px;align-items:center}
 .lvtext p.new{animation:fadein .8s ease}
 @keyframes fadein{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
 .lvtext .wait{color:var(--mute);font-style:italic}
+.spk{display:inline-block;margin-right:8px;padding:1px 9px;border-radius:10px;font-size:13px;font-weight:600;color:var(--c);background:color-mix(in srgb,var(--c) 14%,transparent);vertical-align:1px}
+.lvwho{margin:8px 0 4px;font-size:14px;line-height:2}.lvwho .mute{margin:0 10px 0 -4px;font-size:12px}
+.lvtext.draft{max-height:calc(100vh - 260px);margin-top:6px}
 .side{background:var(--surface);border-right:1px solid var(--rule);display:flex;flex-direction:column;height:100vh;position:sticky;top:0}
 .brand{padding:18px 18px 10px}
 .brand h1{font-size:17px;margin:0;letter-spacing:-.01em;display:flex;align-items:center;gap:9px}
@@ -322,6 +325,7 @@ ul.replies{margin:4px 0;padding-left:20px;font-size:13.5px}
           <div class="mtools noprint"><label class="mute"><input type="checkbox" id="lvFollow" checked> Follow the newest words</label></div>
         </div>
         <div class="lvbar" title="transcribed / received"><i id="lvBar"></i></div>
+        <div id="lvWho" class="lvwho"></div>
         <div id="lvText" class="lvtext"></div>
       </div>
       <div class="hidden" id="viewCard">
@@ -913,9 +917,14 @@ async function show(id) {
   $("#resum").disabled = j.status !== "done";
   if (j.status !== "done") {
     $("#dl").innerHTML = "";
-    $("#view").innerHTML = j.status === "error" ? `<p><strong>Failed:</strong> ${esc(j.error)}</p><button id="retry">Retry</button>`
-      : `<p class="mute">${esc(j.stage || j.status)} – results appear here when it's done.</p>`;
-    if ($("#retry")) $("#retry").onclick = async () => { await api(`/api/jobs/${id}/retry`, { method: "POST" }); load(); show(id); };
+    if (j.status === "error") {
+      $("#view").innerHTML = `<p><strong>Failed:</strong> ${esc(j.error)}</p><button id="retry">Retry</button><div id="draft" class="lvtext draft"></div>`;
+      $("#retry").onclick = async () => { await api(`/api/jobs/${id}/retry`, { method: "POST" }); load(); show(id); };
+      followDraft(id, true);
+    } else {
+      $("#view").innerHTML = `<p class="mute" id="draftStage">${esc(j.stage || j.status)}…</p><div id="draft" class="lvtext draft"></div>`;
+      followDraft(id);
+    }
   } else {
     const text = await (await api(j.results.markdown)).text();
     $("#view").innerHTML = md(text);
@@ -1657,9 +1666,9 @@ setInterval(() => { load(); health(); }, 4000);
 // ---------------------------------------------------------------- live: recordings streaming in from a watch
 // The sidebar shows a small card per stream (the newest line underneath); clicking it opens the live transcript in
 // the main area, where it keeps growing. When the recording ends, the finished meeting opens in its place.
-let liveOpen = null, liveShown = 0, liveLastData = {};
+let liveOpen = null, liveShown = 0, liveLastData = {}, liveSpk = "", liveFrom = 0;
 function showLive(rid) {
-  liveOpen = rid; liveShown = 0; current = null;
+  liveOpen = rid; liveShown = 0; liveSpk = ""; liveFrom = 0; current = null;
   go("meetings");
   document.querySelectorAll("tr.job").forEach(tr => tr.classList.remove("on"));
   document.querySelectorAll(".live").forEach(el => el.classList.toggle("on", el.dataset.rid === rid));
@@ -1674,6 +1683,46 @@ function liveMetaText(l) {
     + (l.transcribing ? "transcribing now…" : `transcribed to ${mmss(l.transcribed_s)}${behind > 1 ? ` (${Math.round(behind)} s behind)` : ""}`)
     + (l.receiving ? "" : " · waiting for the watch");
 }
+// speakers get a steady colour each (by name), so you can follow who's talking at a glance
+const SPK_COL = ["#4f8cff", "#e0793a", "#2fa66a", "#b056d6", "#d2477a", "#1aa3a3", "#c29a1a", "#6a6fd8"];
+function spkChip(name) {
+  if (!name) return "";
+  let h = 0; for (const c of name) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return `<span class="spk" style="--c:${SPK_COL[h % SPK_COL.length]}">${esc(name)}</span>`;
+}
+function draftStageText(d) {
+  if (d.status === "queued") return "Waiting its turn – the transcript so far is below.";
+  if (!d.words_done) return `${d.stage || "transcribing"}… the words appear below as they're found.`;
+  if (!d.speakers_done) return `All the words are in. ${d.stage || "Separating speakers"}… names are added when it's done.`;
+  return "Transcript done – writing the minutes…";
+}
+// a recording that isn't finished: show its transcript so far and keep it fresh until it's done
+async function followDraft(id, once) {
+  let shown = -1, lastKey = "";
+  for (let k = 0; k < 4000 && id === current; k++) {
+    let d;
+    try { d = await (await api(`/api/jobs/${id}/draft`)).json(); } catch (e) { d = null; }
+    if (id !== current || !$("#draft")) return;
+    if (d) {
+      if (!once && (d.status === "done" || d.status === "error")) { load(); show(id); return; }
+      if ($("#draftStage")) $("#draftStage").textContent = draftStageText(d);
+      const segs = d.segments || [];
+      const key = segs.length + "|" + (d.speakers_done ? 1 : 0) + "|" + (segs.length ? segs[segs.length - 1].text : "");
+      if (key !== lastKey) {
+        const box = $("#draft"), atEnd = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+        let prev = "";
+        box.innerHTML = segs.map((s, i) => {
+          const who = s.speaker && s.speaker !== prev ? spkChip(s.speaker) : ""; prev = s.speaker || prev;
+          return `<p${shown >= 0 && i >= shown ? ' class="new"' : ""}><span class="ts">${mmss(s.start)}</span>${who}${esc(s.text)}</p>`;
+        }).join("") || `<p class="wait">No words yet – they appear here as soon as the first part is transcribed.</p>`;
+        if (atEnd || shown < 0) box.scrollTop = shown < 0 ? 0 : box.scrollHeight;
+        shown = segs.length; lastKey = key;
+      }
+    }
+    if (once) return;
+    await new Promise(r => setTimeout(r, 2500));
+  }
+}
 function renderLiveMain(l) {
   const started = new Date(l.started * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   $("#lvTitle").textContent = `${l.receiving ? "Live" : "Paused"} - ${l.device}, since ${started}`;
@@ -1681,15 +1730,22 @@ function renderLiveMain(l) {
   $("#lvMeta").textContent = liveMetaText(l) + (l.language ? ` · ${l.language}` : "");
   $("#lvBar").style.width = (l.received_s ? Math.min(100, 100 * l.transcribed_s / l.received_s) : 0) + "%";
   const box = $("#lvText"), segs = l.segments || [];
-  if (segs.length < liveShown) { box.innerHTML = ""; liveShown = 0; }
+  if (segs.length < liveShown || (l.seg_from || 0) !== liveFrom) { box.innerHTML = ""; liveShown = 0; liveFrom = l.seg_from || 0; }
   box.querySelector(".wait")?.remove();
+  // speaker labels can change as more of a voice is heard (a name found for "Speaker 2"): redraw when they do
+  const spkKey = segs.map(s => s.speaker || "").join("|");
+  if (liveShown && spkKey.slice(0, liveSpk.length) !== liveSpk) { box.innerHTML = ""; liveShown = 0; }
+  let prev = liveShown ? segs[liveShown - 1]?.speaker || "" : "";
   for (const s of segs.slice(liveShown)) {
     const p = document.createElement("p");
     if (liveShown) p.className = "new";
-    p.innerHTML = `<span class="ts">${mmss(s.start)}</span>${esc(s.text)}`;
+    const who = s.speaker && s.speaker !== prev ? spkChip(s.speaker) : ""; prev = s.speaker || prev;
+    p.innerHTML = `<span class="ts">${mmss(s.start)}</span>${who}${esc(s.text)}`;
     box.append(p);
   }
-  liveShown = segs.length;
+  liveShown = segs.length; liveSpk = spkKey;
+  const sp = (l.speakers || []).filter(v => v.seconds >= 2);
+  $("#lvWho").innerHTML = sp.length ? "Talking so far: " + sp.map(v => spkChip(v.name || v.label) + `<span class="mute">${Math.round(v.seconds)} s</span>`).join(" ") : "";
   if (!segs.length) box.insertAdjacentHTML("beforeend", `<p class="wait">Listening… the first words appear here about 30 s after the recording starts.</p>`);
   if ($("#lvFollow").checked) box.scrollTop = box.scrollHeight;
 }

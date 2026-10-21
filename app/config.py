@@ -97,6 +97,8 @@ class Settings:
     # --- live upload (device uploads while it records; transcribed in parts) ---
     live_min_new_s: int = _int("LIVE_MIN_NEW_S", 20)      # transcribe a part once this much new audio arrived
     live_hold_s: int = _int("LIVE_HOLD_S", 8)             # the last seconds wait for the next part (a sentence may go on)
+    live_tag: bool = os.getenv("LIVE_TAG", "1") not in ("0", "false", "no")   # who's talking, while it streams in
+    live_same_voice: float = float(os.getenv("LIVE_SAME_VOICE", "0.55") or 0.55)   # this close = the same person
 
     # --- voice (round Idea Saver): text-to-speech ---
     tts_backend: str = os.getenv("TTS", "piper").lower()          # piper | none

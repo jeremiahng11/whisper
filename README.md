@@ -385,6 +385,14 @@ owners, dates, budgets, terms, and who people are. In the background it reads on
   other fact to treat it the same. The watch model learns the essentials and your pages/research first; meeting facts
   fill the rest (meeting questions are answered online). Find a fact shows the answer when one fact clearly answers
   it, and **Ask Oracle** asks the AI.
+- **Transcript while it works, speakers live** (1.19.0): a recording that's still being processed shows its
+  transcript right away (what came in live, then the words as they're found), with the stage above it; it stays
+  visible while speakers are separated and the minutes written, and turns into the finished view by itself.
+  `GET /api/jobs/{id}/draft`. While a watch streams, each new line gets a voice print: the same voice keeps its label
+  (*Speaker 2*), a new voice gets a new one, and once a voice has 3 s of speech it's matched to people you've named
+  (`VOICE_MATCH`). The live view shows coloured name chips and who has talked so far. The full separation at the end
+  still decides; if it's off or fails, the live labels are kept. `LIVE_TAG=0` turns it off, `LIVE_SAME_VOICE`
+  (0.55) is how close two lines must sound to be the same person.
 - **Live view** (1.18.0): a recording streaming in from a watch shows at the top of the Recordings list: device,
   when it started, how much audio has arrived, when the last audio came ("waiting for the watch" after 30 s), how far
   the live transcript is, and the transcript itself, growing as parts are ready. `GET /api/live`. Live parts are

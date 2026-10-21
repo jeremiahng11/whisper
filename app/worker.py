@@ -206,18 +206,40 @@ def process(job: dict) -> None:
             db.update(jid, progress=round(p, 3), stage=stage)
 
     speakers = opts.get("speakers")
+    prior = load_json(jid, "live.json")
+    do_redact = opts.get("redact", settings.redact)
+    live_names = (prior or {}).get("names") or {}
+    drafted = [0.0]
+
+    def draft(segs: list, done: bool) -> None:
+        """The words so far, for the page: shown while the speakers are still being separated."""
+        if not done and time.time() - drafted[0] < 3:
+            return
+        drafted[0] = time.time()
+        try:
+            rows = [{"start": round(s.start, 2), "end": round(s.end, 2),
+                     "text": redact.redact(s.text) if do_redact else s.text,
+                     "speaker": live_names.get(s.speaker, s.speaker)} for s in segs]
+            _write(jid, "draft.json", json.dumps({"segments": rows, "words_done": done}, ensure_ascii=False))
+        except Exception as e:                       # noqa: BLE001 - the draft is only for show
+            log.warning("draft for %s failed: %s", jid, e)
+
     tr = transcribe.transcribe(job["audio_path"], opts.get("language"), prog,
                                diarize=opts.get("diarize", settings.diarize),
                                prompt=voices.whisper_prompt(opts.get("attendees")),
                                num_speakers=int(speakers) if speakers else None,
-                               prior=load_json(jid, "live.json"))
+                               prior=prior, on_text=draft)
     if opts.get("redact", settings.redact):
         for s in tr.segments:
             s.text = redact.redact(s.text)
     data = asdict(tr)
     spk = data.pop("speakers", {}) or {}
+    if not spk and (prior or {}).get("voices") and any(s.get("speaker") for s in data["segments"]):
+        from . import livetag                       # no separation at the end: keep the voices found live
+        spk = livetag.speakers(prior)
     terms.fix_transcript(data)                      # mis-heard names & terms get your spelling
     _write(jid, "transcript.json", json.dumps(data, ensure_ascii=False, indent=1))
+    (result_dir(jid) / "draft.json").unlink(missing_ok=True)
     _write(jid, "speakers.json", json.dumps(spk))
     opts = db.get(jid).get("options", {})
     if opts.get("diarize", settings.diarize) and not spk and transcribe.diarize_error:
@@ -259,11 +281,19 @@ def live_pass() -> bool:
         current_job = f"live:{rid}"
         live_info.clear()
         live_info.update(rid=rid, until=float(state.get("until", 0)), received=wav_seconds(part))
+        n0 = len(state.get("segments") or [])
         try:
-            did = transcribe.partial(str(part), state, voices.whisper_prompt(), dur=live_info["received"])
-        except Exception as e:
-            log.warning("live part for %s failed: %s", rid, e)
-            did = False
+            try:
+                did = transcribe.partial(str(part), state, voices.whisper_prompt(), dur=live_info["received"])
+            except Exception as e:
+                log.warning("live part for %s failed: %s", rid, e)
+                did = False
+            if did and settings.live_tag:
+                try:
+                    from . import livetag
+                    livetag.tag(str(part), state, n0)
+                except Exception as e:               # noqa: BLE001 - only the live labels are lost
+                    log.warning("live speakers for %s failed: %s", rid, e)
         finally:
             current_job = None
         with live_lock:
@@ -294,13 +324,18 @@ def live_now() -> list[dict]:
             state = {}
         m = re.match(r"^(.*?)-((?:memo_|dict_)?\d{4}-\d{2}-\d{2}_\d{4})$", rid)
         segs = state.get("segments") or []
+        names = state.get("names") or {}
         out.append({
             "rid": rid, "device": m.group(1) if m else rid, "name": m.group(2) if m else "",
             "started": st_path.stat().st_ctime, "received_s": round(wav_seconds(part), 1),
             "last_audio_s_ago": round(age, 1), "receiving": age < 30,
             "transcribed_s": float(state.get("until", 0)), "language": state.get("language", ""),
             "transcribing": current_job == f"live:{rid}",
-            "segments": [{"start": round(s.get("start", 0), 1), "text": (s.get("text") or "").strip()} for s in segs[-300:]],
+            "segments": [{"start": round(s.get("start", 0), 1), "text": (s.get("text") or "").strip(),
+                          "speaker": names.get(s.get("speaker") or "", s.get("speaker") or "")} for s in segs[-300:]],
+            "seg_from": max(0, len(segs) - 300),
+            "speakers": [{"label": v["label"], "name": names.get(v["label"], ""), "seconds": v.get("secs", 0)}
+                         for v in state.get("voices") or []],
         })
     out.sort(key=lambda x: x["started"])
     return out

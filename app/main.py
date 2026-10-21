@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.18.1"
+VERSION = "1.19.0"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -426,11 +426,36 @@ def job_result(jid: str, name: str, start: float = Query(0.0, ge=0), end: float 
     if name == "autotag":
         _job(jid)
         return autotag.status(jid)
+    if name == "draft":
+        return job_draft(jid)
     if name == "dynamics":
         if _job(jid)["status"] != "done":
             raise HTTPException(409, "not finished yet")
         return dynamics.get(jid)
     return _result(_job(jid), name, analysis)
+
+
+def job_draft(jid: str):
+    """The transcript so far of a recording that isn't finished: the words as they're found, then (while the minutes
+    are written) the transcript with its speakers. Live recordings start with what was transcribed while streaming."""
+    j = _job(jid)
+    names = (j.get("options") or {}).get("speaker_names") or {}
+    tr = worker.load_transcript(jid)
+    if tr:
+        segs = [{"start": s["start"], "end": s["end"], "text": s["text"],
+                 "speaker": names.get(s.get("speaker") or "", s.get("speaker") or "")} for s in tr.get("segments", [])]
+        return {"segments": segs, "words_done": True, "speakers_done": True, "status": j["status"], "stage": j["stage"]}
+    d = worker.load_json(jid, "draft.json") or {}
+    segs = d.get("segments")
+    if segs is None:                                  # not started yet: what came in live, if anything
+        live = worker.load_json(jid, "live.json") or {}
+        ln = live.get("names") or {}
+        segs = [{"start": s["start"], "end": s["end"], "text": s["text"],
+                 "speaker": ln.get(s.get("speaker") or "", s.get("speaker") or "")} for s in live.get("segments", [])]
+        if (j.get("options") or {}).get("redact", settings.redact):
+            segs = [{**s, "text": redact.redact(s["text"])} for s in segs]
+    return {"segments": segs, "words_done": bool(d.get("words_done")), "speakers_done": False,
+            "status": j["status"], "stage": j["stage"]}
 
 
 def job_clip(jid: str, start: float, end: float, enhance: bool = True):
