@@ -165,15 +165,7 @@ def rule_intent(text: str, now: datetime) -> Optional[dict]:
         what = _strip_lead(what, "task|to-?do|to")
         if what:
             return {"type": "task", "text": what}
-    # note
-    m = re.match(r"^(?:take\s+a\s+note|note\s+(?:that|down)?|make\s+a\s+note|remember\s+that)\b[\s,:]*(.*)$", low)
-    # ...but not a question that speech-to-text started with "Note" ("Note, is Aleta Planet a global company?" - it
-    # heard "Oracle" / "Hey Oracle" as "note"): saved as a note instead of answered
-    if m and m.group(1) and (text.strip().endswith("?") or _ASK.search(m.group(1))) and not re.match(
-            r"^(take\s+a\s+note|make\s+a\s+note|note\s+down|remember\s+that)\b", low):
-        m = None
-    if m and m.group(1):
-        return {"type": "note", "text": t[len(t) - len(m.group(1)):].strip()}
+    # (no voice notes any more: "note ..." is a question to answer - it saved questions as notes)
     # meeting
     if re.match(r"^(?:start|begin|record)\s+(?:a\s+|the\s+|my\s+)?(?:meeting|recording)\b", low):
         title = re.sub(r"^(?:start|begin|record)\s+(?:a\s+|the\s+|my\s+)?(?:meeting|recording)\s*(?:called|named|for|about)?\s*", "", t, flags=re.I)
@@ -191,7 +183,6 @@ Reply with ONLY one JSON object, one of:
 {{"type":"reminder","text":"<what>","at":"<YYYY-MM-DD HH:MM local>","repeat":""|"daily"|"weekdays"|"weekly"}}
 {{"type":"timer","seconds":<number>,"label":"<optional>"}}
 {{"type":"task","text":"<task>"}}
-{{"type":"note","text":"<note to save>"}}
 {{"type":"meeting","title":"<optional title>"}}
 {{"type":"translate","text":"<text>","lang":"<language name>"}}
 {{"type":"question"}}   (anything else: a question or chat for the AI)
@@ -243,7 +234,7 @@ def intent(text: str, now_epoch: Optional[int] = None, tz_min: int = 480) -> dic
             return {"type": "question", "source": "llm"}
     if typ == "timer" and float(d.get("seconds") or 0) > 0:
         return {"type": "timer", "seconds": int(float(d["seconds"])), "label": str(d.get("label") or "")[:40], "source": "llm"}
-    if typ in ("task", "note") and str(d.get("text", "")).strip():
+    if typ == "task" and str(d.get("text", "")).strip():
         return {"type": typ, "text": str(d["text"]).strip()[:300], "source": "llm"}
     if typ == "meeting":
         return {"type": "meeting", "title": str(d.get("title") or "")[:100], "source": "llm"}

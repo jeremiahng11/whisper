@@ -767,7 +767,7 @@ def test_intent_rules():
     assert intent("remind me in 20 minutes to check the oven", now)["at"] == now + 1200
     r = intent("Add buy RTX riser to my tasks", now)
     assert r == {"type": "task", "text": "buy RTX riser", "source": "rules"}
-    assert intent("take a note the Wi-Fi password is on the fridge", now)["type"] == "note"
+    assert intent("take a note the Wi-Fi password is on the fridge", now)["type"] != "note"      # (no voice notes)
     assert intent("start a meeting called Q4 planning", now) == {"type": "meeting", "title": "Q4 planning", "source": "rules"}
     r = intent("how do you say good morning in Japanese", now)
     assert r["type"] == "translate" and r["lang"] == "Japanese" and r["text"] == "good morning"
@@ -2711,5 +2711,5 @@ def test_question_heard_with_note_is_not_a_note():
     from datetime import datetime
     from app import speech
     assert speech.rule_intent("Note, is Aleta Planet a global company?", datetime.now()) is None
-    assert speech.rule_intent("Note that the launch moved to Friday", datetime.now())["type"] == "note"
+    assert speech.rule_intent("Note that the launch moved to Friday", datetime.now()) is None    # no voice notes
     assert speech.strip_wake("Hey Oracle, is it raining?") == "Is it raining?"

@@ -431,6 +431,9 @@ owners, dates, budgets, terms, and who people are. In the background it reads on
 - **Optional cloud AI for questions** (`LIVE_LLM_API_KEY`, `LIVE_LLM_BASE_URL`, `LIVE_LLM_MODEL`): any
   OpenAI-compatible API answers the watch's and Ask's questions in about a second (streamed). Off unless the key is
   set - the question and the company context sent with it then leave this server. Meetings always stay local.
+- **No voice notes** (1.32.0, watch W1B-1.8.6): "note …" / "take a note …" is no longer saved as a note (questions
+  heard as "Note, is …" were saved instead of answered), and the watch no longer writes every question and answer to
+  the notes ("AI chat" files; cfg save_chats=1 on the watch brings that back).
 - **ElevenLabs speaking pace** (1.31.1): `ELEVENLABS_SPEED` (0.7-1.2, default 1.1 - a little quicker than the voice's
   own pace). Changing it remakes the watch's saved answers once.
 - **Questions on the watch** (1.24.0): Account > Watch AI lists every question the watch can be asked offline, with
