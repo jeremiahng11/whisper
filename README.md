@@ -390,6 +390,11 @@ owners, dates, budgets, terms, and who people are. In the background it reads on
   updates downloads, checks and installs it (3 tries on a weak signal; it goes back to the old version by itself if
   the new one doesn't start). A version you delete on the Watches page isn't added again. `BUNDLED_FIRMWARE=0` turns
   it off.
+- **Edit this answer** (1.26.0): under an answer from Ask Oracle. Your answer replaces the one for the matching
+  question (e.g. "Who is Ryan Gwee", with your wording added as another way to ask it), or becomes your own
+  question when none matches. Oracle on the web answers with it at once, and the watch gets it (and its voice) at the
+  next sync. Watch W1B-1.5.7 answers the watch's questions on the watch even when WiFi is weak, playing the
+  answer's voice saved on the card first.
 - **Questions on the watch** (1.24.0): Account > Watch AI lists every question the watch can be asked offline, with
   its answer: fix a wrong answer, add other ways you'd ask it, hide a wrong question, or add your own question and
   answer (always on the watch, answered there). `POST /api/knowledge/custom`, `DELETE /api/knowledge/custom/{id}`,

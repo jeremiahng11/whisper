@@ -2517,3 +2517,17 @@ def test_bundled_firmware_offered(client):
     devices.import_bundled()                                         # deleted: not added again
     r = client.get("/api/firmware/latest?board=watch1b", headers=H)
     assert r.status_code == 404 or r.json()["version"] != v
+
+
+def test_edit_this_answer(client):
+    # no fact answers it yet: it becomes your own question
+    r = client.post("/api/knowledge/correct", json={"q": "Who runs the Zorblax desk?", "a": "Mira runs it."}, headers=H)
+    assert r.status_code == 200 and r.json()["how"] == "added"
+    fid = r.json()["id"]
+    # asked again in other words: the same fact gets the new answer and the wording
+    r = client.post("/api/knowledge/correct", json={"q": "who runs zorblax desk", "a": "Mira and Tom run it."}, headers=H)
+    assert r.json()["how"] == "fixed" and r.json()["id"] == fid
+    one = [x for x in client.get("/api/watch/pack?limit=300", headers=H).json()["items"] if x["id"] == fid][0]
+    assert one["a"] == "Mira and Tom run it."
+    assert client.post("/api/knowledge/correct", json={"q": "x", "a": ""}, headers=H).status_code == 400
+    client.delete(f"/api/knowledge/custom/{fid}", headers=H)

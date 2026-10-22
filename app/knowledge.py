@@ -372,6 +372,30 @@ def delete_custom(fid: str) -> bool:
     return True
 
 
+def correct(q: str, a: str) -> dict:
+    """"Edit this answer" under an answer on the web: the fact that answers the question gets your answer (and your
+    wording as another way to ask it); no such fact -> your own question. Oracle and the watch then answer with it."""
+    q = _clean_text(q, 160).rstrip("?").strip()
+    a = _clean_text(a, 300)
+    if not q or not a:
+        raise ValueError("a question and an answer are needed")
+    f = best_answer(q)
+    if not f:
+        fid = add_custom(q, a)
+        return {"id": fid, "q": q, "how": "added"}
+    if f.get("custom"):
+        alts = list(f.get("alts") or [])
+        if _norm(q) != _norm(f["q"]) and _norm(q) not in {_norm(x) for x in alts}:
+            alts.append(q)
+        add_custom(f["q"], a, alts)
+        return {"id": f["id"], "q": f["q"], "how": "fixed"}
+    alts = None
+    if _norm(q) != _norm(f["q"]) and _norm(q) not in {_norm(x) for x in f.get("alts") or []}:
+        alts = ((overrides().get(f["id"]) or {}).get("alts") or []) + [q]
+    set_override(f["id"], a, alts=alts[-6:] if alts else None)
+    return {"id": f["id"], "q": f["q"], "how": "fixed"}
+
+
 def overrides() -> dict:
     """Your corrections: {fact id: {"a": "better answer"} or {"hidden": true}} - kept when meetings are re-read."""
     try:

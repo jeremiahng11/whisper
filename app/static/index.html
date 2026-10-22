@@ -1591,11 +1591,38 @@ async function kbAskOracle() {
     for (let i = 0; i < 240; i++) {
       await new Promise(res => setTimeout(res, 1000));
       const a = await (await api("/api/ask/" + r.id)).json();
-      if (a.status === "done") { ans.innerHTML = esc(a.answer).replace(/\n/g, "<br>") + '<br><span class="mute">Oracle (the AI, with your company knowledge)</span>'; return; }
+      if (a.status === "done") { showAskAnswer(q, a.answer); return; }
       if (a.status === "error") { ans.innerHTML = '<span class="mute">Couldn\'t answer: ' + esc(a.error || "") + "</span>"; return; }
     }
     ans.innerHTML = '<span class="mute">The AI is busy - try again in a minute.</span>';
   } catch (e) { ans.innerHTML = '<span class="mute">' + esc(e.message) + "</span>"; }
+}
+// the answer, with "Edit this answer": your answer is kept for this question (Oracle and the watch use it from then on)
+function showAskAnswer(q, text) {
+  const ans = $("#kbAnswer");
+  ans.innerHTML = esc(text).replace(/\n/g, "<br>") + '<br><span class="mute">Oracle (the AI, with your company knowledge)</span>' +
+    ' · <a href="#" id="kbEdit">Edit this answer</a>';
+  $("#kbEdit").onclick = e => {
+    e.preventDefault();
+    ans.innerHTML = '<div class="mute">The right answer to "' + esc(q) + '" (Oracle and the watch will say this from now on):</div>' +
+      '<textarea id="kbEditA" rows="4" maxlength="300" style="width:100%;box-sizing:border-box"></textarea>' +
+      '<div><button id="kbEditSave">Save</button> <button id="kbEditCancel" class="ghost">Cancel</button> <span id="kbEditMsg" class="mute"></span></div>';
+    $("#kbEditA").value = text.slice(0, 300);
+    $("#kbEditA").focus();
+    $("#kbEditCancel").onclick = () => showAskAnswer(q, text);
+    $("#kbEditSave").onclick = async () => {
+      const v = $("#kbEditA").value.trim();
+      if (!v) return;
+      $("#kbEditMsg").textContent = "Saving…";
+      try {
+        const r = await (await api("/api/knowledge/correct", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ q, a: v }) })).json();
+        showAskAnswer(q, v);
+        ans.insertAdjacentHTML("beforeend", '<div class="mute">Saved ' + (r.how === "added" ? 'as your own question' : 'as the answer to "' + esc(r.q) + '"') +
+          ' - the watch gets it at its next sync (Questions on the watch to change it again).</div>');
+        loadKb(); if (typeof loadWatchQuestions === "function") loadWatchQuestions();
+      } catch (x) { $("#kbEditMsg").textContent = "Not saved: " + x.message; }
+    };
+  };
 }
 $("#kbAsk").onclick = kbAskOracle;
 $("#kbFind").onkeydown = e => { if (e.key === "Enter") kbAskOracle(); };

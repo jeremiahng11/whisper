@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.25.0"
+VERSION = "1.26.0"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -757,7 +757,7 @@ def _ask_start(data: dict) -> dict:
             # that clearly matches is the answer - at once, without waiting for the AI (on a home server that's
             # the difference between a second and half a minute)
             f = knowledge.best_answer(q)
-            if f and (f.get("core") or f.get("kind") == "person") and len(knowledge._words(q)) <= 6 \
+            if f and (f.get("core") or f.get("edited") or f.get("kind") == "person") and len(knowledge._words(q)) <= 6 \
                     and not worldinfo.is_world(last_q):
                 return chat.instant(f["a"])
         # any other question (the watch's "Hey Oracle ...", Ask on the web): your company's knowledge goes along when
@@ -1163,6 +1163,20 @@ async def fix_fact(fid: str, request: Request):
         knowledge.set_override(fid, str(data.get("a") or "") or None, bool(data.get("hidden")),
                                alts=[str(x) for x in alts] if alts is not None else None)
     return {"ok": True, **knowledge.summary()}
+
+
+@app.post("/api/knowledge/correct", dependencies=[Depends(auth)])
+async def correct_answer(request: Request):
+    """"Edit this answer": {"q": "who is ryan", "a": "the right answer"} -> the matching fact gets it (or it becomes
+    your own question). Oracle on the web and the watch answer with it from then on."""
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(400, "body must be JSON")
+    try:
+        return {"ok": True, **knowledge.correct(str(data.get("q") or ""), str(data.get("a") or ""))}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 @app.post("/api/knowledge/custom", dependencies=[Depends(auth)])
