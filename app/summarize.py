@@ -561,8 +561,11 @@ def chat_stream(messages: list[dict]):
                                 "stream": True}) as r:
             if r.status_code >= 400:                  # say why (a wrong model name, base URL or key)
                 body = r.read().decode(errors="replace")[:300]
-                raise RuntimeError(f"cloud AI ({settings.live_llm_base_url}/chat/completions, model "
-                                   f"{settings.live_llm_model}) said HTTP {r.status_code}: {body}")
+                try:                                  # just the provider's message, it's what matters on a watch
+                    body = (_json.loads(body).get("error") or {}).get("message") or body
+                except (ValueError, AttributeError):
+                    pass
+                raise RuntimeError(f"cloud AI said {r.status_code}: {body} (model {settings.live_llm_model!r})")
             for line in r.iter_lines():
                 if not line.startswith("data:"):
                     continue

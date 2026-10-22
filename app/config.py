@@ -99,9 +99,10 @@ class Settings:
     # Questions you ask the watch or Ask (not meetings) on a fast cloud AI - any OpenAI-compatible API (OpenAI, Groq,
     # OpenRouter, Anthropic's OpenAI endpoint...). Off unless LIVE_LLM_API_KEY is set: your question and the company
     # context sent with it then leave this server. Meetings and minutes always stay on SUMMARY_BACKEND.
-    live_llm_base_url: str = os.getenv("LIVE_LLM_BASE_URL", "https://api.openai.com/v1").rstrip("/")
-    live_llm_api_key: str = os.getenv("LIVE_LLM_API_KEY", "")
-    live_llm_model: str = os.getenv("LIVE_LLM_MODEL", "gpt-4o-mini")
+    # (spaces and quotes around the values are taken off: pasted into a dashboard they make "model does not exist")
+    live_llm_base_url: str = os.getenv("LIVE_LLM_BASE_URL", "https://api.openai.com/v1").strip().strip("'\"").strip().rstrip("/")
+    live_llm_api_key: str = os.getenv("LIVE_LLM_API_KEY", "").strip().strip("'\"").strip()
+    live_llm_model: str = os.getenv("LIVE_LLM_MODEL", "gpt-4o-mini").strip().strip("'\"").strip()
     openai_embed_model: str = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
     summary_chunk_chars: int = _int("SUMMARY_CHUNK_CHARS", 24000)   # longer transcripts are summarised in parts
     llm_timeout_s: int = _int("LLM_TIMEOUT_S", 1800)
