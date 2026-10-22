@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.33.2"
+VERSION = "1.33.3"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -1857,7 +1857,10 @@ async def voice_question(request: Request, language: Optional[str] = Query(None)
       E {} / E {"error"}       the end
     The voice of the first sentence comes while the AI is still writing the rest."""
     tmp = settings.upload_dir / f"voice_{secrets.token_hex(6)}.wav"
+    t_in = time.time()
     n = await save_body(request, tmp)
+    from . import timing as _timing
+    _timing.note("voice question in", time.time() - t_in, f"{n // 1024} KB, one trip")
     if n < 100:
         tmp.unlink(missing_ok=True)
         raise HTTPException(400, "empty audio")
@@ -2302,6 +2305,7 @@ def health():
         "tts": speech.tts_available(),
         "tts_error": speech.tts_error,
         "timing": __import__("app.timing", fromlist=["recent"]).recent(),
+        "question_stt": transcribe.quick_model_status(),
         "live_ai": (settings.live_llm_model + " at " + settings.live_llm_base_url.split("//")[-1].split("/")[0])
                    if settings.live_llm_api_key else "",
         "tts_voice": ("ElevenLabs " + settings.elevenlabs_model) if speech.eleven_on() else

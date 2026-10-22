@@ -252,6 +252,17 @@ def get_quick_model(language: Optional[str] = None):
         return _quick_model
 
 
+def quick_model_status() -> str:
+    """For /api/health: which model spoken questions use."""
+    if not settings.stt_model or settings.stt_model == settings.whisper_model:
+        return f"{settings.whisper_model} (the main model)"
+    if _quick_model is None:
+        return f"{settings.stt_model} (loads with the first question)"
+    if _quick_model == "main":
+        return f"{settings.whisper_model} ({settings.stt_model} couldn't be loaded - see the log)"
+    return settings.stt_model
+
+
 def model_loaded() -> bool:
     return _model is not None
 
