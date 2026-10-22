@@ -304,24 +304,69 @@ def live_context(q: str, limit: int = 2500, plain: bool = False) -> str:
     words = knowledge._words(q)
     if len(words) < 1:
         return ""
-    name = company_name()
+    name = "" if plain else company_name()
     search = q if plain or not name or knowledge._words(name) & words else f"{name} {q}"   # (plain: about the world)
+    t0 = time.time()
     try:
         hits = sources.web_search(search, 6)[:6]
         hits += [h for h in sources.news_search(search, 6)[:4] if h["url"] not in {x["url"] for x in hits}]
     except Exception as e:                          # noqa: BLE001 - offline, blocked: answer without it
         log.info("live search: %s", e)
         return ""
-    lines = []
+    lines, kept = [], []
     for h in hits:
         hay = knowledge._words(h["title"] + " " + h["snippet"])
         if not hay & words:
             continue
+        kept.append(h)
         lines.append(f"- {h['title']} ({h.get('source') or ''}, {h.get('date') or ''}): {h['snippet'][:300]} <{h['url']}>")
+    # a search result's few words rarely hold the answer ("how many payment companies are there in Singapore"): the top
+    # pages are read too (at the same time, a few seconds at most) and their passages closest to the question kept
+    read = _read_top(kept[:3], words, deadline=4.0) if plain and kept else []
+    try:
+        from . import timing
+        timing.note("web search", time.time() - t0, f"{len(lines)} results, {len(read)} pages read")
+    except Exception:                               # noqa: BLE001
+        pass
     if not lines:
         return ""
-    return ("A quick web search just now found (may be incomplete; say so if unsure, and mention the source):\n"
-            + "\n".join(lines))[:limit]
+    out = "A quick web search just now found (may be incomplete; say so if unsure, and mention the source):\n" + "\n".join(lines)
+    if read:
+        out += "\n\nFrom the top pages:\n" + "\n\n".join(read)
+    return out[:limit + (3000 if read else 0)]
+
+
+def _read_top(hits: list[dict], words: set, deadline: float = 4.0) -> list[str]:
+    """The passages of these pages that share most words with the question (and have figures, when it asks how many /
+    how much), ~700 characters per page."""
+    from concurrent.futures import ThreadPoolExecutor, wait
+    from . import sources
+    numeric = bool(words & {"many", "much", "number", "count", "percent", "price", "cost", "big", "large", "size"})
+
+    def one(h):
+        try:
+            r = sources._get(h["url"], deadline)
+            if r.status_code != 200 or "html" not in r.headers.get("content-type", "html"):
+                return ""
+            text = sources.html_text(r.text[:600000])[1]
+        except Exception:                           # noqa: BLE001
+            return ""
+        best = []
+        for para in re.split(r"\n\s*\n|(?<=[.!?])\s{2,}", text):
+            para = " ".join(para.split())
+            if not 40 <= len(para) <= 1200:
+                continue
+            sc = len(knowledge._words(para) & words) + (2 if numeric and re.search(r"\d", para) else 0)
+            if sc >= 2:
+                best.append((sc, para))
+        best.sort(key=lambda x: -x[0])
+        got = " ... ".join(p for _, p in best[:3])[:700]
+        return f"[{h.get('source') or h['url']}] {got}" if got else ""
+    ex = ThreadPoolExecutor(3)
+    futs = [ex.submit(one, h) for h in hits]
+    done, _ = wait(futs, timeout=deadline + 0.5)
+    ex.shutdown(wait=False, cancel_futures=True)
+    return [f.result() for f in futs if f in done and f.result()]
 
 
 # ---------------------------------------------------------------- "Research now" (Account > Watch AI)
