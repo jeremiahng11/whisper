@@ -413,6 +413,12 @@ owners, dates, budgets, terms, and who people are. In the background it reads on
   many requests) the file was made with Piper and kept for good. All of them are made again once. If ElevenLabs
   can't be reached the watch tries again at its next sync (Settings > Check server shows "Voice problem").
   Uvicorn keeps connections open 65 s (watch W1B-1.6.5 sends a whole question over one connection).
+- **Faster spoken answers** (1.30.0): plain weather questions ("how's the weather", "will it rain tomorrow", "the
+  temperature in Tokyo") are answered straight from Open-Meteo, without the AI. Answers read out as you wait use
+  ElevenLabs' fast model, `ELEVENLABS_MODEL_LIVE` (default `eleven_flash_v2_5`: the same voice, starts in well under a
+  second); the watch's saved answers keep `ELEVENLABS_MODEL`. The voice made ahead for an answer is found even when
+  the watch sends the text back folded to ASCII ("31C"), and a request for it waits for it instead of making it a
+  second time. The log shows where time goes: "speech to text: …", "answer: context …, AI …", "voice … made in …".
 - **Questions on the watch** (1.24.0): Account > Watch AI lists every question the watch can be asked offline, with
   its answer: fix a wrong answer, add other ways you'd ask it, hide a wrong question, or add your own question and
   answer (always on the watch, answered there). `POST /api/knowledge/custom`, `DELETE /api/knowledge/custom/{id}`,

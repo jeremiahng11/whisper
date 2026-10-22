@@ -48,10 +48,12 @@ def stt(path: str, language: Optional[str] = None, candidates: Optional[list[str
     if not language and candidates:
         language = pick_language(path, candidates)
     transcribe.quick.on = True
+    t0 = time.time()
     try:
         tr = transcribe.transcribe(path, language, lambda p, s: None, diarize=False, prompt=voices.whisper_prompt())
     finally:
         transcribe.quick.on = False
+    log.info("speech to text: %.1fs for %.1fs of speech", time.time() - t0, tr.duration)
     text = " ".join(s.text.strip() for s in tr.segments).strip()
     if settings.redact:
         text = redact.redact(text)
@@ -266,14 +268,16 @@ def voice_name() -> str:
     return str(tts_voices().get("en", ""))
 
 
-def _eleven(text: str) -> bytes:
+def _eleven(text: str, model: str = "") -> bytes:
     """16 kHz PCM from ElevenLabs, kept on disk (the same sentence is never paid for twice)."""
     import hashlib
     import json as _json
     import urllib.request
     d = settings.data_dir / "tts_cache"
     d.mkdir(parents=True, exist_ok=True)
-    key = hashlib.sha1((voice_name() + "|" + text).encode()).hexdigest()
+    model = (model or settings.elevenlabs_model).strip() or "eleven_multilingual_v2"
+    key = hashlib.sha1((voice_name() + "|" + (model if model != settings.elevenlabs_model.strip() else "") + "|" + text)
+                       .encode()).hexdigest()
     p = d / f"{key}.pcm"
     if p.exists():
         os.utime(p)
@@ -290,7 +294,6 @@ def _eleven(text: str) -> bytes:
                      "Accept": "audio/pcm, */*", "User-Agent": "OracleMinutes/1.23 (+https://github.com/jeremiahng11/whisper)"})
         with urllib.request.urlopen(req, timeout=60) as r:
             return r.read()
-    model = settings.elevenlabs_model.strip() or "eleven_multilingual_v2"
     try:
         pcm = call(model)
     except urllib.error.HTTPError as e:
@@ -418,7 +421,7 @@ def wav_to_ima_adpcm(wav16: bytes) -> bytes:
     return hdr + data
 
 
-def tts(text: str, lang: str = "en", strict: bool = False) -> bytes:
+def tts(text: str, lang: str = "en", strict: bool = False, live: bool = False) -> bytes:
     """strict: with ElevenLabs set up, only ElevenLabs (an error instead of Piper) - for files kept on the watch, which
     would otherwise keep Piper's voice for good when ElevenLabs failed once (quota, rate limit, no internet)."""
     text = re.sub(r"[*#`_>\[\]]", "", text or "").strip()[:2000]
@@ -426,7 +429,7 @@ def tts(text: str, lang: str = "en", strict: bool = False) -> bytes:
         return to_wav16k(np.zeros(1600), 16000)
     if eleven_on():
         try:
-            pcm = np.frombuffer(_eleven(text), dtype="<i2")
+            pcm = np.frombuffer(_eleven(text, settings.elevenlabs_model_live if live else ""), dtype="<i2")
             return to_wav16k(pcm, 16000)
         except Exception as e:                      # noqa: BLE001 - no internet / quota: Piper says it instead
             log.warning("ElevenLabs failed (%s)%s", e, "" if strict else " - using Piper")

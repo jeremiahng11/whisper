@@ -101,6 +101,54 @@ def weather(q: str, city: str = "") -> str:
     return " ".join(out)
 
 
+_TOMORROW = re.compile(r"\b(tomorrow|tmr|tmrw)\b", re.I)
+_TODAY_LATER = re.compile(r"\b(later|tonight|this (afternoon|evening))\b", re.I)
+_NOT_JUST_WEATHER = re.compile(r"\b(why|explain|compare|history|record|average|climate|last (week|year|month)|"
+                               r"next week|weekend|should i|what to wear|wear)\b", re.I)
+
+
+def weather_answer(q: str, city: str = "") -> str:
+    """A spoken answer for a plain weather question, straight from Open-Meteo - no AI, so it comes in about a second
+    ("How's the weather?", "Will it rain tomorrow?", "What's the temperature in Tokyo?"). "" = let the AI answer."""
+    if not WEATHER.search(q) or OURS.search(q) or _NOT_JUST_WEATHER.search(q) or len(q.split()) > 14:
+        return ""
+    place = _city_in(q) or city or home_city()
+    try:
+        g = _get_json("https://geocoding-api.open-meteo.com/v1/search?count=1&name=" + urllib.parse.quote(place), 5)
+        r = (g.get("results") or [None])[0]
+        if not r:
+            return ""
+        f = _get_json(
+            f"https://api.open-meteo.com/v1/forecast?latitude={r['latitude']}&longitude={r['longitude']}"
+            "&current=temperature_2m,apparent_temperature,weather_code"
+            "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max"
+            "&timezone=auto&forecast_days=2", 5)
+    except Exception as e:                                       # noqa: BLE001 - the AI answers instead
+        log.info("weather answer: %s", e)
+        return ""
+    c, d = f.get("current") or {}, f.get("daily") or {}
+    name = r.get("name") or place
+    try:
+        def day(i: int, label: str) -> str:
+            rain = d["precipitation_probability_max"][i]
+            return (f"{label} in {name}: {_WMO.get(d['weather_code'][i], 'mixed weather')}, "
+                    f"{round(d['temperature_2m_min'][i])} to {round(d['temperature_2m_max'][i])} degrees, "
+                    f"{rain} percent chance of rain.")
+        if _TOMORROW.search(q):
+            return day(1, "Tomorrow")
+        now = (f"Right now in {name} it's {_WMO.get(c.get('weather_code'), 'mixed weather')} and "
+               f"{round(c.get('temperature_2m'))} degrees, feels like {round(c.get('apparent_temperature'))}.")
+        rain = d["precipitation_probability_max"][0]
+        rest = (f" Today {round(d['temperature_2m_min'][0])} to {round(d['temperature_2m_max'][0])} degrees, "
+                f"{rain} percent chance of rain.")
+        if re.search(r"\b(rain|umbrella|storm|thunder)\b", q, re.I):
+            rest = (f" {'Yes, bring an umbrella' if rain >= 50 else 'Probably not' if rain < 25 else 'Maybe'}: "
+                    f"{rain} percent chance of rain today.")
+        return now + rest
+    except (KeyError, IndexError, TypeError, ValueError):
+        return ""
+
+
 def context(q: str, tz_min: int | None = None, city: str = "") -> str:
     """What goes along with an everyday question (besides the date and time, which always does)."""
     parts = []

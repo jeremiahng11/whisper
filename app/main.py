@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.29.0"
+VERSION = "1.30.0"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -693,7 +693,8 @@ async def ask(request: Request, wait: float = 0):
         raise HTTPException(400, "body must be JSON")
     if not isinstance(data, dict):
         raise HTTPException(400, "body must be a JSON object")
-    r = _ask_start(data)
+    from starlette.concurrency import run_in_threadpool
+    r = await run_in_threadpool(_ask_start, data)       # (a forecast lookup may take a second: not on the event loop)
     if data.get("speak"):
         chat.speak_when_done(r["id"])
     r = await _wait_answer(r, wait)
@@ -755,6 +756,13 @@ def _ask_start(data: dict) -> dict:
         if kb:
             context += "\n\n" + kb
     elif not data.get("recording") and data.get("task") != "email":
+        if len(clean) == 1 and not data.get("best") and not data.get("offline"):
+            # "how's the weather?", "will it rain tomorrow?": straight from the forecast, like a phone assistant
+            t0 = time.time()
+            wa = worldinfo.weather_answer(last_q, city)
+            if wa:
+                log.info("ask: weather answered directly in %.1fs", time.time() - t0)
+                return chat.instant(wa)
         if len(clean) == 1 and not data.get("best"):
             # "who is Ryan", "who is our CTO", "what products do we have": a company essential or a who-is answer
             # that clearly matches is the answer - at once, without waiting for the AI (on a home server that's
@@ -1775,9 +1783,9 @@ async def text_to_speech(request: Request):
     from starlette.concurrency import run_in_threadpool
     try:
         adpcm = str(data.get("format", "")).lower() == "adpcm"
-        wav = chat.spoken(str(data.get("text", "")), str(data.get("lang", "en")), adpcm)   # made ahead (speak)
+        wav = await run_in_threadpool(chat.spoken, str(data.get("text", "")), str(data.get("lang", "en")), adpcm)   # made ahead
         if wav is None:
-            wav = await run_in_threadpool(speech.tts, str(data.get("text", "")), str(data.get("lang", "en")))
+            wav = await run_in_threadpool(lambda: speech.tts(str(data.get("text", "")), str(data.get("lang", "en")), live=True))
             if adpcm:
                 wav = await run_in_threadpool(speech.wav_to_ima_adpcm, wav)
     except Exception as e:

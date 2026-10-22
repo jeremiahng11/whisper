@@ -1882,7 +1882,7 @@ def test_learns_your_questions_and_speaks_answers(client, monkeypatch):
     # spoken answers: made once, kept, the pack says which recording goes with which answer
     monkeypatch.setattr(speech, "tts_available", lambda: True)
     made = []
-    monkeypatch.setattr(speech, "tts", lambda text, lang="en", strict=False: (made.append(text), speech.to_wav16k(__import__("numpy").zeros(16000), 16000))[1])
+    monkeypatch.setattr(speech, "tts", lambda text, lang="en", strict=False, live=False: (made.append(text), speech.to_wav16k(__import__("numpy").zeros(16000), 16000))[1])
     pk = client.get("/api/watch/pack", headers=H).json()
     it = next(x for x in pk["items"] if x["id"] == f["id"])
     assert it["voice"] == watchpack.voice_tag(it["a"])
@@ -2169,7 +2169,7 @@ def test_watch_prompts_in_the_answer_voice(client, monkeypatch):
     monkeypatch.setattr(speech, "tts_available", lambda: True)
     t = np.arange(16000) / 16000
     sig = np.concatenate([np.zeros(8000), 0.5 * np.sin(2 * np.pi * 220 * t[:6000]), np.zeros(8000)])
-    monkeypatch.setattr(speech, "tts", lambda text, lang="en", strict=False: speech.to_wav16k((sig * 32767).astype("<i2"), 16000))
+    monkeypatch.setattr(speech, "tts", lambda text, lang="en", strict=False, live=False: speech.to_wav16k((sig * 32767).astype("<i2"), 16000))
     r = client.get("/api/watch/prompts", headers=H).json()
     assert "ok" in r["names"] and r["voice"]
     w = client.get("/api/watch/prompts/ok", headers=H)
@@ -2267,7 +2267,7 @@ def test_ask_waits_and_voice_is_ready(client, monkeypatch):
     from app import chat, speech
     monkeypatch.setattr(speech, "tts_available", lambda: True)
     made = []
-    monkeypatch.setattr(speech, "tts", lambda text, lang="en", strict=False: (made.append(text), speech.to_wav16k(__import__("numpy").zeros(1600, "<i2"), 16000))[1])
+    monkeypatch.setattr(speech, "tts", lambda text, lang="en", strict=False, live=False: (made.append(text), speech.to_wav16k(__import__("numpy").zeros(1600, "<i2"), 16000))[1])
     resp = client.post("/api/ask?wait=5", json={"prompt": "tell me a short joke", "speak": True}, headers=H)
     r = resp.json()
     assert r["status"] == "done" and r["answer"] and resp.status_code == 200   # (the watch reads an answer only with 200)                # answered in the same reply (no polling)
@@ -2438,7 +2438,11 @@ def test_watch_everyday_questions(client, monkeypatch):
             if a["status"] != "pending":
                 return a
             time.sleep(0.05)
-    ask("What's the weather in Tokyo tomorrow?", tz=540)
+    a = ask("What's the weather in Tokyo tomorrow?", tz=540)          # a plain weather question: no AI, at once
+    assert a["answer"].startswith("Tomorrow in Tokyo: light rain, 16 to 22 degrees, 70 percent"), a
+    a = ask("Will it rain in Tokyo?")
+    assert "Probably not: 10 percent chance of rain today" in a["answer"], a
+    ask("What should I wear for the weather in Tokyo tomorrow?", tz=540)   # more than the forecast: the AI, with it
     assert "Weather now in Tokyo, Japan" in SYSTEMS[-1] and "Tomorrow: light rain" in SYSTEMS[-1]
     assert "Right now it is" in SYSTEMS[-1] and "UTC+9" in SYSTEMS[-1]
     ask("Who won the football match yesterday?")
@@ -2578,3 +2582,21 @@ def test_firmware_download_resumes(client):
     r = client.get("/api/firmware/rangetest/W1B-3.0.0.bin", headers={**H, "Range": "bytes=4000-"})
     assert r.status_code == 206 and r.content == data[4000:]
     devices.delete_firmware("rangetest", "W1B-3.0.0")
+
+
+def test_voice_made_ahead_is_found_and_waited_for():
+    import threading as _t
+    from app import chat
+    ev = _t.Event()
+    chat._making["x1"] = (time.time(), chat._norm("Right now in Singapore it's 31°C."), ev)
+
+    def finish():
+        time.sleep(0.3)
+        with chat._lock:
+            chat._voices[chat._vkey("Right now in Singapore it's 31°C.", "en", True)] = (time.time(), b"VOICE")
+            chat._making.pop("x1", None)
+        ev.set()
+    _t.Thread(target=finish).start()
+    # the watch sends it back folded to ASCII ("31C"): still the same answer, and it waits instead of making it again
+    assert chat.spoken("Right now in Singapore it's 31C.", "en", True) == b"VOICE"
+    assert chat.spoken("Something else entirely", "en", True) is None

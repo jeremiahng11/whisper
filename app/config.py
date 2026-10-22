@@ -117,6 +117,10 @@ class Settings:
     elevenlabs_key: str = os.getenv("ELEVENLABS_API_KEY", "")
     elevenlabs_voice: str = os.getenv("ELEVENLABS_VOICE_ID", "")
     elevenlabs_model: str = os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2")
+    # answers read out as you wait (Ask on the watch): ElevenLabs' fast model - the same voice, starts in a fraction of
+    # a second (the big models take several seconds per answer). The watch's saved answers use ELEVENLABS_MODEL.
+    # "" = ELEVENLABS_MODEL for everything.
+    elevenlabs_model_live: str = os.getenv("ELEVENLABS_MODEL_LIVE", "eleven_flash_v2_5")
     elevenlabs_cache_mb: int = int(os.getenv("ELEVENLABS_CACHE_MB", "300") or 300)
 
     # --- calendar (device Agenda app) ---
