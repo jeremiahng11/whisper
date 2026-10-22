@@ -63,7 +63,7 @@ class Settings:
     firmware_repo: str = os.getenv("FIRMWARE_REPO", "jeremiahng11/whisper").strip()
     firmware_branch: str = os.getenv("FIRMWARE_BRANCH", "main").strip() or "main"
     firmware_path: str = os.getenv("FIRMWARE_PATH", "app/watch_files/firmware").strip().strip("/")
-    firmware_check_min: float = float(os.getenv("FIRMWARE_CHECK_MIN", "30") or 30)   # how often to look
+    firmware_check_min: float = float(os.getenv("FIRMWARE_CHECK_MIN", "5") or 5)   # how often to look
     github_token: str = (os.getenv("FIRMWARE_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN") or "").strip()   # private repo
     home_city: str = os.getenv("HOME_CITY", "Singapore")          # weather / "the time" when no city is named
     default_tz_min: int = _int("TZ_OFFSET_MIN", 480)              # the time zone when the watch doesn't say (+8)

@@ -396,10 +396,10 @@ owners, dates, budgets, terms, and who people are. In the background it reads on
   next sync. Watch W1B-1.5.7 answers the watch's questions on the watch even when WiFi is weak, playing the
   answer's voice saved on the card first.
 - **Watch firmware from GitHub, no redeploy** (1.27.0): the `.bin` files in `app/watch_files/firmware` on GitHub are
-  checked every 30 minutes, and again whenever a watch taps Check for updates; a new version is added by itself. So
+  checked every 5 minutes, when the Watches page opens, and whenever a watch taps Check for updates; a new version is added by itself. So
   for a watch-only update, push the new `watch1b.bin` / `round.bin` and the watches can install it. Settings:
   `FIRMWARE_REPO` (default `jeremiahng11/whisper`, empty = off), `FIRMWARE_BRANCH` (`main`), `FIRMWARE_PATH`,
-  `FIRMWARE_CHECK_MIN` (30), `GITHUB_TOKEN` (only for a private repo). Watches page: **Check GitHub now**.
+  `FIRMWARE_CHECK_MIN` (5), `GITHUB_TOKEN` (only for a private repo). Watches page: **Check GitHub now**.
 - **Your own sounds on the card** (watch W1B-1.5.8): MP3s in `/voice` on the TF card - About.mp3, OK.mp3,
   IntroAI.mp3 (greeting), startup.mp3, no-info.mp3, Dont understand.mp3, poweringoff.mp3, storagefull.mp3,
   connectedwifi.mp3, wifi-Disconnected.mp3 - are converted once on the watch to 16 kHz WAV (`/ai/vc/`) and played
