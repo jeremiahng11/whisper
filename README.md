@@ -431,6 +431,8 @@ owners, dates, budgets, terms, and who people are. In the background it reads on
 - **Optional cloud AI for questions** (`LIVE_LLM_API_KEY`, `LIVE_LLM_BASE_URL`, `LIVE_LLM_MODEL`): any
   OpenAI-compatible API answers the watch's and Ask's questions in about a second (streamed). Off unless the key is
   set - the question and the company context sent with it then leave this server. Meetings always stay local.
+- **ElevenLabs speaking pace** (1.31.1): `ELEVENLABS_SPEED` (0.7-1.2, default 1.1 - a little quicker than the voice's
+  own pace). Changing it remakes the watch's saved answers once.
 - **Questions on the watch** (1.24.0): Account > Watch AI lists every question the watch can be asked offline, with
   its answer: fix a wrong answer, add other ways you'd ask it, hide a wrong question, or add your own question and
   answer (always on the watch, answered there). `POST /api/knowledge/custom`, `DELETE /api/knowledge/custom/{id}`,

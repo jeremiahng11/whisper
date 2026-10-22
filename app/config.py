@@ -127,6 +127,8 @@ class Settings:
     # a second (the big models take several seconds per answer). The watch's saved answers use ELEVENLABS_MODEL.
     # "" = ELEVENLABS_MODEL for everything.
     elevenlabs_model_live: str = os.getenv("ELEVENLABS_MODEL_LIVE", "eleven_flash_v2_5")
+    # how fast the ElevenLabs voice talks: 0.7 (slow) to 1.2 (fast), 1.0 = the voice's own pace
+    elevenlabs_speed: float = float(os.getenv("ELEVENLABS_SPEED", "1.1") or 1.0)
     elevenlabs_cache_mb: int = int(os.getenv("ELEVENLABS_CACHE_MB", "300") or 300)
 
     # --- calendar (device Agenda app) ---

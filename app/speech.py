@@ -266,8 +266,13 @@ def eleven_on() -> bool:
 def voice_name() -> str:
     """Which voice speaks (spoken files made earlier are made again when it changes)."""
     if eleven_on():
-        return f"eleven:{settings.elevenlabs_voice}:{settings.elevenlabs_model}"
+        sp = _eleven_speed()
+        return f"eleven:{settings.elevenlabs_voice}:{settings.elevenlabs_model}" + (f":x{sp:g}" if sp != 1.0 else "")
     return str(tts_voices().get("en", ""))
+
+
+def _eleven_speed() -> float:
+    return round(min(1.2, max(0.7, settings.elevenlabs_speed or 1.0)), 2)
 
 
 def _eleven(text: str, model: str = "") -> bytes:
@@ -290,7 +295,8 @@ def _eleven(text: str, model: str = "") -> bytes:
     def call(model: str) -> bytes:
         req = urllib.request.Request(
             f"https://api.elevenlabs.io/v1/text-to-speech/{settings.elevenlabs_voice.strip()}?output_format=pcm_16000",
-            data=_json.dumps({"text": text, "model_id": model}).encode(),
+            data=_json.dumps({"text": text, "model_id": model,
+                              **({"voice_settings": {"speed": _eleven_speed()}} if _eleven_speed() != 1.0 else {})}).encode(),
             # (a browser-like agent: Python's default one can be turned away by the API's firewall)
             headers={"xi-api-key": settings.elevenlabs_key.strip(), "Content-Type": "application/json",
                      "Accept": "audio/pcm, */*", "User-Agent": "OracleMinutes/1.23 (+https://github.com/jeremiahng11/whisper)"})
