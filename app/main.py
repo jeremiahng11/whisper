@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.32.0"
+VERSION = "1.33.0"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -680,6 +680,31 @@ def company_context(q: str, limit: int = 6000) -> str:
     return (COMPANY_NOTE + "\n\n" + "\n\n".join(parts))[:limit]
 
 
+def about_company(q: str) -> bool:
+    """Does the question name the company, its topics or its people, or talk about "us / our meeting"? Otherwise it's a
+    question about the world, and the web is searched for it as asked."""
+    from . import worldinfo
+    if worldinfo.OURS.search(q):
+        return True
+    words = knowledge._words(q)
+    try:
+        d = research.load()
+        for t in (d.get("topics") or []) + (d.get("found") or [])[:3]:
+            tw = knowledge._words(t)
+            if tw and (tw <= words or (len(tw) > 1 and len(tw & words) >= 2)):
+                return True
+    except Exception:                                # noqa: BLE001
+        pass
+    if any(re.search(r"\b" + re.escape(n.split(" ")[0]) + r"\b", q, re.I) for n in people.all_names() if len(n) > 2):
+        return True
+    f = knowledge.best_answer(q)                     # a fact that clearly answers it
+    return bool(f)
+
+
+WEB_NOTE = ("If the company information above doesn't answer the question, answer from these web results - give the "
+            "answer itself in a sentence or two, not a list of links; never say you don't know when they answer it.")
+
+
 @app.post("/api/ask", dependencies=[Depends(auth)], status_code=202)
 async def ask(request: Request, wait: float = 0):
     """{"messages": [...]} -> {"id", "status": "pending"}; poll GET /api/ask/{id}.
@@ -813,11 +838,20 @@ def _ask_start(data: dict, plan: bool = False) -> dict:
                 out = worldinfo.context(last_q, tz, city)
                 if out:
                     return out + "\n\nAnswer from this (it is current); say where it's from in a few words."
-            out = company_context(q)
-            if web and "closest in meaning" not in out:   # nothing close in your own knowledge either
+            ours = about_company(last_q)
+            if data.get("offline"):
+                return company_context(q)
+            # a question about the world ("who invented the telephone", "what's the capital of Peru"): searched on the
+            # web as asked - at the same time as the company's knowledge is looked through
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(2) as ex:
+                fw = ex.submit(research.live_context, last_q, 2500, True) if not ours else None
+                out = company_context(q)
+                w = fw.result() if fw else ""
+            if ours and web and "closest in meaning" not in out:   # about us, and nothing in our knowledge
                 w = research.live_context(q)
-                if w:
-                    out = (out + "\n\n" if out else "") + w
+            if w:
+                out = (out + "\n\n" if out else "") + w + "\n\n" + WEB_NOTE
             return out
         return go(clean, context, bool(data.get("best")), (system or chat.SYSTEM) + "\n\n" + now, late=late)
     return go(clean, context, bool(data.get("best")), (system or chat.SYSTEM) + "\n\n" + now)

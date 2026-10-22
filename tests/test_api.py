@@ -2713,3 +2713,17 @@ def test_question_heard_with_note_is_not_a_note():
     assert speech.rule_intent("Note, is Aleta Planet a global company?", datetime.now()) is None
     assert speech.rule_intent("Note that the launch moved to Friday", datetime.now()) is None    # no voice notes
     assert speech.strip_wake("Hey Oracle, is it raining?") == "Is it raining?"
+
+
+def test_world_question_searches_the_web(client, monkeypatch):
+    from app import research
+    asked = []
+    monkeypatch.setattr(research, "live_context", lambda q, limit=2500, plain=False: (asked.append((q, plain)), f"WEB[{q}]")[1])
+    r = client.post("/api/ask", json={"messages": [{"role": "user", "content": "Who invented the telephone?"}]}, headers=H)
+    for _ in range(400):
+        a = client.get(f"/api/ask/{r.json()['id']}", headers=H).json()
+        if a["status"] != "pending":
+            break
+        time.sleep(0.05)
+    assert ("Who invented the telephone?", True) in asked                  # searched as asked, not with the company
+    assert "WEB[Who invented the telephone?]" in SYSTEMS[-1] and "never say you don't know" in SYSTEMS[-1]
