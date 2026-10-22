@@ -2569,3 +2569,12 @@ def test_firmware_keeps_newest_two(client):
     assert have == ["W1B-7.0.2", "W1B-7.0.3"]
     for v in have:
         devices.delete_firmware("keeptest", v)
+
+
+def test_firmware_download_resumes(client):
+    from app import devices
+    data = b"\xe9" + bytes(5000) + b"ORACLEFW|rangetest|W1B-3.0.0|" + bytes(5000)
+    devices.save_firmware(data)
+    r = client.get("/api/firmware/rangetest/W1B-3.0.0.bin", headers={**H, "Range": "bytes=4000-"})
+    assert r.status_code == 206 and r.content == data[4000:]
+    devices.delete_firmware("rangetest", "W1B-3.0.0")
