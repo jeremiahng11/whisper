@@ -418,7 +418,9 @@ def wav_to_ima_adpcm(wav16: bytes) -> bytes:
     return hdr + data
 
 
-def tts(text: str, lang: str = "en") -> bytes:
+def tts(text: str, lang: str = "en", strict: bool = False) -> bytes:
+    """strict: with ElevenLabs set up, only ElevenLabs (an error instead of Piper) - for files kept on the watch, which
+    would otherwise keep Piper's voice for good when ElevenLabs failed once (quota, rate limit, no internet)."""
     text = re.sub(r"[*#`_>\[\]]", "", text or "").strip()[:2000]
     if not text:
         return to_wav16k(np.zeros(1600), 16000)
@@ -427,8 +429,8 @@ def tts(text: str, lang: str = "en") -> bytes:
             pcm = np.frombuffer(_eleven(text), dtype="<i2")
             return to_wav16k(pcm, 16000)
         except Exception as e:                      # noqa: BLE001 - no internet / quota: Piper says it instead
-            log.warning("ElevenLabs failed (%s) - using Piper", e)
-            if settings.tts_backend != "piper":
+            log.warning("ElevenLabs failed (%s)%s", e, "" if strict else " - using Piper")
+            if strict or settings.tts_backend != "piper":
                 raise
     voice = _get_voice(lang)
     buf = io.BytesIO()

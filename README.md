@@ -408,6 +408,11 @@ owners, dates, budgets, terms, and who people are. In the background it reads on
   firmware and the one before it are kept (`FIRMWARE_KEEP`, 2). Watches up to W1B-1.5.8 read "W1B-1.5.8" as version
   1 and so never saw an update: the server now gives them the version as "1.5.8" and says "up to date" (404) itself
   when there's nothing newer. W1B-1.5.9 compares versions properly.
+- **The watch's saved answers are always ElevenLabs** (1.29.0): with ElevenLabs set up, the voice files the watch
+  keeps (answer pack, "Okay") are made only with ElevenLabs. Before, when ElevenLabs failed once (out of credit, too
+  many requests) the file was made with Piper and kept for good. All of them are made again once. If ElevenLabs
+  can't be reached the watch tries again at its next sync (Settings > Check server shows "Voice problem").
+  Uvicorn keeps connections open 65 s (watch W1B-1.6.5 sends a whole question over one connection).
 - **Questions on the watch** (1.24.0): Account > Watch AI lists every question the watch can be asked offline, with
   its answer: fix a wrong answer, add other ways you'd ask it, hide a wrong question, or add your own question and
   answer (always on the watch, answered there). `POST /api/knowledge/custom`, `DELETE /api/knowledge/custom/{id}`,

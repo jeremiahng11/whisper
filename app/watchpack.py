@@ -10,8 +10,11 @@ Phrase rules (what MultiNet can take): lowercase letters a-z and spaces only, 2-
 import hashlib
 import json
 import re
+import logging
 
 from . import knowledge
+
+log = logging.getLogger("watchpack")
 
 MAX_ITEMS = 150
 _ONES = "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen " \
@@ -49,7 +52,8 @@ MAX_PHRASES = 400                                   # what MultiNet7 takes in al
 def voice_tag(answer: str) -> str:
     """Changes with the answer and with the voice that reads it (so the watch fetches it again in a new voice)."""
     from . import speech
-    return hashlib.sha1((answer + "|" + speech.voice_name()).encode()).hexdigest()[:8]
+    # ("v2": files made before 1.29 may be Piper's voice saved under the ElevenLabs name - all made again once)
+    return hashlib.sha1((answer + "|" + speech.voice_name() + "|v2").encode()).hexdigest()[:8]
 
 
 def voice_dir():
@@ -73,7 +77,11 @@ def voice_file(fid: str):
     if not p.exists():
         for old in voice_dir().glob(f"{fid}-*.wav"):  # the answer changed: the old recording goes
             old.unlink(missing_ok=True)
-        data = speech.wav_to_ima_adpcm(speech.tts(a))
+        try:
+            data = speech.wav_to_ima_adpcm(speech.tts(a, strict=True))
+        except Exception as e:                      # noqa: BLE001 - ElevenLabs down / out of credit: try again later
+            log.warning("watch voice %s: %s", fid, e)
+            return None
         tmp = p.with_suffix(".tmp")
         tmp.write_bytes(data)
         tmp.replace(p)
@@ -168,7 +176,11 @@ def prompt_file(name: str):
     if not p.exists():
         for old in voice_dir().glob(f"prompt-{name}-*.wav"):
             old.unlink(missing_ok=True)
-        wav = speech.tts(text)
+        try:
+            wav = speech.tts(text, strict=True)
+        except Exception as e:                      # noqa: BLE001 - as voice_file
+            log.warning("watch prompt %s: %s", name, e)
+            return None
         with _wave.open(_io.BytesIO(wav), "rb") as r:
             pcm = np.frombuffer(r.readframes(r.getnframes()), dtype="<i2").astype(np.float32)
         loud = np.nonzero(np.abs(pcm) > 0.04 * max(1.0, np.abs(pcm).max()))[0]

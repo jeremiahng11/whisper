@@ -1882,7 +1882,7 @@ def test_learns_your_questions_and_speaks_answers(client, monkeypatch):
     # spoken answers: made once, kept, the pack says which recording goes with which answer
     monkeypatch.setattr(speech, "tts_available", lambda: True)
     made = []
-    monkeypatch.setattr(speech, "tts", lambda text, lang="en": (made.append(text), speech.to_wav16k(__import__("numpy").zeros(16000), 16000))[1])
+    monkeypatch.setattr(speech, "tts", lambda text, lang="en", strict=False: (made.append(text), speech.to_wav16k(__import__("numpy").zeros(16000), 16000))[1])
     pk = client.get("/api/watch/pack", headers=H).json()
     it = next(x for x in pk["items"] if x["id"] == f["id"])
     assert it["voice"] == watchpack.voice_tag(it["a"])
@@ -2169,7 +2169,7 @@ def test_watch_prompts_in_the_answer_voice(client, monkeypatch):
     monkeypatch.setattr(speech, "tts_available", lambda: True)
     t = np.arange(16000) / 16000
     sig = np.concatenate([np.zeros(8000), 0.5 * np.sin(2 * np.pi * 220 * t[:6000]), np.zeros(8000)])
-    monkeypatch.setattr(speech, "tts", lambda text, lang="en": speech.to_wav16k((sig * 32767).astype("<i2"), 16000))
+    monkeypatch.setattr(speech, "tts", lambda text, lang="en", strict=False: speech.to_wav16k((sig * 32767).astype("<i2"), 16000))
     r = client.get("/api/watch/prompts", headers=H).json()
     assert "ok" in r["names"] and r["voice"]
     w = client.get("/api/watch/prompts/ok", headers=H)
@@ -2267,7 +2267,7 @@ def test_ask_waits_and_voice_is_ready(client, monkeypatch):
     from app import chat, speech
     monkeypatch.setattr(speech, "tts_available", lambda: True)
     made = []
-    monkeypatch.setattr(speech, "tts", lambda text, lang="en": (made.append(text), speech.to_wav16k(__import__("numpy").zeros(1600, "<i2"), 16000))[1])
+    monkeypatch.setattr(speech, "tts", lambda text, lang="en", strict=False: (made.append(text), speech.to_wav16k(__import__("numpy").zeros(1600, "<i2"), 16000))[1])
     resp = client.post("/api/ask?wait=5", json={"prompt": "tell me a short joke", "speak": True}, headers=H)
     r = resp.json()
     assert r["status"] == "done" and r["answer"] and resp.status_code == 200   # (the watch reads an answer only with 200)                # answered in the same reply (no polling)
