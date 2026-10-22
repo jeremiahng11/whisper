@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.27.0"
+VERSION = "1.27.1"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -2011,8 +2011,9 @@ async def firmware_github():
 async def firmware_latest(board: str = Query(...), current: str = Query("")):
     if not devices.BOARD.match(board):
         raise HTTPException(400, "bad board")
-    import asyncio
-    await asyncio.to_thread(devices.github_check, 120)   # Check for updates on the watch: what was just pushed too
+    # Check for updates on the watch: GitHub is looked at too, in the background - the watch gets its answer at once
+    # (a download from GitHub can take longer than the watch waits); a version just found is there on the next check
+    threading.Thread(target=devices.github_check, args=(120,), daemon=True).start()
     r = devices.latest(board, current)
     if not r:
         raise HTTPException(404, "no firmware for this board")
