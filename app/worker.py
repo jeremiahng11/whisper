@@ -325,13 +325,21 @@ def live_now() -> list[dict]:
             state = json.loads(st_path.read_text())
         except ValueError:
             state = {}
+        beat = {}
+        try:
+            beat = json.loads((settings.upload_dir / f"{rid}.beat").read_text())
+        except (OSError, ValueError):
+            pass
+        beat_age = now - float(beat.get("at") or 0)
+        quiet = age >= 30 and beat_age < 45                     # the watch says it's still recording, just quiet
         m = re.match(r"^(.*?)-((?:memo_|dict_)?\d{4}-\d{2}-\d{2}_\d{4})$", rid)
         segs = state.get("segments") or []
         names = state.get("names") or {}
         out.append({
             "rid": rid, "device": m.group(1) if m else rid, "name": m.group(2) if m else "",
             "started": st_path.stat().st_ctime, "received_s": round(wav_seconds(part), 1),
-            "last_audio_s_ago": round(age, 1), "receiving": age < 30,
+            "last_audio_s_ago": round(age, 1), "receiving": age < 30 or quiet, "quiet": quiet,
+            "quiet_reason": (beat.get("state") or "") if quiet else "",
             "transcribed_s": float(state.get("until", 0)), "language": state.get("language", ""),
             "transcribing": current_job == f"live:{rid}",
             "segments": [{"start": round(s.get("start", 0), 1), "text": (s.get("text") or "").strip(),
@@ -357,7 +365,8 @@ def cleanup() -> None:
             delete_job_files(j)
             db.delete(j["id"])
     # abandoned partial uploads (no activity for 7 days)
-    for f in list(settings.upload_dir.glob("*.part")) + list(settings.upload_dir.glob("*.live.json")):
+    for f in list(settings.upload_dir.glob("*.part")) + list(settings.upload_dir.glob("*.live.json")) + \
+            list(settings.upload_dir.glob("*.beat")):
         if now - f.stat().st_mtime > 7 * 86400:
             f.unlink(missing_ok=True)
 

@@ -2484,3 +2484,23 @@ def test_watch_questions_add_fix_hide(client):
     assert client.delete(f"/api/knowledge/custom/{fid}", headers=H).status_code == 200
     assert all(x["id"] != fid for x in client.get("/api/watch/pack?limit=300", headers=H).json()["items"])
     assert client.post("/api/knowledge/custom", json={"q": "", "a": "x"}, headers=H).status_code == 400
+
+
+def test_live_heartbeat_shows_quiet(client, monkeypatch):
+    import os as _os
+    from app import worker
+    rid = "dev1-quiet"
+    data = bytearray(wav_bytes(5))
+    data[4:8] = b"\0\0\0\0"; data[40:44] = b"\0\0\0\0"
+    client.put(f"/api/uploads/{rid}", content=bytes(data), headers={**H, "X-Offset": "0", "X-Live": "1"})
+    p = settings.upload_dir / f"{rid}.part"
+    old = time.time() - 120
+    _os.utime(p, (old, old))                                      # no audio for 2 minutes
+    one = [x for x in client.get("/api/live", headers=H).json()["live"] if x["rid"] == rid][0]
+    assert not one["receiving"] and not one["quiet"]
+    r = client.put(f"/api/uploads/{rid}", content=b"", headers={**H, "X-Offset": str(len(data)), "X-Live": "1",
+                                                                 "X-Live-State": "quiet"})
+    assert r.status_code == 200
+    _os.utime(p, (old, old))
+    one = [x for x in client.get("/api/live", headers=H).json()["live"] if x["rid"] == rid][0]
+    assert one["receiving"] and one["quiet"] and one["quiet_reason"] == "quiet"
