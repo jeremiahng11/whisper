@@ -489,6 +489,8 @@ def llm_status() -> str:
 def explain_llm_error(e: Exception) -> str:
     """Turn 'Name or service not known' etc. into something the user can act on."""
     msg = str(e)
+    if msg.startswith("cloud AI"):
+        return msg
     if settings.summary_backend.lower() == "ollama":
         where = settings.ollama_url
         low = msg.lower()
@@ -557,7 +559,10 @@ def chat_stream(messages: list[dict]):
                           headers={"Authorization": f"Bearer {settings.live_llm_api_key}"},
                           json={"model": settings.live_llm_model, "messages": messages, "temperature": 0.2,
                                 "stream": True}) as r:
-            r.raise_for_status()
+            if r.status_code >= 400:                  # say why (a wrong model name, base URL or key)
+                body = r.read().decode(errors="replace")[:300]
+                raise RuntimeError(f"cloud AI ({settings.live_llm_base_url}/chat/completions, model "
+                                   f"{settings.live_llm_model}) said HTTP {r.status_code}: {body}")
             for line in r.iter_lines():
                 if not line.startswith("data:"):
                     continue
