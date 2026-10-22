@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.33.0"
+VERSION = "1.33.1"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -841,14 +841,16 @@ def _ask_start(data: dict, plan: bool = False) -> dict:
             ours = about_company(last_q)
             if data.get("offline"):
                 return company_context(q)
-            # a question about the world ("who invented the telephone", "what's the capital of Peru"): searched on the
-            # web as asked - at the same time as the company's knowledge is looked through
+            # every question is also searched on the web as asked, at the same time as the company's knowledge is
+            # looked through: the AI answers from your knowledge when that has it, else from the web ("how many payment
+            # companies are there in Singapore" - before, a question that looked a little like the company's got only
+            # the company's notes, and the answer was "I don't have that")
             from concurrent.futures import ThreadPoolExecutor
             with ThreadPoolExecutor(2) as ex:
-                fw = ex.submit(research.live_context, last_q, 2500, True) if not ours else None
+                fw = ex.submit(research.live_context, last_q, 2500, True)
                 out = company_context(q)
-                w = fw.result() if fw else ""
-            if ours and web and "closest in meaning" not in out:   # about us, and nothing in our knowledge
+                w = fw.result()
+            if ours and web and "closest in meaning" not in out and not w:   # about us, nothing found either way
                 w = research.live_context(q)
             if w:
                 out = (out + "\n\n" if out else "") + w + "\n\n" + WEB_NOTE

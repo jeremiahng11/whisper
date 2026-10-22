@@ -433,7 +433,9 @@ owners, dates, budgets, terms, and who people are. In the background it reads on
   set - the question and the company context sent with it then leave this server. Meetings always stay local.
 - **Questions about the world searched on the web** (1.33.0): a question that isn't about your company (it names
   neither the company, its topics nor its people, and no fact answers it) is searched on the web as asked, at the
-  same time as your knowledge is looked through, and the AI (Groq when set up) answers from the results.
+  same time as your knowledge is looked through, and the AI (Groq when set up) answers from the results. 1.33.1: every
+  question is searched on the web as asked (not only ones clearly about the world) - the AI prefers your knowledge
+  when it has the answer, else the web.
 - **No voice notes** (1.32.0, watch W1B-1.8.6): "note …" / "take a note …" is no longer saved as a note (questions
   heard as "Note, is …" were saved instead of answered), and the watch no longer writes every question and answer to
   the notes ("AI chat" files; cfg save_chats=1 on the watch brings that back).
