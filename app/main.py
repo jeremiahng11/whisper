@@ -2104,7 +2104,8 @@ app.include_router(login.router)
 def index(request: Request):
     if login.enabled() and not login.session_user(request):
         return RedirectResponse("/login", 303)
-    return HTMLResponse((STATIC / "index.html").read_text(encoding="utf-8"))
+    # always the page of the version running (no hard refresh needed after an update)
+    return HTMLResponse((STATIC / "index.html").read_text(encoding="utf-8"), headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/favicon.ico", include_in_schema=False)
