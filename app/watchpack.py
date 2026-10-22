@@ -53,7 +53,7 @@ def voice_tag(answer: str) -> str:
     """Changes with the answer and with the voice that reads it (so the watch fetches it again in a new voice)."""
     from . import speech
     # ("v2": files made before 1.29 may be Piper's voice saved under the ElevenLabs name - all made again once)
-    return hashlib.sha1((answer + "|" + speech.voice_name() + "|v2").encode()).hexdigest()[:8]
+    return hashlib.sha1((answer + "|" + speech.voice_name() + "|v3").encode()).hexdigest()[:8]
 
 
 def voice_dir():

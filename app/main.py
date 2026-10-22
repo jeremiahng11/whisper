@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.30.0"
+VERSION = "1.30.1"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -762,6 +762,8 @@ def _ask_start(data: dict) -> dict:
             wa = worldinfo.weather_answer(last_q, city)
             if wa:
                 log.info("ask: weather answered directly in %.1fs", time.time() - t0)
+                from . import timing
+                timing.note("forecast", time.time() - t0)
                 return chat.instant(wa)
         if len(clean) == 1 and not data.get("best"):
             # "who is Ryan", "who is our CTO", "what products do we have": a company essential or a who-is answer
@@ -1783,11 +1785,16 @@ async def text_to_speech(request: Request):
     from starlette.concurrency import run_in_threadpool
     try:
         adpcm = str(data.get("format", "")).lower() == "adpcm"
+        from . import timing
+        t0 = time.time()
         wav = await run_in_threadpool(chat.spoken, str(data.get("text", "")), str(data.get("lang", "en")), adpcm)   # made ahead
-        if wav is None:
+        if wav is not None:
+            timing.note("voice sent", time.time() - t0, "made ahead")
+        else:
             wav = await run_in_threadpool(lambda: speech.tts(str(data.get("text", "")), str(data.get("lang", "en")), live=True))
             if adpcm:
                 wav = await run_in_threadpool(speech.wav_to_ima_adpcm, wav)
+            timing.note("voice sent", time.time() - t0, "made now")
     except Exception as e:
         raise HTTPException(500, f"tts failed: {str(e)[:200]}")
     return Response(wav, media_type="audio/wav")
@@ -2095,6 +2102,7 @@ def health():
         "speaker_libs": transcribe.lib_versions(),
         "tts": speech.tts_available(),
         "tts_error": speech.tts_error,
+        "timing": __import__("app.timing", fromlist=["recent"]).recent(),
         "tts_voice": ("ElevenLabs " + settings.elevenlabs_model) if speech.eleven_on() else
                      ("Piper " + str(speech.tts_voices().get("en", ""))) if speech.tts_available() else "",
         "jobs": db.counts(),

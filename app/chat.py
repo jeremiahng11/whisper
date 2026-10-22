@@ -35,6 +35,8 @@ def _run(aid: str, messages: list[dict], system: str, best: bool, late=None) -> 
             answer = summarize.chat([{"role": "system", "content": system}] + messages, best, fast=not best)
             log.info("answer: context %.1fs, waited %.1fs, AI %.1fs (%d characters of prompt)", t1 - t0, t2 - t1,
                      time.time() - t2, len(system) + sum(len(str(m.get("content", ""))) for m in messages))
+            from . import timing
+            timing.note("answer", time.time() - t0, f"context {t1 - t0:.1f}s, waited {t2 - t1:.1f}s, AI {time.time() - t2:.1f}s")
             answer = re.sub(r"<think>.*?</think>", "", answer, flags=re.S)     # reasoning models
             res = {"id": aid, "status": "done", "answer": answer.strip()}
         except Exception as e:                       # noqa: BLE001 - report any LLM failure to the device
@@ -57,6 +59,8 @@ def start(messages: list[dict], context: str = "", best: bool = False, system: s
 
 def instant(answer: str) -> dict:
     """An answer that needs no AI (a fact the knowledge base has exactly): ready at once."""
+    from . import timing
+    timing.note("answer", 0, "without the AI")
     aid = uuid.uuid4().hex[:12]
     with _lock:
         _items[aid] = {"id": aid, "status": "done", "answer": answer, "created": time.time(), "finished": time.time()}
@@ -147,6 +151,8 @@ def speak_when_done(aid: str) -> None:
             wav = speech.tts(text, live=True)
             data = speech.wav_to_ima_adpcm(wav)
             log.info("voice for the answer made in %.1fs (%d characters)", time.time() - t0, len(text))
+            from . import timing
+            timing.note("voice made", time.time() - t0, f"{len(text)} characters")
         except Exception:                           # noqa: BLE001 - the watch asks for it the usual way
             with _lock:
                 _making.pop(aid, None)

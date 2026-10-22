@@ -419,6 +419,10 @@ owners, dates, budgets, terms, and who people are. In the background it reads on
   second); the watch's saved answers keep `ELEVENLABS_MODEL`. The voice made ahead for an answer is found even when
   the watch sends the text back folded to ASCII ("31C"), and a request for it waits for it instead of making it a
   second time. The log shows where time goes: "speech to text: …", "answer: context …, AI …", "voice … made in …".
+- **Louder voice, timings in health** (1.30.1): spoken answers are raised so their loud parts reach ~90% (ElevenLabs
+  voices came out at about a third - soft on the watch); the watch's saved answers are made again once. `/api/health`
+  has "timing": the last steps with how long each took (speech to text, answer, voice). Watch W1B-1.6.9 makes your
+  MP3s in /voice louder the same way.
 - **Questions on the watch** (1.24.0): Account > Watch AI lists every question the watch can be asked offline, with
   its answer: fix a wrong answer, add other ways you'd ask it, hide a wrong question, or add your own question and
   answer (always on the watch, answered there). `POST /api/knowledge/custom`, `DELETE /api/knowledge/custom/{id}`,

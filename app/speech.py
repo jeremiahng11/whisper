@@ -54,6 +54,8 @@ def stt(path: str, language: Optional[str] = None, candidates: Optional[list[str
     finally:
         transcribe.quick.on = False
     log.info("speech to text: %.1fs for %.1fs of speech", time.time() - t0, tr.duration)
+    from . import timing
+    timing.note("speech to text", time.time() - t0, f"{tr.duration:.1f}s of speech")
     text = " ".join(s.text.strip() for s in tr.segments).strip()
     if settings.redact:
         text = redact.redact(text)
@@ -369,11 +371,31 @@ def _get_voice(lang: str):
         return _voices[name]
 
 
-def to_wav16k(pcm: np.ndarray, rate: int) -> bytes:
+def loud(a: np.ndarray) -> np.ndarray:
+    """Spoken answers as loud as the watch's small speaker can take: ElevenLabs voices come out quiet (peaks around a
+    third of full scale). Raised so the loud parts (not a single click) reach ~90%, at most 4x; the odd peak above
+    that is rounded off instead of clipping."""
+    if not len(a):
+        return a
+    x = np.abs(a.astype(np.float32))
+    ref = float(np.percentile(x, 99.9))
+    if ref < 50:                                   # silence
+        return a
+    g = min(4.0, 0.9 * 32767 / ref)
+    if g <= 1.02:
+        return a
+    y = a.astype(np.float32) * g / 32767
+    y = np.where(np.abs(y) > 0.9, np.sign(y) * (0.9 + 0.1 * np.tanh((np.abs(y) - 0.9) / 0.1)), y)
+    return y * 32767
+
+
+def to_wav16k(pcm: np.ndarray, rate: int, louder: bool = True) -> bytes:
     a = pcm.astype(np.float32)
     if rate != 16000 and len(a):
         n = int(len(a) * 16000 / rate)
         a = np.interp(np.linspace(0, len(a) - 1, n), np.arange(len(a)), a)
+    if louder:
+        a = loud(a)
     buf = io.BytesIO()
     with wave.open(buf, "wb") as w:
         w.setnchannels(1)
