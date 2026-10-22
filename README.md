@@ -385,6 +385,10 @@ owners, dates, budgets, terms, and who people are. In the background it reads on
   other fact to treat it the same. The watch model learns the essentials and your pages/research first; meeting facts
   fill the rest (meeting questions are answered online). Find a fact shows the answer when one fact clearly answers
   it, and **Ask Oracle** asks the AI.
+- **Questions on the watch** (1.24.0): Account > Watch AI lists every question the watch can be asked offline, with
+  its answer: fix a wrong answer, add other ways you'd ask it, hide a wrong question, or add your own question and
+  answer (always on the watch, answered there). `POST /api/knowledge/custom`, `DELETE /api/knowledge/custom/{id}`,
+  `PUT /api/knowledge/{id}` takes `alts` too.
 - **Everyday questions like a phone assistant** (1.23.0): every question gets today's date and time (the watch's
   time zone, else `TZ_OFFSET_MIN`, 480); weather questions get the current weather and tomorrow's forecast from
   Open-Meteo (no key) for the city named, else `HOME_CITY` (Singapore); questions about the world (news, scores,

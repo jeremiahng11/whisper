@@ -286,6 +286,8 @@ def rebuild() -> list[dict]:
         from . import core                          # the company profile (core.py): wins for the same question
         for f in core.core_facts():
             merged[_norm(f["q"])] = f
+        for f in custom_facts():                    # your own questions win over everything
+            merged[_norm(f["q"])] = f
         try:
             from . import research
             d = research.load()
@@ -302,6 +304,10 @@ def rebuild() -> list[dict]:
                 continue
             if o.get("a"):
                 f["a"], f["edited"] = o["a"], True
+            if o.get("alts"):
+                have = {_norm(x) for x in [f["q"]] + (f.get("alts") or [])}
+                f["alts"] = (f.get("alts") or []) + [x for x in o["alts"] if _norm(x) not in have]
+                f["edited"] = True
             if o.get("pinned"):                     # "Pin to watch": treated like the company profile
                 f["core"] = f["pinned"] = True
             a = byq.get(f["id"])
@@ -323,6 +329,49 @@ def fact_id(q: str) -> str:
     return hashlib.sha1(_norm(q).encode()).hexdigest()[:8]
 
 
+# ---------------------------------------------------------------- your own questions (Watch AI > Questions on the watch)
+def custom_facts() -> list[dict]:
+    """Questions you added yourself: always on the watch and answered there, like the company essentials."""
+    try:
+        rows = json.loads((kdir() / "custom.json").read_text())
+    except (OSError, ValueError):
+        rows = []
+    return [{"q": r["q"], "a": r["a"], "alts": r.get("alts") or [], "kind": "custom", "topic": "", "job": "",
+             "date": r.get("date") or "", "meeting": "Added by you", "core": True, "custom": True} for r in rows if r.get("q")]
+
+
+def add_custom(q: str, a: str, alts: list[str] | None = None) -> str:
+    q = _clean_text(q, 160).rstrip("?").strip()
+    a = _clean_text(a, 300)
+    if not q or not a:
+        raise ValueError("a question and an answer are needed")
+    alts = [_clean_text(x, 160).rstrip("?").strip() for x in (alts or []) if x and x.strip()][:6]
+    with _lock:
+        try:
+            rows = json.loads((kdir() / "custom.json").read_text())
+        except (OSError, ValueError):
+            rows = []
+        rows = [r for r in rows if _norm(r["q"]) != _norm(q)]
+        rows.append({"q": q, "a": a, "alts": alts, "date": time.strftime("%Y-%m-%d")})
+        (kdir() / "custom.json").write_text(json.dumps(rows, ensure_ascii=False))
+    rebuild()
+    return fact_id(q)
+
+
+def delete_custom(fid: str) -> bool:
+    with _lock:
+        try:
+            rows = json.loads((kdir() / "custom.json").read_text())
+        except (OSError, ValueError):
+            rows = []
+        keep = [r for r in rows if fact_id(r["q"]) != fid]
+        if len(keep) == len(rows):
+            return False
+        (kdir() / "custom.json").write_text(json.dumps(keep, ensure_ascii=False))
+    rebuild()
+    return True
+
+
 def overrides() -> dict:
     """Your corrections: {fact id: {"a": "better answer"} or {"hidden": true}} - kept when meetings are re-read."""
     try:
@@ -331,7 +380,8 @@ def overrides() -> dict:
         return {}
 
 
-def set_override(fid: str, answer: str | None = None, hidden: bool = False, pinned: bool | None = None) -> None:
+def set_override(fid: str, answer: str | None = None, hidden: bool = False, pinned: bool | None = None,
+                 alts: list[str] | None = None) -> None:
     """pinned=True/False changes only the pin; otherwise: hide it, give the right answer, or (neither) back to what
     the AI read (a pin stays)."""
     with _lock:
@@ -345,8 +395,13 @@ def set_override(fid: str, answer: str | None = None, hidden: bool = False, pinn
                 o.pop("pinned", None)
         elif hidden:
             o = {"hidden": True}
-        elif answer:
-            o["a"] = _clean_text(answer, 300)
+        elif answer or alts is not None:
+            if answer:
+                o["a"] = _clean_text(answer, 300)
+            if alts is not None:                    # more ways you ask it (the watch hears these too)
+                o["alts"] = [_clean_text(x, 160).rstrip("?").strip() for x in alts if x and x.strip()][:6]
+                if not o["alts"]:
+                    o.pop("alts")
             o.pop("hidden", None)
         else:
             o = {"pinned": True} if o.get("pinned") else {}

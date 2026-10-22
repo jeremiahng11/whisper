@@ -113,6 +113,10 @@ def build(limit: int = MAX_ITEMS, extra: bool = False) -> dict:
         seen.update(say[:2])
         items.append({"id": f["id"], "q": f["q"], "say": say[:3 if f.get("core") else 2], "a": f["a"][:240],
                       "kind": f.get("kind", "fact"), "date": f.get("date") or ""})
+        if f.get("edited"):
+            items[-1]["edited"] = True
+        if f.get("custom"):
+            items[-1]["custom"] = True
         if f.get("core"):                           # the watch answers these itself, even when online
             items[-1]["core"] = True
             items[-1]["alts"] = [x for x in (f.get("alts") or [])][:6]

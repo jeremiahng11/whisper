@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.23.2"
+VERSION = "1.24.0"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -1149,8 +1149,35 @@ async def fix_fact(fid: str, request: Request):
     if "pinned" in data:                             # {"pinned": true} - always on the watch (like the company profile)
         knowledge.set_override(fid, pinned=bool(data["pinned"]))
     else:
-        knowledge.set_override(fid, str(data.get("a") or "") or None, bool(data.get("hidden")))
+        alts = data.get("alts")
+        if alts is not None and not isinstance(alts, list):
+            raise HTTPException(400, "alts must be a list of questions")
+        knowledge.set_override(fid, str(data.get("a") or "") or None, bool(data.get("hidden")),
+                               alts=[str(x) for x in alts] if alts is not None else None)
     return {"ok": True, **knowledge.summary()}
+
+
+@app.post("/api/knowledge/custom", dependencies=[Depends(auth)])
+async def add_question(request: Request):
+    """Your own question for the watch: {"q": "Who is Oracle AI", "a": "...", "alts": ["other ways to ask"]} - always
+    on the watch and answered there."""
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(400, "body must be JSON")
+    try:
+        fid = knowledge.add_custom(str(data.get("q") or ""), str(data.get("a") or ""),
+                                   [str(x) for x in (data.get("alts") or [])] if isinstance(data.get("alts"), list) else [])
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "id": fid}
+
+
+@app.delete("/api/knowledge/custom/{fid}", dependencies=[Depends(auth)])
+def delete_question(fid: str):
+    if not re.fullmatch(r"[0-9a-f]{8}", fid) or not knowledge.delete_custom(fid):
+        raise HTTPException(404, "no such question of yours")
+    return {"ok": True}
 
 
 @app.get("/api/watch/pack", dependencies=[Depends(auth)])

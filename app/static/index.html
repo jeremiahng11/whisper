@@ -510,6 +510,16 @@ ul.replies{margin:4px 0;padding-left:20px;font-size:13.5px}
         <div class="row" style="margin-top:8px"><button class="ghost" id="kbLearn">Learn from meetings now</button><input id="kbFind" placeholder="Ask or find… (who is Ryan, what products do we have)" style="flex:1;min-width:220px"><button class="ghost" id="kbAsk">Ask Oracle</button><span class="mute" id="kbMsg"></span></div>
         <div id="kbAnswer" class="hidden" style="margin-top:8px;padding:8px 10px;border:1px solid var(--line,#ddd);border-radius:8px"></div>
         <div id="kbList" style="margin-top:8px;max-height:320px;overflow:auto"></div>
+        <div class="sub2" style="margin-top:14px">Questions on the watch</div>
+        <p class="mute" style="margin:0 0 6px">What the watch can be asked offline, with its answers. Fix a wrong answer, add other ways you'd ask it, hide a question that's wrong, or add your own - the watch picks the changes up the next time it updates its offline answers (Settings &gt; Watch AI &gt; Update now).</p>
+        <div class="row"><input id="wqFind" placeholder="Filter…" style="flex:1;min-width:160px"><button class="ghost" id="wqShow">Show questions</button><button class="ghost" id="wqAddBtn">+ Add a question</button><span class="mute" id="wqMsg"></span></div>
+        <div id="wqAdd" class="hidden" style="margin-top:8px;padding:8px 10px;border:1px solid var(--line,#ddd);border-radius:8px">
+          <input id="wqQ" placeholder="Question, e.g. Who is Oracle AI" style="width:100%;box-sizing:border-box">
+          <input id="wqAlts" placeholder="Other ways to ask (comma separated), e.g. What is Oracle AI, Tell me about Oracle" style="width:100%;box-sizing:border-box;margin-top:6px">
+          <textarea id="wqA" rows="3" placeholder="The answer (shown and read out on the watch)" style="width:100%;box-sizing:border-box;margin-top:6px"></textarea>
+          <div class="row" style="margin-top:6px"><button id="wqSave">Add to the watch</button><button class="ghost" id="wqCancel">Cancel</button></div>
+        </div>
+        <div id="wqList" style="margin-top:8px;max-height:420px;overflow:auto"></div>
         <div class="sub2" style="margin-top:14px">Sources (besides your meetings)</div>
         <p class="mute" style="margin:0 0 6px">Your website, product pages, price lists, FAQs. Web pages are checked again every day.</p>
         <div class="row"><input id="srcUrl" placeholder="https://your-site.com/products/" style="flex:1;min-width:200px"><label class="mute">+ pages under it <input id="srcCrawl" type="number" min="0" max="60" value="0" style="width:56px"></label><button class="ghost" id="srcAddUrl">Add page</button></div>
@@ -1589,6 +1599,63 @@ async function kbAskOracle() {
 }
 $("#kbAsk").onclick = kbAskOracle;
 $("#kbFind").onkeydown = e => { if (e.key === "Enter") kbAskOracle(); };
+// ---------------------------------------------------------------- Watch AI: the questions on the watch (fix / hide / add)
+let WQ = [];
+async function loadWatchQuestions() {
+  try { WQ = (await (await api("/api/watch/pack?limit=300")).json()).items || []; } catch (e) { $("#wqMsg").textContent = e.message; return; }
+  renderWatchQuestions();
+}
+function renderWatchQuestions() {
+  const f = ($("#wqFind").value || "").trim().toLowerCase();
+  const rows = WQ.filter(x => !f || (x.q + " " + x.a + " " + (x.say || []).join(" ")).toLowerCase().includes(f));
+  $("#wqMsg").textContent = `${WQ.length} questions on the watch`;
+  $("#wqList").innerHTML = rows.map(x => `<div class="row" data-id="${x.id}" style="gap:6px;align-items:flex-start;padding:5px 0;border-bottom:1px solid var(--line,#eee)">
+      <div style="flex:1"><b>${esc(x.q)}?</b> ${esc(x.a)}${x.custom ? ' <span class="mute">(yours)</span>' : x.edited ? ' <span class="mute">(your fix)</span>' : ""}
+        <br><span class="mute">said as: ${esc((x.say || []).join(" · "))}${x.core ? " · ⌚ always on the watch" : ""}</span></div>
+      <button class="ghost wqEdit" style="padding:2px 8px">Edit</button>
+      ${x.custom ? '<button class="ghost wqDel" style="padding:2px 8px">Delete</button>' : '<button class="ghost wqHide" style="padding:2px 8px">Hide</button>'}</div>`).join("")
+    || '<span class="mute">No questions yet.</span>';
+  document.querySelectorAll("#wqList .wqEdit").forEach(b => b.onclick = () => {
+    const row = b.parentNode, x = WQ.find(y => y.id === row.dataset.id);
+    row.innerHTML = `<div style="flex:1"><b>${esc(x.q)}?</b>
+        <textarea rows="3" class="wqEA" style="width:100%;box-sizing:border-box;margin-top:4px">${esc(x.a)}</textarea>
+        <input class="wqEAlts" placeholder="Other ways to ask (comma separated)" style="width:100%;box-sizing:border-box;margin-top:4px">
+        <div class="row" style="margin-top:4px"><button class="wqESave">Save</button><button class="ghost wqECancel">Cancel</button>
+        ${x.edited && !x.custom ? '<button class="ghost wqEReset">Back to what the AI read</button>' : ""}</div></div>`;
+    row.querySelector(".wqECancel").onclick = renderWatchQuestions;
+    row.querySelector(".wqESave").onclick = async () => {
+      const a = row.querySelector(".wqEA").value.trim(), alts = row.querySelector(".wqEAlts").value.split(",").map(s => s.trim()).filter(Boolean);
+      if (x.custom) await api("/api/knowledge/custom", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ q: x.q, a, alts: alts.length ? alts : (x.say || []).slice(1) }) });
+      else await api("/api/knowledge/" + x.id, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(alts.length ? { a, alts } : { a }) });
+      loadWatchQuestions();
+    };
+    const reset = row.querySelector(".wqEReset");
+    if (reset) reset.onclick = async () => { await api("/api/knowledge/" + x.id, { method: "PUT", headers: { "Content-Type": "application/json" }, body: "{}" }); loadWatchQuestions(); };
+  });
+  document.querySelectorAll("#wqList .wqHide").forEach(b => b.onclick = async () => {
+    if (!confirm("Hide this question (wrong or private)? The watch, Ask and the next watch model won't use it.")) return;
+    await api("/api/knowledge/" + b.parentNode.dataset.id, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ hidden: true }) });
+    loadWatchQuestions();
+  });
+  document.querySelectorAll("#wqList .wqDel").forEach(b => b.onclick = async () => {
+    if (!confirm("Delete this question of yours?")) return;
+    await api("/api/knowledge/custom/" + b.parentNode.dataset.id, { method: "DELETE" });
+    loadWatchQuestions();
+  });
+}
+$("#wqShow").onclick = loadWatchQuestions;
+$("#wqFind").oninput = () => WQ.length ? renderWatchQuestions() : loadWatchQuestions();
+$("#wqAddBtn").onclick = () => { $("#wqAdd").classList.toggle("hidden"); $("#wqQ").focus(); };
+$("#wqCancel").onclick = () => $("#wqAdd").classList.add("hidden");
+$("#wqSave").onclick = async () => {
+  try {
+    await api("/api/knowledge/custom", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ q: $("#wqQ").value, a: $("#wqA").value, alts: $("#wqAlts").value.split(",").map(s => s.trim()).filter(Boolean) }) });
+    $("#wqQ").value = $("#wqA").value = $("#wqAlts").value = "";
+    $("#wqAdd").classList.add("hidden");
+    loadWatchQuestions();
+  } catch (e) { $("#wqMsg").textContent = e.message; }
+};
 $("#kbLearn").onclick = async () => {
   try { const r = await (await api("/api/knowledge/learn", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).json();
     $("#kbMsg").textContent = r.started ? "Reading the new and changed meetings…" : "Already up to date or busy."; } catch (e) { $("#kbMsg").textContent = e.message; }

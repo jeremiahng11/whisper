@@ -2468,3 +2468,19 @@ def test_elevenlabs_error_shown_and_model_fallback(monkeypatch, tmp_path):
     monkeypatch.setattr(urllib.request, "urlopen", fake)
     speech.tts("A brand new sentence for the fallback test.")
     assert seen == ["eleven_v9", "eleven_multilingual_v2"] and speech.tts_error == ""
+
+
+def test_watch_questions_add_fix_hide(client):
+    r = client.post("/api/knowledge/custom", json={"q": "Who is Oracle AI?", "a": "The watch's own AI, made by Jeremiah.",
+                                                   "alts": ["What is Oracle AI", "Tell me about Oracle"]}, headers=H)
+    assert r.status_code == 200
+    fid = r.json()["id"]
+    items = client.get("/api/watch/pack?limit=300", headers=H).json()["items"]
+    mine = [x for x in items if x["id"] == fid][0]
+    assert mine["custom"] and mine["core"] and "what is oracle ai" in mine["say"]
+    # fix an answer + add a wording, then hide
+    r = client.put(f"/api/knowledge/{fid}", json={"a": "Oracle AI is the watch's assistant.", "alts": ["Oracle AI please"]}, headers=H)
+    assert r.status_code == 200
+    assert client.delete(f"/api/knowledge/custom/{fid}", headers=H).status_code == 200
+    assert all(x["id"] != fid for x in client.get("/api/watch/pack?limit=300", headers=H).json()["items"])
+    assert client.post("/api/knowledge/custom", json={"q": "", "a": "x"}, headers=H).status_code == 400
