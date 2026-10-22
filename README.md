@@ -385,6 +385,11 @@ owners, dates, budgets, terms, and who people are. In the background it reads on
   other fact to treat it the same. The watch model learns the essentials and your pages/research first; meeting facts
   fill the rest (meeting questions are answered online). Find a fact shows the answer when one fact clearly answers
   it, and **Ask Oracle** asks the AI.
+- **Watch firmware comes with the server** (1.25.0): `app/watch_files/firmware/*.bin` (watch1b, Round) are added to
+  the firmware list when Oracle Minutes starts, so redeploying is enough - on the watch, Settings > Check for
+  updates downloads, checks and installs it (3 tries on a weak signal; it goes back to the old version by itself if
+  the new one doesn't start). A version you delete on the Watches page isn't added again. `BUNDLED_FIRMWARE=0` turns
+  it off.
 - **Questions on the watch** (1.24.0): Account > Watch AI lists every question the watch can be asked offline, with
   its answer: fix a wrong answer, add other ways you'd ask it, hide a wrong question, or add your own question and
   answer (always on the watch, answered there). `POST /api/knowledge/custom`, `DELETE /api/knowledge/custom/{id}`,

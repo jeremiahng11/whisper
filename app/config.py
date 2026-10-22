@@ -58,6 +58,7 @@ class Settings:
     watchai_minutes: float = float(os.getenv("WATCHAI_MINUTES", "120"))  # longest a training run may take
     research_auto: bool = _bool("RESEARCH_AUTO", True)        # research your company's topics on the web by itself
     research_live: bool = _bool("RESEARCH_LIVE", True)        # Ask: a quick web search when nothing is known yet
+    bundled_firmware: bool = _bool("BUNDLED_FIRMWARE", True)  # offer the watch firmware that comes with this version
     home_city: str = os.getenv("HOME_CITY", "Singapore")          # weather / "the time" when no city is named
     default_tz_min: int = _int("TZ_OFFSET_MIN", 480)              # the time zone when the watch doesn't say (+8)
     research_questions: int = int(os.getenv("RESEARCH_QUESTIONS", "4"))   # unanswered questions researched per day

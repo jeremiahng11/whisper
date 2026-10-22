@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.24.1"
+VERSION = "1.25.0"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -33,6 +33,11 @@ async def lifespan(app: FastAPI):
     autotag.start_sweeper()
     people.start_sweeper()
     knowledge.start_sweeper()
+    try:
+        if settings.bundled_firmware:
+            devices.import_bundled()                 # the watch firmware that comes with this version
+    except Exception as e:                           # noqa: BLE001
+        log.warning("bundled firmware: %s", e)
     if speech.tts_available():                       # load the voices now, not on the first spoken answer
         import threading
         threading.Thread(target=speech.warm_voices, daemon=True).start()

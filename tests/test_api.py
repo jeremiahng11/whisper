@@ -14,6 +14,7 @@ os.environ["TRANSCRIBER"] = "fake"
 os.environ["SUMMARY_BACKEND"] = "openai"
 os.environ["PRELOAD_MODEL"] = "0"
 os.environ["DIARIZER"] = "fake"
+os.environ["BUNDLED_FIRMWARE"] = "0"
 os.environ["AUTOTAG_NEW"] = "0"          # tested on their own below (they'd change other tests' meetings)
 os.environ["AUTOTAG_SWEEP"] = "0"
 os.environ["PEOPLE_SWEEP"] = "0"
@@ -2504,3 +2505,15 @@ def test_live_heartbeat_shows_quiet(client, monkeypatch):
     _os.utime(p, (old, old))
     one = [x for x in client.get("/api/live", headers=H).json()["live"] if x["rid"] == rid][0]
     assert one["receiving"] and one["quiet"] and one["quiet_reason"] == "quiet"
+
+
+def test_bundled_firmware_offered(client):
+    from app import devices
+    devices.import_bundled()
+    lat = client.get("/api/firmware/latest?board=watch1b&current=W1B-1.0.0", headers=H).json()
+    assert lat["newer"] and lat["version"].startswith("W1B-")
+    v = lat["version"]
+    assert client.delete(f"/api/firmware/watch1b/{v}", headers=H).status_code == 200
+    devices.import_bundled()                                         # deleted: not added again
+    r = client.get("/api/firmware/latest?board=watch1b", headers=H)
+    assert r.status_code == 404 or r.json()["version"] != v

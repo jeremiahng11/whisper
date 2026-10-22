@@ -11,10 +11,13 @@ import os
 import re
 import threading
 import time
+import logging
 from pathlib import Path
 from typing import Optional
 
 from .config import settings
+
+log = logging.getLogger("devices")
 
 DEV_ID = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
 BOARD = re.compile(r"^[a-z0-9_]{1,20}$")
@@ -191,3 +194,37 @@ def delete_firmware(board: str, version: str) -> bool:
     (d / f"{version}.bin").unlink(missing_ok=True)
     (d / f"{version}.json").unlink(missing_ok=True)
     return found
+
+
+# ---------------------------------------------------------------- firmware that comes with Oracle Minutes
+# app/watch_files/firmware/*.bin: the watch firmware built with this server version. Each new one is added to the
+# firmware list when the server starts, so redeploying Oracle Minutes is enough for the watches to be offered the
+# update (Settings > Software update on the watch). One you delete here is not added again.
+def import_bundled() -> list[str]:
+    from pathlib import Path as _P
+    src = _P(__file__).parent / "watch_files" / "firmware"
+    seen_p = _fwdir() / "bundled_seen.json"
+    try:
+        seen = set(json.loads(seen_p.read_text()))
+    except (OSError, ValueError):
+        seen = set()
+    added = []
+    for f in sorted(src.glob("*.bin")):
+        try:
+            data = f.read_bytes()
+            board, version = identify(data)
+        except (OSError, ValueError) as e:
+            log.warning("bundled firmware %s: %s", f.name, e)
+            continue
+        key = f"{board}/{version}"
+        if key in seen or _meta(board, version):
+            seen.add(key)
+            continue
+        from .main import VERSION
+        save_firmware(data, f"Comes with Oracle Minutes {VERSION}")
+        seen.add(key)
+        added.append(key)
+        log.info("firmware %s added (comes with this server)", key)
+    seen_p.write_text(json.dumps(sorted(seen)))
+    return added
+
