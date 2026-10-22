@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.27.1"
+VERSION = "1.28.0"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -36,6 +36,7 @@ async def lifespan(app: FastAPI):
     try:
         if settings.bundled_firmware:
             devices.import_bundled()                 # the watch firmware that comes with this version
+        devices.prune_firmware()                     # only the newest version and the one before
     except Exception as e:                           # noqa: BLE001
         log.warning("bundled firmware: %s", e)
     if settings.bundled_firmware:
@@ -2017,6 +2018,9 @@ async def firmware_latest(board: str = Query(...), current: str = Query("")):
     r = devices.latest(board, current)
     if not r:
         raise HTTPException(404, "no firmware for this board")
+    if current and not r["newer"]:
+        # up to date (W1B-1.5.8 and older can't compare versions themselves: they'd be offered their own again)
+        raise HTTPException(404, "up to date")
     return r
 
 

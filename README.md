@@ -404,6 +404,10 @@ owners, dates, budgets, terms, and who people are. In the background it reads on
   IntroAI.mp3 (greeting), startup.mp3, no-info.mp3, Dont understand.mp3, poweringoff.mp3, storagefull.mp3,
   connectedwifi.mp3, wifi-Disconnected.mp3 - are converted once on the watch to 16 kHz WAV (`/ai/vc/`) and played
   from there. Replace an MP3 to change a sound; the firmware no longer carries the voices (only the chimes).
+- **Firmware list keeps 2 per board, and old watches update** (1.28.0): only the newest version of each board's
+  firmware and the one before it are kept (`FIRMWARE_KEEP`, 2). Watches up to W1B-1.5.8 read "W1B-1.5.8" as version
+  1 and so never saw an update: the server now gives them the version as "1.5.8" and says "up to date" (404) itself
+  when there's nothing newer. W1B-1.5.9 compares versions properly.
 - **Questions on the watch** (1.24.0): Account > Watch AI lists every question the watch can be asked offline, with
   its answer: fix a wrong answer, add other ways you'd ask it, hide a wrong question, or add your own question and
   answer (always on the watch, answered there). `POST /api/knowledge/custom`, `DELETE /api/knowledge/custom/{id}`,

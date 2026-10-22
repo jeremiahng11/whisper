@@ -604,19 +604,20 @@ def test_firmware_updates_over_wifi(client):
         assert r.status_code == 200 and r.json()["board"] == "watch1b" and r.json()["version"] == v
     client.post("/api/firmware", content=fw_image("round", "R1.7.20"), headers=H2)
     lt = client.get("/api/firmware/latest?board=watch1b&current=W1B-1.3.0", headers=H).json()
-    assert lt["version"] == "W1B-1.10.0" and lt["newer"] and lt["url"] == "/api/firmware/watch1b/W1B-1.10.0.bin"
+    assert lt["version"] == "1.10.0" and lt["name"] == "W1B-1.10.0" and lt["newer"] and lt["url"] == "/api/firmware/watch1b/W1B-1.10.0.bin"
     import hashlib
     b = client.get(lt["url"], headers=H)
     assert b.status_code == 200 and hashlib.sha256(b.content).hexdigest() == lt["sha256"] and len(b.content) == lt["size"]
-    assert not client.get("/api/firmware/latest?board=watch1b&current=W1B-1.10.0", headers=H).json()["newer"]
+    assert client.get("/api/firmware/latest?board=watch1b&current=W1B-1.10.0", headers=H).status_code == 404   # up to date
     # hold back 1.10.0: 1.9.2 is offered instead
     assert client.post("/api/firmware/watch1b/W1B-1.10.0", json={"active": False}, headers=H).json()["active"] is False
-    assert client.get("/api/firmware/latest?board=watch1b&current=W1B-1.3.0", headers=H).json()["version"] == "W1B-1.9.2"
+    assert client.get("/api/firmware/latest?board=watch1b&current=W1B-1.3.0", headers=H).json()["name"] == "W1B-1.9.2"
     assert client.get("/api/firmware/latest?board=round", headers=H).json()["version"] == "R1.7.20"
     assert client.get("/api/firmware/latest?board=nope", headers=H).status_code == 404
     items = client.get("/api/firmware", headers=H).json()["items"]
-    assert {i["version"] for i in items} >= {"W1B-1.3.0", "W1B-1.10.0", "W1B-1.9.2", "R1.7.20"}
-    for v in ("W1B-1.3.0", "W1B-1.10.0", "W1B-1.9.2"):
+    assert {i["version"] for i in items} >= {"W1B-1.10.0", "W1B-1.9.2", "R1.7.20"}     # (1.3.0: only 2 kept)
+    assert "W1B-1.3.0" not in {i["version"] for i in items}
+    for v in ("W1B-1.10.0", "W1B-1.9.2"):
         assert client.delete(f"/api/firmware/watch1b/{v}", headers=H).status_code == 200
     client.delete("/api/firmware/round/R1.7.20", headers=H)
     assert client.get("/api/firmware/latest?board=watch1b", headers=H).status_code == 404
@@ -2513,12 +2514,12 @@ def test_bundled_firmware_offered(client):
     from app import devices
     devices.import_bundled()
     lat = client.get("/api/firmware/latest?board=watch1b&current=W1B-1.0.0", headers=H).json()
-    assert lat["newer"] and lat["version"].startswith("W1B-")
-    v = lat["version"]
+    assert lat["newer"] and lat["name"].startswith("W1B-")
+    v = lat["name"]
     assert client.delete(f"/api/firmware/watch1b/{v}", headers=H).status_code == 200
     devices.import_bundled()                                         # deleted: not added again
     r = client.get("/api/firmware/latest?board=watch1b", headers=H)
-    assert r.status_code == 404 or r.json()["version"] != v
+    assert r.status_code == 404 or r.json()["name"] != v
 
 
 def test_edit_this_answer(client):
@@ -2552,9 +2553,19 @@ def test_firmware_from_github(client, monkeypatch):
     r = client.post("/api/firmware/github", headers=H).json()
     assert r["added"] == ["watch1b/W1B-9.9.1"] and not r["github"]["error"]
     lat = client.get("/api/firmware/latest?board=watch1b&current=W1B-1.5.7", headers=H).json()
-    assert lat["version"] == "W1B-9.9.1" and lat["newer"]
+    assert lat["name"] == "W1B-9.9.1" and lat["version"] == "9.9.1" and lat["newer"]
     n = len(calls)
     devices.gh_status["checked"] = 0
     assert client.post("/api/firmware/github", headers=H).json()["added"] == []   # same file: not downloaded again
     assert len(calls) == n + 1
     client.delete("/api/firmware/watch1b/W1B-9.9.1", headers=H)
+
+
+def test_firmware_keeps_newest_two(client):
+    from app import devices
+    for v in ("W1B-7.0.1", "W1B-7.0.3", "W1B-7.0.2"):
+        devices.save_firmware(b"\xe9" + b"\0" * 32 + f"ORACLEFW|keeptest|{v}|".encode() + b"\0" * 32)
+    have = sorted(m["version"] for m in devices.list_firmware() if m["board"] == "keeptest")
+    assert have == ["W1B-7.0.2", "W1B-7.0.3"]
+    for v in have:
+        devices.delete_firmware("keeptest", v)

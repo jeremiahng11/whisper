@@ -138,7 +138,25 @@ def save_firmware(data: bytes, notes: str = "") -> dict:
     tmp.write_bytes(data)
     os.replace(tmp, d / f"{version}.bin")
     (d / f"{version}.json").write_text(json.dumps(meta))
+    prune_firmware(board)
     return meta
+
+
+KEEP_FW = int(os.getenv("FIRMWARE_KEEP", "2") or 2)        # per board: the newest and the one before (to go back to)
+
+
+def prune_firmware(board: str = "") -> list[str]:
+    """Delete all but the newest KEEP_FW versions of each board's firmware. Returns what was deleted."""
+    gone = []
+    boards = {m["board"] for m in list_firmware()} if not board else {board}
+    for b in boards:
+        items = sorted((m for m in list_firmware() if m["board"] == b),
+                       key=lambda m: (vkey(m["version"]), m.get("uploaded_at", 0)), reverse=True)
+        for m in items[max(1, KEEP_FW):]:
+            if delete_firmware(b, m["version"]):
+                gone.append(f"{b}/{m['version']}")
+                log.info("firmware %s/%s deleted (keeping the newest %d)", b, m["version"], KEEP_FW)
+    return gone
 
 
 def _meta(board: str, version: str) -> Optional[dict]:
@@ -168,7 +186,11 @@ def latest(board: str, current: str = "") -> Optional[dict]:
         return None
     best = max(items, key=lambda m: (vkey(m["version"]), m.get("uploaded_at", 0)))
     cur = vkey(current)
-    return {"version": best["version"], "size": best["size"], "sha256": best["sha256"],
+    v = best["version"]
+    # the watch reads the version from the first number on: "W1B-1.5.8" read as 1 (the 1 of W1B) on W1B-1.5.8 and
+    # older - every version looked the same, so none was ever offered. Those get "1.5.8"; "name" has it in full.
+    shown = v if re.match(r"^\D*\d+\.", v) else ".".join(str(x) for x in vkey(v)) or v
+    return {"version": shown, "name": v, "size": best["size"], "sha256": best["sha256"],
             "url": f"/api/firmware/{board}/{best['version']}.bin",
             "newer": vkey(best["version"]) > cur if cur else True,
             "notes": best.get("notes", "")}
