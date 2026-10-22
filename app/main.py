@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.31.1"
+VERSION = "1.31.2"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -2265,6 +2265,8 @@ def health():
         "tts": speech.tts_available(),
         "tts_error": speech.tts_error,
         "timing": __import__("app.timing", fromlist=["recent"]).recent(),
+        "live_ai": (settings.live_llm_model + " at " + settings.live_llm_base_url.split("//")[-1].split("/")[0])
+                   if settings.live_llm_api_key else "",
         "tts_voice": ("ElevenLabs " + settings.elevenlabs_model) if speech.eleven_on() else
                      ("Piper " + str(speech.tts_voices().get("en", ""))) if speech.tts_available() else "",
         "jobs": db.counts(),
