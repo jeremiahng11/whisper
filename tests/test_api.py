@@ -2672,3 +2672,36 @@ def test_chat_stream_leaves_out_thinking(monkeypatch):
     monkeypatch.setattr(summarize.settings, "live_llm_api_key", "")
     out = "".join(summarize.chat_stream([{"role": "user", "content": "hi"}]))
     assert out.strip() == "Hello there. Bye."
+
+
+def test_cloud_ai_groq_reasoning_and_errors(monkeypatch):
+    import contextlib
+    import json as _j
+    from app import summarize
+    monkeypatch.setattr(summarize.settings, "live_llm_api_key", "k")
+    monkeypatch.setattr(summarize.settings, "live_llm_base_url", "https://api.groq.com/openai/v1")
+    monkeypatch.setattr(summarize.settings, "live_llm_model", "openai/gpt-oss-20b")
+    bodies = []
+
+    class R:
+        def __init__(self, code, lines, raw=b""):
+            self.status_code, self.lines, self.raw = code, lines, raw
+        def read(self): return self.raw
+        def iter_lines(self): return iter(self.lines)
+
+    def stream(method, url, **kw):
+        bodies.append(kw["json"])
+        if len(bodies) == 1:                          # the reasoning settings refused once: sent again without
+            return contextlib.nullcontext(R(400, [], b'{"error":{"message":"unknown parameter include_reasoning"}}'))
+        chunks = ["<think>x</think>Hi", " there."]
+        return contextlib.nullcontext(R(200, [f"data: {_j.dumps({'choices': [{'delta': {'content': c}}]})}" for c in chunks]
+                                           + ["data: [DONE]"]))
+    monkeypatch.setattr(summarize.httpx, "stream", stream)
+    assert "".join(summarize.chat_stream([{"role": "user", "content": "hi"}])) == "Hi there."
+    assert bodies[0]["reasoning_effort"] == "low" and "reasoning_effort" not in bodies[1]
+    monkeypatch.setattr(summarize.httpx, "stream", lambda *a, **k: contextlib.nullcontext(
+        R(404, [], b'{"error":{"message":"The model x does not exist or you do not have access to it."}}')))
+    monkeypatch.setattr(summarize.settings, "live_llm_model", "x")
+    import pytest
+    with pytest.raises(RuntimeError, match="does not exist"):
+        list(summarize.chat_stream([{"role": "user", "content": "hi"}]))

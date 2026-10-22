@@ -550,22 +550,55 @@ def chat(messages: list[dict], best: bool = False, fast: bool = False) -> str:
             _live["n"] -= 1
 
 
-def chat_stream(messages: list[dict]):
-    """A live question's answer as it's written (pieces of text): the cloud AI when LIVE_LLM_API_KEY is set, else
-    the quick Ollama model; other backends give the whole answer at once. Thinking (<think>...) is left out."""
+def _no_think(pieces):
+    """Text pieces with a reasoning model's <think>...</think> left out (also when the tags are split across pieces)."""
+    buf, thinking = "", False
+    for p in pieces:
+        buf += p
+        while True:
+            if thinking:
+                e = buf.find("</think>")
+                if e < 0:
+                    break
+                buf, thinking = buf[e + 8:], False
+                continue
+            s = buf.find("<think>")
+            if s >= 0:
+                if s:
+                    yield buf[:s]
+                buf, thinking = buf[s + 7:], True
+                continue
+            break
+        if not thinking and buf and "<" not in buf[-7:]:
+            yield buf
+            buf = ""
+    if buf and not thinking:
+        yield buf
+
+
+def _cloud_pieces(messages: list[dict]):
     import json as _json
-    if settings.live_llm_api_key:
-        with httpx.stream("POST", f"{settings.live_llm_base_url}/chat/completions", timeout=settings.llm_timeout_s,
-                          headers={"Authorization": f"Bearer {settings.live_llm_api_key}"},
-                          json={"model": settings.live_llm_model, "messages": messages, "temperature": 0.2,
-                                "stream": True}) as r:
+    base, model = settings.live_llm_base_url, settings.live_llm_model
+    extra: dict = {}
+    if "groq.com" in base:                            # reasoning models: as little thinking as possible, none shown
+        if "gpt-oss" in model:
+            extra = {"reasoning_effort": "low", "include_reasoning": False}
+        elif "qwen3" in model or "qwen/" in model:
+            extra = {"reasoning_effort": "none", "reasoning_format": "hidden"}
+    for attempt in (0, 1):
+        body = {"model": model, "messages": messages, "temperature": 0.2, "stream": True, **(extra if attempt == 0 else {})}
+        with httpx.stream("POST", f"{base}/chat/completions", timeout=settings.llm_timeout_s,
+                          headers={"Authorization": f"Bearer {settings.live_llm_api_key}"}, json=body) as r:
             if r.status_code >= 400:                  # say why (a wrong model name, base URL or key)
-                body = r.read().decode(errors="replace")[:300]
+                raw = r.read().decode(errors="replace")[:300]
                 try:                                  # just the provider's message, it's what matters on a watch
-                    body = (_json.loads(body).get("error") or {}).get("message") or body
+                    msg = (_json.loads(raw).get("error") or {}).get("message") or raw
                 except (ValueError, AttributeError):
-                    pass
-                raise RuntimeError(f"cloud AI said {r.status_code}: {body} (model {settings.live_llm_model!r})")
+                    msg = raw
+                if attempt == 0 and extra and r.status_code == 400:
+                    log.info("cloud AI refused the reasoning settings (%s) - without them", msg)
+                    continue
+                raise RuntimeError(f"cloud AI said {r.status_code}: {msg} (model {model!r})")
             for line in r.iter_lines():
                 if not line.startswith("data:"):
                     continue
@@ -578,6 +611,15 @@ def chat_stream(messages: list[dict]):
                     continue
                 if piece:
                     yield piece
+            return
+
+
+def chat_stream(messages: list[dict]):
+    """A live question's answer as it's written (pieces of text): the cloud AI when LIVE_LLM_API_KEY is set, else
+    the quick Ollama model; other backends give the whole answer at once. Thinking (<think>...) is left out."""
+    import json as _json
+    if settings.live_llm_api_key:
+        yield from _no_think(_cloud_pieces(messages))
         return
     if settings.summary_backend.lower() != "ollama":
         yield chat(messages, fast=True)
@@ -605,37 +647,19 @@ def chat_stream(messages: list[dict]):
                 yield chat(messages, fast=True)
                 return
             r.raise_for_status()
-            buf, thinking = "", False
-            for line in r.iter_lines():
-                if not line.strip():
-                    continue
-                try:
-                    d = _json.loads(line)
-                except ValueError:
-                    continue
-                buf += (d.get("message") or {}).get("content") or ""
-                # leave out <think>...</think> (and an empty one qwen3 starts with)
-                while True:
-                    if thinking:
-                        e = buf.find("</think>")
-                        if e < 0:
-                            break
-                        buf, thinking = buf[e + 8:], False
+
+            def pieces():
+                for line in r.iter_lines():
+                    if not line.strip():
                         continue
-                    s = buf.find("<think>")
-                    if s >= 0:
-                        if s:
-                            yield buf[:s]
-                        buf, thinking = buf[s + 7:], True
+                    try:
+                        d = _json.loads(line)
+                    except ValueError:
                         continue
-                    break
-                if not thinking and buf and not buf.endswith("<") and "<t" not in buf[-7:]:
-                    yield buf
-                    buf = ""
-                if d.get("done"):
-                    break
-            if buf and not thinking:
-                yield buf
+                    yield (d.get("message") or {}).get("content") or ""
+                    if d.get("done"):
+                        break
+            yield from _no_think(pieces())
     finally:
         with _live_lock:
             _live["n"] -= 1
