@@ -13,14 +13,14 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import RedirectResponse, FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
+from fastapi.responses import RedirectResponse, FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
 
 from . import agenda, autotag, chat, db, devices, dynamics, knowledge, login, sources, watchlm, watchpack, people, rag, research, vocab, redact, render, search, speech, summarize, terms, transcribe, voices, wakeword, worker
 from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.30.1"
+VERSION = "1.31.0"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -712,7 +712,31 @@ async def _wait_answer(r: dict, wait: float) -> dict:
     return r
 
 
-def _ask_start(data: dict) -> dict:
+class _Plan(Exception):
+    """_ask_start(plan=True): what it would do, instead of starting it (the one-trip /api/voice streams it itself)."""
+    def __init__(self, **kw):
+        self.kw = kw
+
+
+def _ask_plan(data: dict) -> dict:
+    """{"instant": answer} or {"messages", "context", "system", "late", "best"} for a question."""
+    try:
+        _ask_start(data, plan=True)
+    except _Plan as p:
+        return p.kw
+    raise RuntimeError("no plan")
+
+
+def _ask_start(data: dict, plan: bool = False) -> dict:
+    def instant(a: str) -> dict:
+        if plan:
+            raise _Plan(instant=a)
+        return chat.instant(a)
+
+    def go(clean, context, best, system, late=None) -> dict:
+        if plan:
+            raise _Plan(messages=clean, context=context, best=best, system=system, late=late)
+        return chat.start(clean, context, best, system, late=late)
     msgs = data.get("messages")
     if not msgs and data.get("prompt"):
         msgs = [{"role": "user", "content": str(data["prompt"])}]
@@ -764,7 +788,7 @@ def _ask_start(data: dict) -> dict:
                 log.info("ask: weather answered directly in %.1fs", time.time() - t0)
                 from . import timing
                 timing.note("forecast", time.time() - t0)
-                return chat.instant(wa)
+                return instant(wa)
         if len(clean) == 1 and not data.get("best"):
             # "who is Ryan", "who is our CTO", "what products do we have": a company essential or a who-is answer
             # that clearly matches is the answer - at once, without waiting for the AI (on a home server that's
@@ -772,7 +796,7 @@ def _ask_start(data: dict) -> dict:
             f = knowledge.best_answer(q)
             if f and (f.get("core") or f.get("edited") or f.get("kind") == "person") and len(knowledge._words(q)) <= 6 \
                     and not worldinfo.is_world(last_q):
-                return chat.instant(f["a"])
+                return instant(f["a"])
         # any other question (the watch's "Hey Oracle ...", Ask on the web): your company's knowledge goes along when
         # something matches - people, products, services, decisions - so "what is Aleta Planet" or "who is Ryan"
         # is answered from your meetings, website and documents instead of the AI's general knowledge
@@ -795,8 +819,8 @@ def _ask_start(data: dict) -> dict:
                 if w:
                     out = (out + "\n\n" if out else "") + w
             return out
-        return chat.start(clean, context, bool(data.get("best")), (system or chat.SYSTEM) + "\n\n" + now, late=late)
-    return chat.start(clean, context, bool(data.get("best")), (system or chat.SYSTEM) + "\n\n" + now)
+        return go(clean, context, bool(data.get("best")), (system or chat.SYSTEM) + "\n\n" + now, late=late)
+    return go(clean, context, bool(data.get("best")), (system or chat.SYSTEM) + "\n\n" + now)
 
 
 @app.get("/api/ask/{aid}", dependencies=[Depends(auth)])
@@ -1761,6 +1785,144 @@ async def speech_to_text(request: Request, language: Optional[str] = Query(None)
         return await run_in_threadpool(speech.stt, str(tmp), lang, cands)
     finally:
         tmp.unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------- a spoken question in one trip (the watch)
+_SENT_END = re.compile(r"(?<=[.!?])\s+")
+
+
+def _voice_lines(text: str):
+    """The text read out (ElevenLabs' fast model / Piper), as "B <base64>" lines of 16 IMA ADPCM blocks (256 bytes,
+    505 samples each, 16 kHz) - blocks stand on their own, so the watch plays them as they come."""
+    import base64 as _b64
+    t0 = time.time()
+    try:
+        data = speech.wav_to_ima_adpcm(speech.tts(text, live=True))[48:]
+    except Exception as e:                           # noqa: BLE001 - the text still shows
+        log.warning("voice for %r: %s", text[:40], e)
+        return
+    from . import timing
+    timing.note("voice part", time.time() - t0, f"{len(text)} characters")
+    for i in range(0, len(data), 4096):
+        yield "B " + _b64.b64encode(data[i:i + 4096]).decode() + "\n"
+
+
+@app.post("/api/voice", dependencies=[Depends(auth)])
+async def voice_question(request: Request, language: Optional[str] = Query(None), speak: int = Query(1),
+                         tz: Optional[int] = Query(None), city: str = Query(""), scope: str = Query(""),
+                         intents: int = Query(1)):
+    """A spoken question in one trip (the watch): body = the recording (WAV); header X-Ask = base64 of JSON
+    {"messages": [system + the conversation so far]}. The reply is a stream of lines, as each part is ready:
+      T {"text", "language"}   what you said (at once - the watch may answer it itself and hang up)
+      X {"type", ...}          a reminder / timer / task / note / meeting / translation to do on the watch (then E)
+      P {"text"}               the answer so far, a sentence at a time
+      B <base64>               its voice: IMA ADPCM blocks (16 kHz, 256-byte blocks), playable as they come
+      A {"answer"}             the whole answer
+      E {} / E {"error"}       the end
+    The voice of the first sentence comes while the AI is still writing the rest."""
+    tmp = settings.upload_dir / f"voice_{secrets.token_hex(6)}.wav"
+    n = await save_body(request, tmp)
+    if n < 100:
+        tmp.unlink(missing_ok=True)
+        raise HTTPException(400, "empty audio")
+    if n > 8 * 1024 * 1024:
+        tmp.unlink(missing_ok=True)
+        raise HTTPException(413, "clip too long")
+    ask: dict = {}
+    if request.headers.get("x-ask"):
+        import base64 as _b64
+        try:
+            ask = json.loads(_b64.b64decode(request.headers["x-ask"]).decode("utf-8", "replace"))
+        except (ValueError, TypeError):
+            ask = {}
+    if not isinstance(ask, dict):
+        ask = {}
+
+    def line(kind: str, obj: dict) -> str:
+        return f"{kind} {json.dumps(obj, ensure_ascii=False)}\n"
+
+    def gen():
+        from . import timing
+        t0 = time.time()
+        try:
+            transcribe.fix_wav_header(str(tmp))
+            lang = language if language and language.lower() != "auto" else None
+            r = speech.stt(str(tmp), lang, None)
+        except Exception as e:                       # noqa: BLE001
+            yield line("E", {"error": f"speech to text failed: {str(e)[:160]}"})
+            return
+        finally:
+            tmp.unlink(missing_ok=True)
+        text = (r.get("text") or "").strip()
+        yield line("T", {"text": text, "language": r.get("language") or ""})
+        if not text:
+            yield line("E", {})
+            return
+        tzm = tz if tz is not None else settings.default_tz_min
+        if intents and scope != "meetings" and not speech.plain_question(text):
+            # reminders, timers, tasks, notes, translations: by the rules only - asking the AI what you meant first
+            # cost 2-4 s on every question that isn't plainly a question
+            from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+            it = speech.rule_intent(text, _dt.now(_tz(_td(minutes=tzm)))) or {}
+            if it.get("type") not in (None, "", "question", "none"):
+                yield line("X", it)
+                yield line("E", {})
+                return
+        msgs = [m for m in (ask.get("messages") or []) if isinstance(m, dict)][-12:]
+        data = {"messages": msgs + [{"role": "user", "content": text}], "tz": tzm, "city": city or ask.get("city") or ""}
+        if scope:
+            data["scope"] = scope
+        try:
+            plan = _ask_plan(data)
+        except HTTPException as e:
+            yield line("E", {"error": str(e.detail)})
+            return
+        if "instant" in plan:
+            a = plan["instant"]
+            yield line("A", {"answer": a})
+            if speak:
+                yield from _voice_lines(a)
+            timing.note("voice trip", time.time() - t0, "without the AI")
+            yield line("E", {})
+            return
+        system = plan["system"] + (("\n\n" + plan["context"]) if plan["context"] else "")
+        if plan.get("late"):
+            try:
+                extra = plan["late"]()
+            except Exception:                        # noqa: BLE001
+                extra = ""
+            if extra:
+                system += "\n\n" + extra
+        full, pending, shown, first = "", "", "", None
+        try:
+            with chat._sem:
+                for piece in summarize.chat_stream([{"role": "system", "content": system}] + data["messages"]):
+                    full += piece
+                    pending += piece
+                    while True:
+                        m = _SENT_END.search(pending)
+                        if not m or len(pending[:m.start()].strip()) < 12:
+                            break
+                        sent, pending = pending[:m.start()].strip(), pending[m.end():]
+                        shown = (shown + " " + sent).strip()
+                        if first is None:
+                            first = time.time() - t0
+                        yield line("P", {"text": shown})
+                        if speak:
+                            yield from _voice_lines(sent)
+        except Exception as e:                       # noqa: BLE001
+            yield line("E", {"error": summarize.explain_llm_error(e)[:200]})
+            return
+        rest = re.sub(r"<think>.*?</think>", "", pending, flags=re.S).strip()
+        answer = re.sub(r"<think>.*?</think>", "", full, flags=re.S).strip()
+        yield line("A", {"answer": answer})
+        if speak and rest:
+            yield from _voice_lines(rest)
+        timing.note("voice trip", time.time() - t0, f"first sentence at {first or time.time() - t0:.1f}s")
+        yield line("E", {})
+
+    return StreamingResponse(gen(), media_type="text/plain; charset=utf-8",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @app.post("/api/intent", dependencies=[Depends(auth)])

@@ -32,7 +32,7 @@ class Settings:
     whisper_compute: str = os.getenv("WHISPER_COMPUTE", "auto")     # auto -> int8 on CPU, float16 on GPU
     whisper_threads: int = _int("WHISPER_THREADS", 0)               # 0 = all cores
     whisper_beam: int = _int("WHISPER_BEAM", 5)
-    stt_model: str = os.getenv("STT_MODEL", "")      # short spoken questions (/api/stt): e.g. "small" - quicker
+    stt_model: str = os.getenv("STT_MODEL", "distil-small.en")      # short spoken questions (/api/stt): e.g. "small" - quicker
     default_language: str = os.getenv("DEFAULT_LANGUAGE", "")       # "" = auto-detect, e.g. "en"
     initial_prompt: str = os.getenv("INITIAL_PROMPT", "")           # vocabulary hints: names, products, jargon
     region: str = os.getenv("REGION", "").strip().lower()           # "sg" = Singapore: mixed English/Singlish/Mandarin/Malay
@@ -96,6 +96,12 @@ class Settings:
     rag_min_score: float = float(os.getenv("RAG_MIN_SCORE", "0.45"))
     openai_model_best: str = os.getenv("OPENAI_MODEL_BEST", "")
     openai_model_fast: str = os.getenv("OPENAI_MODEL_FAST", "")
+    # Questions you ask the watch or Ask (not meetings) on a fast cloud AI - any OpenAI-compatible API (OpenAI, Groq,
+    # OpenRouter, Anthropic's OpenAI endpoint...). Off unless LIVE_LLM_API_KEY is set: your question and the company
+    # context sent with it then leave this server. Meetings and minutes always stay on SUMMARY_BACKEND.
+    live_llm_base_url: str = os.getenv("LIVE_LLM_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+    live_llm_api_key: str = os.getenv("LIVE_LLM_API_KEY", "")
+    live_llm_model: str = os.getenv("LIVE_LLM_MODEL", "gpt-4o-mini")
     openai_embed_model: str = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
     summary_chunk_chars: int = _int("SUMMARY_CHUNK_CHARS", 24000)   # longer transcripts are summarised in parts
     llm_timeout_s: int = _int("LLM_TIMEOUT_S", 1800)

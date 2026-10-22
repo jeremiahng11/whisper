@@ -423,6 +423,14 @@ owners, dates, budgets, terms, and who people are. In the background it reads on
   voices came out at about a third - soft on the watch); the watch's saved answers are made again once. `/api/health`
   has "timing": the last steps with how long each took (speech to text, answer, voice). Watch W1B-1.6.9 makes your
   MP3s in /voice louder the same way.
+- **Spoken questions in one trip** (1.31.0, watch W1B-1.8.0): `POST /api/voice` takes the recording and streams back
+  what was said, the answer a sentence at a time and its voice (IMA ADPCM, base64 lines) - the watch starts playing
+  the first sentence while the AI is still writing the rest. One connection instead of three (speech to text, ask,
+  voice). Speech to text for questions uses `STT_MODEL` (now `distil-small.en` by default: ~0.3 s; other languages
+  use the main model). The watch stops listening 0.7 s after you stop talking. Older watches keep using /api/stt.
+- **Optional cloud AI for questions** (`LIVE_LLM_API_KEY`, `LIVE_LLM_BASE_URL`, `LIVE_LLM_MODEL`): any
+  OpenAI-compatible API answers the watch's and Ask's questions in about a second (streamed). Off unless the key is
+  set - the question and the company context sent with it then leave this server. Meetings always stay local.
 - **Questions on the watch** (1.24.0): Account > Watch AI lists every question the watch can be asked offline, with
   its answer: fix a wrong answer, add other ways you'd ask it, hide a wrong question, or add your own question and
   answer (always on the watch, answered there). `POST /api/knowledge/custom`, `DELETE /api/knowledge/custom/{id}`,

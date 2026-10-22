@@ -532,6 +532,8 @@ def chat(messages: list[dict], best: bool = False, fast: bool = False) -> str:
         if backend == "openai":
             return _openai_chat(messages, model=model)
         raise RuntimeError(f"unknown SUMMARY_BACKEND {settings.summary_backend!r}")
+    if settings.live_llm_api_key:
+        return "".join(chat_stream(messages))
     with _live_lock:
         _live["n"] += 1
     try:
@@ -541,6 +543,91 @@ def chat(messages: list[dict], best: bool = False, fast: bool = False) -> str:
         if backend == "openai":
             return _openai_chat(messages, model=settings.openai_model_fast)
         raise RuntimeError(f"unknown SUMMARY_BACKEND {settings.summary_backend!r}")
+    finally:
+        with _live_lock:
+            _live["n"] -= 1
+
+
+def chat_stream(messages: list[dict]):
+    """A live question's answer as it's written (pieces of text): the cloud AI when LIVE_LLM_API_KEY is set, else
+    the quick Ollama model; other backends give the whole answer at once. Thinking (<think>...) is left out."""
+    import json as _json
+    if settings.live_llm_api_key:
+        with httpx.stream("POST", f"{settings.live_llm_base_url}/chat/completions", timeout=settings.llm_timeout_s,
+                          headers={"Authorization": f"Bearer {settings.live_llm_api_key}"},
+                          json={"model": settings.live_llm_model, "messages": messages, "temperature": 0.2,
+                                "stream": True}) as r:
+            r.raise_for_status()
+            for line in r.iter_lines():
+                if not line.startswith("data:"):
+                    continue
+                d = line[5:].strip()
+                if d == "[DONE]":
+                    break
+                try:
+                    piece = ((_json.loads(d).get("choices") or [{}])[0].get("delta") or {}).get("content") or ""
+                except ValueError:
+                    continue
+                if piece:
+                    yield piece
+        return
+    if settings.summary_backend.lower() != "ollama":
+        yield chat(messages, fast=True)
+        return
+    m = settings.ollama_model_fast or settings.ollama_model
+    body = {"model": m, "messages": messages, "stream": True,
+            "options": {"num_ctx": settings.ollama_fast_ctx if m == settings.ollama_model_fast else settings.ollama_num_ctx,
+                        "temperature": 0.2}}
+    if m == settings.ollama_model_fast and m != settings.ollama_model:
+        body["keep_alive"] = "24h"
+    if any(k in m.lower() for k in ("qwen3", "deepseek-r1", "gpt-oss")):
+        body["think"] = False
+        if "qwen3" in m.lower():
+            msgs = [dict(x) for x in messages]
+            for x in reversed(msgs):
+                if x.get("role") == "user":
+                    x["content"] = str(x.get("content", "")) + " /no_think"
+                    break
+            body["messages"] = msgs
+    with _live_lock:
+        _live["n"] += 1
+    try:
+        with httpx.stream("POST", f"{ollama_url()}/api/chat", json=body, timeout=settings.llm_timeout_s) as r:
+            if r.status_code == 404:                  # the quick model isn't there: the whole answer, the usual way
+                yield chat(messages, fast=True)
+                return
+            r.raise_for_status()
+            buf, thinking = "", False
+            for line in r.iter_lines():
+                if not line.strip():
+                    continue
+                try:
+                    d = _json.loads(line)
+                except ValueError:
+                    continue
+                buf += (d.get("message") or {}).get("content") or ""
+                # leave out <think>...</think> (and an empty one qwen3 starts with)
+                while True:
+                    if thinking:
+                        e = buf.find("</think>")
+                        if e < 0:
+                            break
+                        buf, thinking = buf[e + 8:], False
+                        continue
+                    s = buf.find("<think>")
+                    if s >= 0:
+                        if s:
+                            yield buf[:s]
+                        buf, thinking = buf[s + 7:], True
+                        continue
+                    break
+                if not thinking and buf and not buf.endswith("<") and "<t" not in buf[-7:]:
+                    yield buf
+                    buf = ""
+                if d.get("done"):
+                    break
+            if buf and not thinking:
+                yield buf
     finally:
         with _live_lock:
             _live["n"] -= 1

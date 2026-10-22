@@ -2609,3 +2609,66 @@ def test_spoken_answers_made_louder():
     out = speech.loud(quiet)
     assert 0.85 * 32767 < np.abs(out).max() <= 32767
     assert np.abs(speech.loud(np.zeros(100))).max() == 0
+
+
+def test_voice_question_in_one_trip(client, monkeypatch):
+    import base64 as _b64
+    import json as _j
+    from app import speech, summarize, worldinfo
+    said = {"t": ""}
+    monkeypatch.setattr(speech, "stt", lambda path, lang=None, cands=None: {"text": said["t"], "language": "en", "duration": 1})
+    monkeypatch.setattr(speech, "tts", lambda text, lang="en", strict=False, live=False:
+                        speech.to_wav16k(__import__("numpy").zeros(1600 * max(1, len(text) // 10)), 16000))
+    monkeypatch.setattr(worldinfo, "_get_json", lambda url, timeout=6: {"results": [{"name": "Singapore", "latitude": 1, "longitude": 1}]}
+                        if "geocoding" in url else {"current": {"temperature_2m": 31, "apparent_temperature": 36, "weather_code": 2},
+                                                    "daily": {"weather_code": [2, 61], "temperature_2m_min": [26, 25],
+                                                              "temperature_2m_max": [32, 31], "precipitation_probability_max": [40, 80]}})
+    sent = []
+    monkeypatch.setattr(summarize, "chat_stream", lambda msgs: (sent.append(msgs), iter(["Here is one", ". Why did the chicken ",
+                        "cross the road? To get", " to the other side."]))[1])
+
+    def ask(text, header=None):
+        said["t"] = text
+        h = {**H, "Content-Type": "audio/wav"}
+        if header:
+            h["X-Ask"] = _b64.b64encode(_j.dumps(header).encode()).decode()
+        r = client.post("/api/voice?speak=1&tz=480", content=wav_bytes(1), headers=h)
+        assert r.status_code == 200, r.text
+        return [ln.split(" ", 1) for ln in r.text.strip().split("\n")]
+
+    lines = ask("How's the weather?")
+    kinds = [k for k, _ in lines]
+    assert kinds[0] == "T" and kinds[1] == "A" and "B" in kinds and kinds[-1] == "E"
+    assert "Right now in Singapore" in _j.loads(lines[1][1])["answer"]
+    blob = b"".join(_b64.b64decode(v) for k, v in lines if k == "B")
+    assert len(blob) and len(blob) % 256 == 0                          # whole ADPCM blocks
+    lines = ask("Tell me a joke", {"messages": [{"role": "system", "content": "You are Oracle."}]})
+    kinds = [k for k, _ in lines]
+    assert kinds[:2] == ["T", "P"] and kinds.index("B") < kinds.index("A") and kinds[-1] == "E"   # voice before the end
+    ps = [_j.loads(v)["text"] for k, v in lines if k == "P"]
+    assert ps == ["Here is one.", "Here is one. Why did the chicken cross the road?"]     # a sentence at a time
+    assert _j.loads([v for k, v in lines if k == "A"][0])["answer"].endswith("other side.")
+    assert sent[-1][1]["content"] == "You are Oracle." and sent[-1][-1]["content"] == "Tell me a joke"
+    lines = ask("Set a timer for 5 minutes")
+    assert [k for k, _ in lines] == ["T", "X", "E"] and _j.loads(lines[1][1])["type"] == "timer"
+
+
+def test_chat_stream_leaves_out_thinking(monkeypatch):
+    import contextlib
+    import json as _j
+    from app import summarize
+    pieces = ["<th", "ink>\n", "hmm</think>", "\n\nHello", " there. ", "Bye", "."]
+
+    class R:
+        status_code = 200
+        def raise_for_status(self): pass
+        def iter_lines(self):
+            for p in pieces:
+                yield _j.dumps({"message": {"content": p}, "done": False})
+            yield _j.dumps({"message": {"content": ""}, "done": True})
+    monkeypatch.setattr(summarize.httpx, "stream", lambda *a, **k: contextlib.nullcontext(R()))
+    monkeypatch.setattr(summarize, "ollama_url", lambda: "http://x")
+    monkeypatch.setattr(summarize.settings, "summary_backend", "ollama")
+    monkeypatch.setattr(summarize.settings, "live_llm_api_key", "")
+    out = "".join(summarize.chat_stream([{"role": "user", "content": "hi"}]))
+    assert out.strip() == "Hello there. Bye."
