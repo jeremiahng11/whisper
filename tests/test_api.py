@@ -861,7 +861,7 @@ def test_tts_adpcm_is_smaller_and_decodes():
     sr = 16000
     x = np.arange(sr * 3)
     pcm = (np.sin(2 * np.pi * 300 * x / sr) * 8000).astype(np.float32)
-    wav = speech.to_wav16k(pcm, sr)
+    wav = speech.to_wav16k(pcm, sr, louder=False)
     ad = speech.wav_to_ima_adpcm(wav)
     assert len(ad) < len(wav) / 3.5 and ad[20:22] == b"\x11\x00"            # IMA ADPCM format tag
     from pathlib import Path
@@ -2600,3 +2600,12 @@ def test_voice_made_ahead_is_found_and_waited_for():
     # the watch sends it back folded to ASCII ("31C"): still the same answer, and it waits instead of making it again
     assert chat.spoken("Right now in Singapore it's 31C.", "en", True) == b"VOICE"
     assert chat.spoken("Something else entirely", "en", True) is None
+
+
+def test_spoken_answers_made_louder():
+    import numpy as np
+    from app import speech
+    quiet = (np.sin(np.arange(16000) / 5) * 10000).astype(np.float32)        # peaks at ~30%
+    out = speech.loud(quiet)
+    assert 0.85 * 32767 < np.abs(out).max() <= 32767
+    assert np.abs(speech.loud(np.zeros(100))).max() == 0
