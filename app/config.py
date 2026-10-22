@@ -59,6 +59,12 @@ class Settings:
     research_auto: bool = _bool("RESEARCH_AUTO", True)        # research your company's topics on the web by itself
     research_live: bool = _bool("RESEARCH_LIVE", True)        # Ask: a quick web search when nothing is known yet
     bundled_firmware: bool = _bool("BUNDLED_FIRMWARE", True)  # offer the watch firmware that comes with this version
+    # new watch firmware straight from GitHub (no redeploy): the .bin files in this folder of this repo. "" = off
+    firmware_repo: str = os.getenv("FIRMWARE_REPO", "jeremiahng11/whisper").strip()
+    firmware_branch: str = os.getenv("FIRMWARE_BRANCH", "main").strip() or "main"
+    firmware_path: str = os.getenv("FIRMWARE_PATH", "app/watch_files/firmware").strip().strip("/")
+    firmware_check_min: float = float(os.getenv("FIRMWARE_CHECK_MIN", "30") or 30)   # how often to look
+    github_token: str = (os.getenv("FIRMWARE_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN") or "").strip()   # private repo
     home_city: str = os.getenv("HOME_CITY", "Singapore")          # weather / "the time" when no city is named
     default_tz_min: int = _int("TZ_OFFSET_MIN", 480)              # the time zone when the watch doesn't say (+8)
     research_questions: int = int(os.getenv("RESEARCH_QUESTIONS", "4"))   # unanswered questions researched per day

@@ -469,6 +469,7 @@ ul.replies{margin:4px 0;padding-left:20px;font-size:13.5px}
           <h3 style="margin-top:22px">Firmware updates</h3>
           <p class="mute" style="margin:4px 0 8px">Upload <code>firmware.bin</code> from <code>.pio/build/&lt;board&gt;/</code>. Watches of that board install the newest active version over WiFi.</p>
           <div class="row"><input type="file" id="fwFile" accept=".bin"><input type="text" id="fwNotes" placeholder="What's new (optional)" style="flex:1;min-width:140px"></div>
+          <div class="mute" style="margin:4px 0"><span id="fwGh"></span> <a href="#" id="fwGhNow">Check GitHub now</a></div>
           <div id="fwMsg" class="mute" style="margin:6px 0"></div>
           <div id="fwList"></div>
         </div>
@@ -1748,11 +1749,17 @@ function wStatText(st) {
   if (st.fmt) p.push(`audio ${st.fmt}`);
   return p.join(" · ");
 }
+$("#fwGhNow").onclick = async e => { e.preventDefault(); $("#fwMsg").textContent = "Looking at GitHub…";
+  try { const j = await (await api("/api/firmware/github", { method: "POST" })).json();
+    $("#fwMsg").textContent = j.added.length ? "Added " + j.added.join(", ") : (j.github.error || "Nothing new on GitHub."); } catch (x) { $("#fwMsg").textContent = x.message; }
+  loadWatches(); };
 async function loadWatches() {
   if (!KEY && !SESSION.user) return;
   let devs = [], fws = [];
   try { devs = (await (await api("/api/devices")).json()).devices; } catch (e) {}
-  try { fws = (await (await api("/api/firmware")).json()).items; } catch (e) {}
+  let gh = null;
+  try { const j = await (await api("/api/firmware")).json(); fws = j.items; gh = j.github; } catch (e) {}
+  if (gh) $("#fwGh").textContent = gh.repo ? `New firmware pushed to GitHub (${gh.repo}) is added by itself${gh.checked ? " - looked " + ago(gh.checked) : ""}${gh.error ? " - " + gh.error : ""}.` : "";
   $("#wlist").innerHTML = devs.length ? devs.map(d => { const st = d.status || {}; return `<div class="w${d.id === WATCH ? " on" : ""}" data-id="${esc(d.id)}">
     <div class="t"><span>${esc(d.id)}</span><span class="mute">${esc(d.fw || "")}</span></div>
     <div class="m">${st.rec ? '<span class="rec">● recording</span> · ' : ""}${esc(ago(d.last_seen))}${st.bat != null ? ` · ${Math.round(st.bat)}%${st.usb ? "⚡" : ""}` : ""}${st.rssi ? ` · ${st.rssi} dBm` : ""}</div></div>`; }).join("")

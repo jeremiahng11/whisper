@@ -2,6 +2,7 @@
 Run:  pytest -q
 """
 import io
+import json
 import os
 import struct
 import tempfile
@@ -15,6 +16,7 @@ os.environ["SUMMARY_BACKEND"] = "openai"
 os.environ["PRELOAD_MODEL"] = "0"
 os.environ["DIARIZER"] = "fake"
 os.environ["BUNDLED_FIRMWARE"] = "0"
+os.environ["FIRMWARE_REPO"] = ""
 os.environ["AUTOTAG_NEW"] = "0"          # tested on their own below (they'd change other tests' meetings)
 os.environ["AUTOTAG_SWEEP"] = "0"
 os.environ["PEOPLE_SWEEP"] = "0"
@@ -2531,3 +2533,28 @@ def test_edit_this_answer(client):
     assert one["a"] == "Mira and Tom run it."
     assert client.post("/api/knowledge/correct", json={"q": "x", "a": ""}, headers=H).status_code == 400
     client.delete(f"/api/knowledge/custom/{fid}", headers=H)
+
+
+def test_firmware_from_github(client, monkeypatch):
+    from app import devices
+    fw = b"\xe9" + b"\0" * 64 + b"ORACLEFW|watch1b|W1B-9.9.1|" + b"\0" * 64
+    calls = []
+
+    def fake(url, raw=False, timeout=20):
+        calls.append(url)
+        if raw:
+            return fw
+        return json.dumps([{"type": "file", "name": "watch1b.bin", "sha": "abc", "size": len(fw)},
+                           {"type": "file", "name": "README.md", "sha": "r", "size": 5}]).encode()
+    monkeypatch.setattr(devices, "_gh_get", fake)
+    monkeypatch.setattr(devices.settings, "firmware_repo", "someone/repo")
+    devices.gh_status["checked"] = 0
+    r = client.post("/api/firmware/github", headers=H).json()
+    assert r["added"] == ["watch1b/W1B-9.9.1"] and not r["github"]["error"]
+    lat = client.get("/api/firmware/latest?board=watch1b&current=W1B-1.5.7", headers=H).json()
+    assert lat["version"] == "W1B-9.9.1" and lat["newer"]
+    n = len(calls)
+    devices.gh_status["checked"] = 0
+    assert client.post("/api/firmware/github", headers=H).json()["added"] == []   # same file: not downloaded again
+    assert len(calls) == n + 1
+    client.delete("/api/firmware/watch1b/W1B-9.9.1", headers=H)

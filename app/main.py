@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.26.0"
+VERSION = "1.27.0"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -38,6 +38,8 @@ async def lifespan(app: FastAPI):
             devices.import_bundled()                 # the watch firmware that comes with this version
     except Exception as e:                           # noqa: BLE001
         log.warning("bundled firmware: %s", e)
+    if settings.bundled_firmware:
+        devices.start_github_watcher()               # and new firmware pushed to GitHub, without a redeploy
     if speech.tts_available():                       # load the voices now, not on the first spoken answer
         import threading
         threading.Thread(target=speech.warm_voices, daemon=True).start()
@@ -1994,13 +1996,23 @@ async def firmware_upload(request: Request, notes: str = Query("")):
 
 @app.get("/api/firmware", dependencies=[Depends(auth)])
 def firmware_list():
-    return {"items": devices.list_firmware()}
+    return {"items": devices.list_firmware(), "github": devices.gh_status}
+
+
+@app.post("/api/firmware/github", dependencies=[Depends(auth)])
+async def firmware_github():
+    """Look at GitHub for new watch firmware now."""
+    import asyncio
+    added = await asyncio.to_thread(devices.github_check)
+    return {"added": added, "github": devices.gh_status}
 
 
 @app.get("/api/firmware/latest", dependencies=[Depends(auth)])
-def firmware_latest(board: str = Query(...), current: str = Query("")):
+async def firmware_latest(board: str = Query(...), current: str = Query("")):
     if not devices.BOARD.match(board):
         raise HTTPException(400, "bad board")
+    import asyncio
+    await asyncio.to_thread(devices.github_check, 120)   # Check for updates on the watch: what was just pushed too
     r = devices.latest(board, current)
     if not r:
         raise HTTPException(404, "no firmware for this board")

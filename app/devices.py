@@ -228,3 +228,94 @@ def import_bundled() -> list[str]:
     seen_p.write_text(json.dumps(sorted(seen)))
     return added
 
+
+
+# ---------------------------------------------------------------- firmware from GitHub (no redeploy needed)
+# The firmware .bin files pushed to the repo (FIRMWARE_REPO, FIRMWARE_BRANCH, FIRMWARE_PATH - by default this
+# server's own repo, app/watch_files/firmware) are looked at every FIRMWARE_CHECK_MIN minutes, and again when a watch
+# checks for updates (at most every 2 minutes). A file that changed on GitHub is downloaded and, if it's a version
+# not here yet, added like an upload. So pushing a watch update to GitHub is enough. One you delete isn't added again.
+gh_status: dict = {"checked": 0, "error": "", "added": [], "repo": ""}
+_gh_lock = threading.Lock()
+
+
+def _gh_get(url: str, raw: bool = False, timeout: float = 20) -> bytes:
+    import urllib.request
+    h = {"User-Agent": "OracleMinutes", "Accept": "application/vnd.github.raw" if raw else "application/vnd.github+json"}
+    if settings.github_token:
+        h["Authorization"] = "Bearer " + settings.github_token
+    with urllib.request.urlopen(urllib.request.Request(url, headers=h), timeout=timeout) as r:
+        return r.read(FW_MAX + 1)
+
+
+def github_check(min_age: float = 0) -> list[str]:
+    """Look at GitHub for new watch firmware now (unless looked within min_age seconds). Returns what was added."""
+    import urllib.error
+    import urllib.parse
+    repo = settings.firmware_repo
+    if not repo or not re.fullmatch(r"[\w.-]+/[\w.-]+", repo):
+        return []
+    if time.time() - gh_status["checked"] < min_age or not _gh_lock.acquire(blocking=False):
+        return []
+    added: list[str] = []
+    try:
+        gh_status.update(checked=time.time(), repo=f"{repo}@{settings.firmware_branch}/{settings.firmware_path}")
+        base = f"https://api.github.com/repos/{repo}/contents/{urllib.parse.quote(settings.firmware_path)}"
+        ref = "?ref=" + urllib.parse.quote(settings.firmware_branch)
+        items = json.loads(_gh_get(base + ref))
+        if not isinstance(items, list):
+            raise ValueError("that path is a file, not a folder")
+        shas_p = _fwdir() / "github_seen.json"
+        seen_p = _fwdir() / "bundled_seen.json"           # (shared with the bundled ones: a deleted version stays gone)
+        try:
+            shas = json.loads(shas_p.read_text())
+        except (OSError, ValueError):
+            shas = {}
+        try:
+            seen = set(json.loads(seen_p.read_text()))
+        except (OSError, ValueError):
+            seen = set()
+        for it in items:
+            name, sha = it.get("name") or "", it.get("sha") or ""
+            if it.get("type") != "file" or not name.endswith(".bin") or shas.get(name) == sha:
+                continue
+            if (it.get("size") or 0) > FW_MAX:
+                continue
+            data = _gh_get(f"{base}/{urllib.parse.quote(name)}{ref}", raw=True, timeout=120)
+            try:
+                board, version = identify(data)
+            except ValueError as e:
+                log.warning("github firmware %s: %s", name, e)
+                shas[name] = sha
+                continue
+            key = f"{board}/{version}"
+            if key not in seen and not _meta(board, version):
+                save_firmware(data, f"From GitHub ({repo})")
+                added.append(key)
+                log.info("firmware %s added from GitHub", key)
+            seen.add(key)
+            shas[name] = sha
+        shas_p.write_text(json.dumps(shas))
+        seen_p.write_text(json.dumps(sorted(seen)))
+        gh_status.update(error="", added=added or gh_status.get("added") or [])
+    except urllib.error.HTTPError as e:
+        gh_status["error"] = f"GitHub {e.code}" + (" - private repo? set GITHUB_TOKEN" if e.code == 404 and not settings.github_token else "")
+        log.warning("github firmware: %s", gh_status["error"])
+    except Exception as e:                                   # noqa: BLE001 - no internet: next time
+        gh_status["error"] = str(e)[:200]
+        log.warning("github firmware: %s", e)
+    finally:
+        _gh_lock.release()
+    return added
+
+
+def start_github_watcher() -> None:
+    if not settings.firmware_repo or settings.firmware_check_min <= 0:
+        return
+
+    def loop():
+        time.sleep(20)
+        while True:
+            github_check()
+            time.sleep(max(5.0, settings.firmware_check_min) * 60)
+    threading.Thread(target=loop, daemon=True, name="fw-github").start()
