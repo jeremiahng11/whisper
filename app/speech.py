@@ -129,6 +129,15 @@ def _strip_lead(s: str, words: str) -> str:
     return re.sub(rf"^\s*(?:{words})\b[\s,:]*", "", s, flags=re.I).strip(" .,!")
 
 
+_WAKE_WORDS = re.compile(r"^\s*(hey|hi|ok|okay)?[\s,]*(oracle|orakel|oracal|or rachel)\b[\s,.!]*", re.I)
+
+
+def strip_wake(text: str) -> str:
+    """"Hey Oracle, is ..." -> "is ...": the wake words heard at the start of a question are not part of it."""
+    out = _WAKE_WORDS.sub("", text or "", count=1).strip()
+    return out[:1].upper() + out[1:] if out else (text or "").strip()
+
+
 def rule_intent(text: str, now: datetime) -> Optional[dict]:
     t = text.strip().strip(".!?")
     low = t.lower()
@@ -158,6 +167,11 @@ def rule_intent(text: str, now: datetime) -> Optional[dict]:
             return {"type": "task", "text": what}
     # note
     m = re.match(r"^(?:take\s+a\s+note|note\s+(?:that|down)?|make\s+a\s+note|remember\s+that)\b[\s,:]*(.*)$", low)
+    # ...but not a question that speech-to-text started with "Note" ("Note, is Aleta Planet a global company?" - it
+    # heard "Oracle" / "Hey Oracle" as "note"): saved as a note instead of answered
+    if m and m.group(1) and (text.strip().endswith("?") or _ASK.search(m.group(1))) and not re.match(
+            r"^(take\s+a\s+note|make\s+a\s+note|note\s+down|remember\s+that)\b", low):
+        m = None
     if m and m.group(1):
         return {"type": "note", "text": t[len(t) - len(m.group(1)):].strip()}
     # meeting

@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.31.5"
+VERSION = "1.31.6"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -1853,7 +1853,8 @@ async def voice_question(request: Request, language: Optional[str] = Query(None)
             return
         finally:
             tmp.unlink(missing_ok=True)
-        text = (r.get("text") or "").strip()
+        text = speech.strip_wake((r.get("text") or "").strip())
+        timing.note("heard", 0, text[:60])
         yield line("T", {"text": text, "language": r.get("language") or ""})
         if not text:
             yield line("E", {})

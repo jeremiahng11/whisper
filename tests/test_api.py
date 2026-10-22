@@ -2705,3 +2705,11 @@ def test_cloud_ai_groq_reasoning_and_errors(monkeypatch):
     import pytest
     with pytest.raises(RuntimeError, match="does not exist"):
         list(summarize.chat_stream([{"role": "user", "content": "hi"}]))
+
+
+def test_question_heard_with_note_is_not_a_note():
+    from datetime import datetime
+    from app import speech
+    assert speech.rule_intent("Note, is Aleta Planet a global company?", datetime.now()) is None
+    assert speech.rule_intent("Note that the launch moved to Friday", datetime.now())["type"] == "note"
+    assert speech.strip_wake("Hey Oracle, is it raining?") == "Is it raining?"
