@@ -2959,3 +2959,10 @@ def test_company_question_skips_the_web_and_fresh_ones_search_early(client, monk
     assert calls == []                                              # the company's own knowledge: no web search
     ask("What is the latest price of gold")
     assert calls == ["What is the latest price of gold"]           # about now: searched (started early, once)
+
+
+def test_question_words_spelled_like_the_company(monkeypatch):
+    from app import speech, research
+    monkeypatch.setattr(research, "company_name", lambda: "Aleta Planet")
+    monkeypatch.setattr(speech, "_stt", lambda p, l=None, c=None: {"text": "Where is Alita Planet located?", "language": "en"})
+    assert speech.stt("x.wav")["text"] == "Where is Aleta Planet located?"

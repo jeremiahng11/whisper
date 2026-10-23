@@ -85,6 +85,13 @@ def _cloud_stt(path: str, language: Optional[str]) -> Optional[dict]:
         if language:
             data["language"] = language
         prompt = voices.whisper_prompt()
+        try:
+            from . import research
+            cn = (research.company_name() or "").strip()
+            if cn and cn.lower() not in prompt.lower():
+                prompt = f"{cn}. " + prompt
+        except Exception:                               # noqa: BLE001
+            pass
         if prompt:
             data["prompt"] = prompt[:800]
         post = summarize.cloud_client().post if httpx.post is summarize._HX_POST else httpx.post   # kept-open connection
@@ -110,7 +117,44 @@ def _cloud_stt(path: str, language: Optional[str]) -> Optional[dict]:
     return {"text": text, "language": lang, "duration": round(dur, 2), "cloud": True}
 
 
+def question_terms() -> list[str]:
+    """How names are spelled in spoken questions: your Names & terms, remembered voices, your corrections - and the
+    company's own name."""
+    from . import research, terms
+    out = list(terms.known_terms(packs=False))
+    try:
+        cn = (research.company_name() or "").strip()
+        if cn and cn.lower() not in {t.lower() for t in out}:
+            out.insert(0, cn)
+    except Exception:                                   # noqa: BLE001
+        pass
+    return out
+
+
+def fix_question_words(text: str) -> str:
+    """"Alita Planet" -> "Aleta Planet": what you corrected before, then names that sound like one of the terms."""
+    if not text:
+        return text
+    from . import terms
+    try:
+        text = terms.apply_corrections(text)
+        return terms.fix_text(text, question_terms())
+    except Exception as e:                              # noqa: BLE001 - the words as heard
+        log.info("question words: %s", e)
+        return text
+
+
 def stt(path: str, language: Optional[str] = None, candidates: Optional[list[str]] = None) -> dict:
+    r = _stt(path, language, candidates)
+    if r.get("text"):
+        fixed = fix_question_words(r["text"])
+        if fixed != r["text"]:
+            log.info("question words fixed: %r -> %r", r["text"], fixed)
+            r["text"] = fixed
+    return r
+
+
+def _stt(path: str, language: Optional[str] = None, candidates: Optional[list[str]] = None) -> dict:
     if not language and candidates:
         language = pick_language(path, candidates)
     if (r := _cloud_stt(path, language)) is not None:
