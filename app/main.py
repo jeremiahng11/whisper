@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.38.0"
+VERSION = "1.38.1"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -1936,6 +1936,9 @@ def _first_split(sent: str) -> list[str]:
 
 
 _FILLERS = ("Let me check.", "One moment.", "Let me look that up.")
+_STOP_WORDS = re.compile(r"(?:(?:hey )?oracle )?(?:stop|stop it|stop talking|cancel|never ?mind|be quiet|quiet|shut up|"
+                         r"that'?s all|that is all|nothing|no thanks|no thank you|thank you|thanks|ok(?:ay)? thanks|"
+                         r"goodbye|bye)")
 _CLAUSE = re.compile(r"(?<=[,;:])\s+")
 from concurrent.futures import TimeoutError as FutureTimeout  # noqa: E402
 
@@ -2033,8 +2036,8 @@ async def voice_question(request: Request, language: Optional[str] = Query(None)
         text = speech.strip_wake((r.get("text") or "").strip())
         timing.note("heard", 0, text[:60])
         yield line("T", {"text": text, "language": r.get("language") or ""})
-        if not text:
-            yield line("E", {})
+        if not text or _STOP_WORDS.fullmatch(re.sub(r"[^a-z' ]", "", text.lower()).strip()):
+            yield line("E", {})                      # "stop", "never mind", "thanks": nothing to answer (the watch goes quiet)
             return
         tzm = tz if tz is not None else settings.default_tz_min
         if intents and scope != "meetings" and not speech.plain_question(text):

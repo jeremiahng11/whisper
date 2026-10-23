@@ -2653,6 +2653,7 @@ def test_voice_question_in_one_trip(client, monkeypatch):
     assert sent[-1][1]["content"] == "You are Oracle." and sent[-1][-1]["content"] == "Tell me a joke"
     lines = ask("Set a timer for 5 minutes")
     assert [k for k, _ in lines] == ["T", "X", "E"] and _j.loads(lines[1][1])["type"] == "timer"
+    assert [k for k, _ in ask("Stop.")] == ["T", "E"]                  # nothing to answer
     # sent while talking: the recording comes in pieces (chunked), its header still saying 0 bytes
     said["t"] = "Tell me a joke"
     w = bytearray(wav_bytes(1))
