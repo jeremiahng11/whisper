@@ -1892,7 +1892,9 @@ function liveMetaText(l) {
   const behind = Math.max(0, l.received_s - l.transcribed_s);
   return `${mmss(l.received_s)} received · last audio ${l.last_audio_s_ago < 5 ? "just now" : Math.round(l.last_audio_s_ago) + " s ago"} · `
     + (l.transcribing ? "transcribing now…" : `transcribed to ${mmss(l.transcribed_s)}${behind > 1 ? ` (${Math.round(behind)} s behind)` : ""}`)
-    + (l.quiet ? " · quiet - silence is skipped, the watch is still recording" : l.receiving ? "" : " · waiting for the watch");
+    + (l.quiet ? " · quiet - silence is skipped, the watch is still recording"
+       : l.held_up ? " · the watch is still recording but can't send its audio right now" + (l.held_reason ? " (" + l.held_reason + ")" : "") + " - it sends the rest when it can"
+       : l.receiving ? "" : " · nothing from the watch for " + Math.round(l.last_audio_s_ago) + " s - it may be out of WiFi; whatever it records is kept and sent when it's back");
 }
 // speakers get a steady colour each (by name), so you can follow who's talking at a glance
 const SPK_COL = ["#4f8cff", "#e0793a", "#2fa66a", "#b056d6", "#d2477a", "#1aa3a3", "#c29a1a", "#6a6fd8"];
@@ -1934,9 +1936,10 @@ async function followDraft(id, once) {
     await new Promise(r => setTimeout(r, 2500));
   }
 }
+function liveLabel(l) { return l.quiet ? "Quiet" : l.held_up ? "Catching up" : l.receiving ? "Live" : "No signal"; }
 function renderLiveMain(l) {
   const started = new Date(l.started * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  $("#lvTitle").textContent = `${l.quiet ? "Quiet" : l.receiving ? "Live" : "Paused"} - ${l.device}, since ${started}`;
+  $("#lvTitle").textContent = `${liveLabel(l)} - ${l.device}, since ${started}`;
   document.querySelector(".lvdot").classList.toggle("idle", !l.receiving);
   $("#lvMeta").textContent = liveMetaText(l) + (l.language ? ` · ${l.language}` : "");
   $("#lvBar").style.width = (l.received_s ? Math.min(100, 100 * l.transcribed_s / l.received_s) : 0) + "%";
@@ -1992,7 +1995,7 @@ async function pollLive() {
     }
     const started = new Date(l.started * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     el.querySelector(".dot").classList.toggle("idle", !l.receiving);
-    el.querySelector(".ln").textContent = `${l.quiet ? "Quiet" : l.receiving ? "Live" : "Paused"} · ${l.device} · since ${started}`;
+    el.querySelector(".ln").textContent = `${liveLabel(l)} · ${l.device} · since ${started}`;
     el.querySelector(".lm").textContent = liveMetaText(l);
     el.querySelector(".lbar i").style.width = (l.received_s ? Math.min(100, 100 * l.transcribed_s / l.received_s) : 0) + "%";
     const segs = l.segments || [];

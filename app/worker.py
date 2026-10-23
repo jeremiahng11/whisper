@@ -331,7 +331,9 @@ def live_now() -> list[dict]:
         except (OSError, ValueError):
             pass
         beat_age = now - float(beat.get("at") or 0)
-        quiet = age >= 30 and beat_age < 45                     # the watch says it's still recording, just quiet
+        alive = age >= 30 and beat_age < 45                     # the watch says it's still recording
+        quiet = alive and beat.get("state") in ("quiet", "waiting")   # ... just quiet (silences skipped)
+        held = alive and not quiet                              # ... but couldn't send its audio (it catches up)
         m = re.match(r"^(.*?)-((?:memo_|dict_)?\d{4}-\d{2}-\d{2}_\d{4})$", rid)
         segs = state.get("segments") or []
         names = state.get("names") or {}
@@ -340,6 +342,8 @@ def live_now() -> list[dict]:
             "started": st_path.stat().st_ctime, "received_s": round(wav_seconds(part), 1),
             "last_audio_s_ago": round(age, 1), "receiving": age < 30 or quiet, "quiet": quiet,
             "quiet_reason": (beat.get("state") or "") if quiet else "",
+            "held_up": held, "held_reason": (beat.get("why") or "") if held else "",
+            "watch_seen_s_ago": round(min(age, beat_age), 1),
             "transcribed_s": float(state.get("until", 0)), "language": state.get("language", ""),
             "transcribing": current_job == f"live:{rid}",
             "segments": [{"start": round(s.get("start", 0), 1), "text": (s.get("text") or "").strip(),

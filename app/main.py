@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.34.0"
+VERSION = "1.35.0"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -272,7 +272,8 @@ def upload_status(rid: str):
 
 @app.put("/api/uploads/{rid}", dependencies=[Depends(auth)])
 async def upload_chunk(rid: str, request: Request, x_offset: int = Header(0), x_live: Optional[str] = Header(None),
-                       x_live_state: Optional[str] = Header(None), language: Optional[str] = Query(None)):
+                       x_live_state: Optional[str] = Header(None), x_live_why: Optional[str] = Header(None),
+                       language: Optional[str] = Query(None)):
     """Append the request body at byte X-Offset. Wrong offset -> 409 with the size the server has."""
     check_id(rid)
     if (j := existing_for(rid)):
@@ -294,7 +295,8 @@ async def upload_chunk(rid: str, request: Request, x_offset: int = Header(0), x_
         worker.live_state_path(rid).write_text(_json.dumps(st))
     if x_live == "1" and x_live_state:                # a heartbeat: still recording, nothing new to send (quiet room,
         import json as _json                          # silence skipped) - the page shows "quiet", not "paused"
-        (settings.upload_dir / f"{rid}.beat").write_text(_json.dumps({"at": time.time(), "state": x_live_state[:20]}))
+        (settings.upload_dir / f"{rid}.beat").write_text(_json.dumps(
+            {"at": time.time(), "state": x_live_state[:20], "why": (x_live_why or "")[:160]}))
     out = {"recording_id": rid, "received": n, "job": None}
     if worker.live_state_path(rid).exists():
         worker.wake()
