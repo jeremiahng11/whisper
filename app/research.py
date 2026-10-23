@@ -324,7 +324,10 @@ def live_context(q: str, limit: int = 2500, plain: bool = False) -> str:
         lines.append(f"- {h['title']} ({h.get('source') or ''}, {h.get('date') or ''}): {h['snippet'][:300]} <{h['url']}>")
     # a search result's few words rarely hold the answer ("how many payment companies are there in Singapore"): the top
     # pages are read too (at the same time, a few seconds at most) and their passages closest to the question kept
-    read = _read_top(kept[:3], words, deadline=2.5) if plain and kept else []
+    # (Tavily / Brave give a page's own passage with each result already: no second trip to the pages - it took
+    # 2-3 s more, "web search 5.1s ... 2 pages read")
+    good = sources.search_status.get("provider") in ("Tavily", "Brave") and not sources.search_status.get("error")
+    read = _read_top(kept[:3], words, deadline=2.5) if plain and kept and not good else []
     try:
         from . import timing
         timing.note("web search", time.time() - t0, f"{len(lines)} results, {len(read)} pages read")

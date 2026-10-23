@@ -431,6 +431,8 @@ owners, dates, budgets, terms, and who people are. In the background it reads on
 - **Optional cloud AI for questions** (`LIVE_LLM_API_KEY`, `LIVE_LLM_BASE_URL`, `LIVE_LLM_MODEL`): any
   OpenAI-compatible API answers the watch's and Ask's questions in about a second (streamed). Off unless the key is
   set - the question and the company context sent with it then leave this server. Meetings always stay local.
+- **Quicker searches with Tavily/Brave** (1.38.2): their results carry the page's own passage, so the top pages are
+  no longer fetched a second time (2-3 s less per search question).
 - **Reliability** (1.38.0, watch W1B-1.9.8):
   - web search: TAVILY_API_KEY or BRAVE_API_KEY (free tiers) when set; else Bing / DuckDuckGo; a question about now
     that found nothing is looked up by Groq's own search (GROQ_SEARCH_MODEL, default groq/compound-mini; GROQ_SEARCH=0
