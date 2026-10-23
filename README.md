@@ -431,6 +431,9 @@ owners, dates, budgets, terms, and who people are. In the background it reads on
 - **Optional cloud AI for questions** (`LIVE_LLM_API_KEY`, `LIVE_LLM_BASE_URL`, `LIVE_LLM_MODEL`): any
   OpenAI-compatible API answers the watch's and Ask's questions in about a second (streamed). Off unless the key is
   set - the question and the company context sent with it then leave this server. Meetings always stay local.
+- **"Hey Oracle, do a speed test"** (1.40.0): the watch says how long each step takes right now - sending the
+  question, speech to text, the AI's first words, a web search (and which one), a voice - and what a question adds up
+  to. Also "how fast are you" / "test your speed".
 - **Quicker again** (1.39.0):
   - a question about the company that your knowledge answers isn't searched on the web (1.5-2 s less, and the search
     quota lasts longer); the company's name counts even misheard a little ("Alita Planet");

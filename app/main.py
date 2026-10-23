@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.39.1"
+VERSION = "1.40.0"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -1980,6 +1980,54 @@ def _first_split(sent: str) -> list[str]:
 
 
 _FILLERS = ("Let me check.", "One moment.", "Let me look that up.")
+_SPEED_TEST = re.compile(r"\b(speed ?test|test (your|the) speed|how fast are you|check (your|the) speed)\b", re.I)
+
+
+def _speed_test(t_upload: float, nbytes: int, t_stt: float, heard: dict) -> str:
+    """Each step of a question timed now, side by side: the upload and speech to text (this question), the AI's first
+    words, a web search, a voice - and what they add up to."""
+    import secrets as _sec
+    from concurrent.futures import ThreadPoolExecutor
+
+    def ai():
+        t = time.time()
+        for _ in summarize.chat_stream([{"role": "user", "content": "Reply with the single word OK."}]):
+            return time.time() - t
+        return time.time() - t
+
+    def web():
+        t = time.time()
+        hits = sources.web_search("Singapore news today", 3)
+        return time.time() - t, len(hits), sources.search_status.get("provider") or "free search"
+
+    def voice():
+        t = time.time()
+        speech.tts(f"Speed test {_sec.token_hex(3)}.", live=True)      # (a new sentence: not from the cache)
+        return time.time() - t
+    out: dict = {}
+    with ThreadPoolExecutor(3) as ex:
+        fa, fw, fv = ex.submit(ai), ex.submit(web), ex.submit(voice)
+        for k, f in (("ai", fa), ("web", fw), ("voice", fv)):
+            try:
+                out[k] = f.result(timeout=20)
+            except Exception as e:                   # noqa: BLE001
+                out[k] = e
+    sec = lambda x: f"{x:.1f} seconds"               # noqa: E731
+    parts = [f"Sending your question took {sec(t_upload)} for {nbytes // 1024} kilobytes",
+             f"speech to text {sec(t_stt)}" + (" on Groq" if heard.get("cloud") else " on this server")]
+    ai_s = out["ai"] if isinstance(out["ai"], float) else None
+    parts.append(f"the AI's first words {sec(ai_s)}" if ai_s is not None else "the AI didn't answer")
+    if isinstance(out["web"], tuple):
+        ws, nh, prov = out["web"]
+        parts.append(f"a web search {sec(ws)} with {prov}" + ("" if nh else ", no results"))
+    else:
+        parts.append("the web search failed")
+    v_s = out["voice"] if isinstance(out["voice"], float) else None
+    parts.append(f"a voice {sec(v_s)}" if v_s is not None else "the voice failed")
+    total = t_upload + t_stt + (ai_s or 0) + (v_s or 0)
+    tail = (f". A question without a search answers in about {total:.1f} seconds, with a search about "
+            f"{total + (out['web'][0] if isinstance(out['web'], tuple) else 0):.1f}.")
+    return "Speed test: " + ", ".join(parts) + tail
 _STOP_WORDS = re.compile(r"(?:(?:hey )?oracle )?(?:stop|stop it|stop talking|cancel|never ?mind|be quiet|quiet|shut up|"
                          r"that'?s all|that is all|nothing|no thanks|no thank you|thank you|thanks|ok(?:ay)? thanks|"
                          r"goodbye|bye)")
@@ -2045,7 +2093,8 @@ async def voice_question(request: Request, language: Optional[str] = Query(None)
     speech.warm_voice()                              # the connections to Groq and ElevenLabs open now
     n = await save_body(request, tmp)
     from . import timing as _timing
-    _timing.note("voice question in", time.time() - t_in, f"{n // 1024} KB, one trip")
+    t_upload = time.time() - t_in
+    _timing.note("voice question in", t_upload, f"{n // 1024} KB, one trip")
     if n < 100:
         tmp.unlink(missing_ok=True)
         raise HTTPException(400, "empty audio")
@@ -2071,7 +2120,9 @@ async def voice_question(request: Request, language: Optional[str] = Query(None)
         try:
             transcribe.fix_wav_header(str(tmp))
             lang = language if language and language.lower() != "auto" else None
+            t_s = time.time()
             r = speech.stt(str(tmp), lang, None)
+            t_stt = time.time() - t_s
         except Exception as e:                       # noqa: BLE001
             yield line("E", {"error": f"speech to text failed: {str(e)[:160]}"})
             return
@@ -2080,6 +2131,14 @@ async def voice_question(request: Request, language: Optional[str] = Query(None)
         text = speech.strip_wake((r.get("text") or "").strip())
         timing.note("heard", 0, text[:60])
         yield line("T", {"text": text, "language": r.get("language") or ""})
+        if _SPEED_TEST.search(text):                 # "Hey Oracle, do a speed test": each step timed, said out loud
+            a = _speed_test(t_upload, n, t_stt, r)
+            yield line("A", {"answer": a})
+            if speak:
+                yield from _b_lines(_voice_bytes(a))
+            timing.note("speed test", time.time() - t0, a[:70])
+            yield line("E", {})
+            return
         if not text or _STOP_WORDS.fullmatch(re.sub(r"[^a-z' ]", "", text.lower()).strip()):
             yield line("E", {})                      # "stop", "never mind", "thanks": nothing to answer (the watch goes quiet)
             return

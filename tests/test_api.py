@@ -2966,3 +2966,13 @@ def test_question_words_spelled_like_the_company(monkeypatch):
     monkeypatch.setattr(research, "company_name", lambda: "Aleta Planet")
     monkeypatch.setattr(speech, "_stt", lambda p, l=None, c=None: {"text": "Where is Alita Planet located?", "language": "en"})
     assert speech.stt("x.wav")["text"] == "Where is Aleta Planet located?"
+
+
+def test_speed_test_by_voice(client, monkeypatch):
+    from app import speech, summarize, sources
+    monkeypatch.setattr(speech, "stt", lambda path, lang=None, cands=None: {"text": "Hey Oracle, do a speed test", "language": "en", "cloud": True})
+    monkeypatch.setattr(summarize, "chat_stream", lambda msgs: iter(["OK"]))
+    monkeypatch.setattr(sources, "web_search", lambda q, t=3: [{"url": "u", "title": "t", "snippet": "s"}])
+    r = client.post("/api/voice?speak=0", content=wav_bytes(1), headers={**H, "Content-Type": "audio/wav"})
+    a = [ln for ln in r.text.split("\n") if ln.startswith("A ")][0]
+    assert "Speed test:" in a and "speech to text" in a and "on Groq" in a and "web search" in a
