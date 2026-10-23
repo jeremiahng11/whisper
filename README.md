@@ -431,6 +431,15 @@ owners, dates, budgets, terms, and who people are. In the background it reads on
 - **Optional cloud AI for questions** (`LIVE_LLM_API_KEY`, `LIVE_LLM_BASE_URL`, `LIVE_LLM_MODEL`): any
   OpenAI-compatible API answers the watch's and Ask's questions in about a second (streamed). Off unless the key is
   set - the question and the company context sent with it then leave this server. Meetings always stay local.
+- **Reliability** (1.38.0, watch W1B-1.9.8):
+  - web search: TAVILY_API_KEY or BRAVE_API_KEY (free tiers) when set; else Bing / DuckDuckGo; a question about now
+    that found nothing is looked up by Groq's own search (GROQ_SEARCH_MODEL, default groq/compound-mini; GROQ_SEARCH=0
+    off). /api/health "web_search" says which one answered and why one failed;
+  - the cloud AI busy / down / silent for 12 s: once more on a second model (LIVE_LLM_FALLBACK_MODEL; on Groq
+    qwen/qwen3-32b by default), then a spoken "the AI is busy, try again in a minute" instead of an error;
+  - Watches: a stability line per day - restarts, crashes, failed sends, memory running out, questions, typical and
+    slowest time;
+  - a long first sentence starts speaking at its first comma.
 - **Server speed-ups** (1.37.0): the first sentence's voice streams from ElevenLabs as it's made (and a long first
   sentence is voiced in two halves); one kept-open connection to Groq (AI + speech to text) and a shared pool to
   ElevenLabs; both are opened as soon as a question starts arriving. /api/watch/weather: today's and tomorrow's

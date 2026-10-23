@@ -331,11 +331,53 @@ def live_context(q: str, limit: int = 2500, plain: bool = False) -> str:
     except Exception:                               # noqa: BLE001
         pass
     if not lines:
+        if plain and needs_fresh(q):                 # nothing found, and it's about now: Groq looks it up itself
+            g = groq_search(q)
+            if g:
+                return ("A web search just now (Groq) found (may be incomplete; say so if unsure, and mention the "
+                        "source):\n" + g)[:limit + 1500]
         return ""
     out = "A quick web search just now found (may be incomplete; say so if unsure, and mention the source):\n" + "\n".join(lines)
     if read:
         out += "\n\nFrom the top pages:\n" + "\n\n".join(read)
     return out[:limit + (3000 if read else 0)]
+
+
+FRESH = re.compile(r"\b(news|latest|recent|recently|today|tonight|yesterday|this (week|month|year)|right now|currently|"
+                   r"current|nowadays|score|scores|who won|won the|winner|price|prices|stock|shares|bitcoin|crypto|"
+                   r"exchange rate|election|release date|released|launch|launched|new|newest|upcoming|20[2-3]\d|"
+                   r"open now|still|anymore|who is the (ceo|president|prime minister|minister|head|owner))\b", re.I)
+
+
+def needs_fresh(q: str) -> bool:
+    """A question whose answer changes over time (news, prices, scores, 'right now', 'latest')."""
+    return bool(FRESH.search(q or ""))
+
+
+def groq_search(q: str) -> str:
+    """Groq's own web search (compound models, on the LIVE_LLM key): a few lines of current facts with sources, or ""."""
+    if not settings.groq_search or not settings.live_llm_api_key or "groq.com" not in settings.live_llm_base_url:
+        return ""
+    from . import summarize, sources, timing
+    t0 = time.time()
+    try:
+        r = summarize.cloud_client().post(
+            f"{settings.live_llm_base_url}/chat/completions", timeout=settings.groq_search_timeout_s,
+            headers={"Authorization": f"Bearer {settings.live_llm_api_key}"},
+            json={"model": settings.groq_search_model, "temperature": 0.1, "messages": [
+                {"role": "system", "content": "Search the web and reply with the current facts that answer the question: "
+                                              "at most 6 short lines, each with its source (site name). No preamble."},
+                {"role": "user", "content": q}]})
+        r.raise_for_status()
+        out = ((r.json().get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+        out = re.sub(r"<think>.*?</think>", "", out, flags=re.S).strip()
+        sources.search_status.update(provider=sources.search_status.get("provider") or "", groq="ok", at=time.time())
+    except Exception as e:                              # noqa: BLE001 - answered without it
+        log.info("groq search: %s", e)
+        sources.search_status.update(groq=f"failed: {str(e)[:100]}")
+        out = ""
+    timing.note("web search (Groq)", time.time() - t0, f"{len(out)} characters")
+    return out[:2000]
 
 
 def _read_top(hits: list[dict], words: set, deadline: float = 4.0) -> list[str]:

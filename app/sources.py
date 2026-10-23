@@ -26,6 +26,7 @@ from urllib.parse import urldefrag, urljoin, urlparse
 import httpx
 
 from . import knowledge, summarize
+from .config import settings
 
 log = logging.getLogger("sources")
 MAX_TEXT = 400_000              # per source (about 100 pages of text)
@@ -376,9 +377,51 @@ def news_search(topic: str, timeout: float = 25) -> list[dict]:
     return []
 
 
+search_status: dict = {"provider": "", "error": "", "at": 0.0}
+
+
+def _tavily(query: str, timeout: float) -> list[dict]:
+    r = httpx.post("https://api.tavily.com/search", timeout=timeout,
+                   headers={"Authorization": f"Bearer {settings.tavily_api_key}"},
+                   json={"query": query, "max_results": 6, "search_depth": "basic", "include_answer": False})
+    r.raise_for_status()
+    return [{"url": x.get("url", ""), "title": x.get("title", ""), "snippet": (x.get("content") or "")[:500],
+             "date": time.strftime("%Y-%m-%d"), "source": urlparse(x.get("url", "")).netloc}
+            for x in (r.json().get("results") or []) if x.get("url")]
+
+
+def _brave(query: str, timeout: float) -> list[dict]:
+    from urllib.parse import quote_plus
+    r = httpx.get(f"https://api.search.brave.com/res/v1/web/search?count=6&q={quote_plus(query)}", timeout=timeout,
+                  headers={"X-Subscription-Token": settings.brave_api_key, "Accept": "application/json"})
+    r.raise_for_status()
+    return [{"url": x.get("url", ""), "title": html_text(x.get("title", ""))[1],
+             "snippet": html_text(x.get("description", ""))[1][:500], "date": time.strftime("%Y-%m-%d"),
+             "source": urlparse(x.get("url", "")).netloc}
+            for x in ((r.json().get("web") or {}).get("results") or []) if x.get("url")]
+
+
 def web_search(query: str, timeout: float = 25) -> list[dict]:
-    """Web results for a query (Bing's RSS results, else DuckDuckGo's HTML page; both free, no key):
-    [{"url", "title", "snippet", "date", "source"}]."""
+    """Web results for a query: Tavily / Brave when their key is set (reliable), else Bing's RSS results, else
+    DuckDuckGo's HTML page (free, no key): [{"url", "title", "snippet", "date", "source"}]."""
+    for name, key, fn in (("Tavily", settings.tavily_api_key, _tavily), ("Brave", settings.brave_api_key, _brave)):
+        if not key:
+            continue
+        try:
+            out = fn(query, timeout)
+            search_status.update(provider=name, error="", at=time.time())
+            return out
+        except Exception as e:                       # noqa: BLE001 - the free ones then
+            search_status.update(provider=name, error=f"{name}: {str(e)[:120]}", at=time.time())
+            log.warning("web search %s failed: %s", name, e)
+    out = _free_search(query, timeout)
+    if not (settings.tavily_api_key or settings.brave_api_key):
+        search_status.update(provider="Bing/DuckDuckGo", error="" if out else "no results (often blocked from servers)",
+                             at=time.time())
+    return out
+
+
+def _free_search(query: str, timeout: float) -> list[dict]:
     from urllib.parse import parse_qs, quote_plus, unquote
     try:
         r = _get(f"https://www.bing.com/search?format=rss&setlang=en&q={quote_plus(query)}", timeout)

@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.37.0"
+VERSION = "1.38.0"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -1936,6 +1936,7 @@ def _first_split(sent: str) -> list[str]:
 
 
 _FILLERS = ("Let me check.", "One moment.", "Let me look that up.")
+_CLAUSE = re.compile(r"(?<=[,;:])\s+")
 from concurrent.futures import TimeoutError as FutureTimeout  # noqa: E402
 
 
@@ -2098,6 +2099,12 @@ async def voice_question(request: Request, language: Optional[str] = Query(None)
                     pending += piece
                     while True:
                         m = _SENT_END.search(pending)
+                        if (not m or len(pending[:m.start()].strip()) < 12) and fv is None and speak:
+                            # no sentence end yet: the first words go out at the first comma (8+ words in) - the voice
+                            # starts ~0.3-0.5 s sooner on a long first sentence
+                            c = next((x for x in _CLAUSE.finditer(pending) if x.start() >= 40), None)
+                            if c and "<think>" not in pending:
+                                m = c
                         if not m or len(pending[:m.start()].strip()) < 12:
                             break
                         sent, pending = pending[:m.start()].strip(), pending[m.end():]
@@ -2120,7 +2127,17 @@ async def voice_question(request: Request, language: Optional[str] = Query(None)
                             yield from fv.take()
                         yield from _b_lines(futs.popleft().result())
         except Exception as e:                       # noqa: BLE001
-            yield line("E", {"error": summarize.explain_llm_error(e)[:200]})
+            if full.strip() or not speak:            # (part of it was said: say why it stopped)
+                yield line("E", {"error": summarize.explain_llm_error(e)[:200]})
+                return
+            # nothing said yet: a spoken "busy" answer instead of an error and a silence (watch waits no longer)
+            log.warning("voice: the AI failed: %s", e)
+            msg = ("Sorry, the AI is busy right now. Please try again in a minute." if "busy" in str(e)
+                   else "Sorry, I couldn't reach the AI just now. Please try again.")
+            yield line("A", {"answer": msg})
+            yield from _b_lines(_voice_bytes(msg))
+            timing.note("voice trip", time.time() - t0, "AI failed: " + str(e)[:60])
+            yield line("E", {})
             return
         rest = re.sub(r"<think>.*?</think>", "", pending, flags=re.S).strip()
         answer = re.sub(r"<think>.*?</think>", "", full, flags=re.S).strip()
@@ -2366,6 +2383,12 @@ def devices_list():
     return {"devices": devices.list_devices()}
 
 
+@app.get("/api/devices/{did}/stability", dependencies=[Depends(auth)])
+def device_stability(did: str, days: int = Query(7, ge=1, le=60)):
+    """How the watch has been, day by day: restarts, crashes, failed sends, memory running out, questions, slowest."""
+    return {"days": devices.stability(_did(did), days, settings.default_tz_min)}
+
+
 @app.get("/api/devices/{did}/log", dependencies=[Depends(auth)])
 def device_log_read(did: str, lines: int = Query(500, ge=1, le=5000)):
     return PlainTextResponse(devices.read_log(_did(did), lines))
@@ -2487,6 +2510,8 @@ def health():
         "timing": __import__("app.timing", fromlist=["recent"]).recent(),
         "question_stt": ((lambda t: f"cloud {t[2]} at {t[0].split('//')[-1].split('/')[0]}, else "
                           if t else "")(speech.cloud_stt_target())) + str(transcribe.quick_model_status()),
+        "web_search": __import__("app.sources", fromlist=["search_status"]).search_status,
+        "live_ai_fallback": {"model": summarize.fallback_model(), **summarize.cloud_status},
         "live_ai": (settings.live_llm_model + " at " + settings.live_llm_base_url.split("//")[-1].split("/")[0])
                    if settings.live_llm_api_key else "",
         "tts_voice": ("ElevenLabs " + settings.elevenlabs_model) if speech.eleven_on() else

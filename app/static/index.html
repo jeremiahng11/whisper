@@ -481,6 +481,7 @@ ul.replies{margin:4px 0;padding-left:20px;font-size:13.5px}
               <button class="ghost" id="wDl" disabled>Download</button><button class="danger" id="wClear" disabled>Clear</button></div>
           </div>
           <div id="wStat" class="mute" style="margin-bottom:6px"></div>
+          <div id="wStab" class="mute" style="margin-bottom:6px;font-size:13px"></div>
           <pre id="wLog" class="wlog"></pre>
         </div>
       </div>
@@ -1795,11 +1796,28 @@ async function refreshWatchLog() {
   try { wText = await (await api(`/api/devices/${encodeURIComponent(WATCH)}/log?lines=3000`)).text(); } catch (e) { return; }
   renderWatchLog();
 }
+// a line a day: did it restart, crash, fail to send, run out of memory - and how quick the questions were
+async function loadStability() {
+  if (!WATCH) return;
+  try {
+    const days = (await (await api(`/api/devices/${encodeURIComponent(WATCH)}/stability?days=7`)).json()).days || [];
+    const row = d => {
+      const bad = [d.crashes ? `<b style="color:var(--rec,#e55)">${d.crashes} crash${d.crashes > 1 ? "es" : ""}</b>` : "",
+                   d.restarts > d.crashes ? `${d.restarts - d.crashes} restart${d.restarts - d.crashes > 1 ? "s" : ""}` : "",
+                   d.failed_sends ? `${d.failed_sends} failed send${d.failed_sends > 1 ? "s" : ""}` : "",
+                   d.memory_lows ? `memory ran out ${d.memory_lows}×` : ""].filter(Boolean).join(" · ") || "no problems";
+      const q = d.server_trips ? ` · ${d.server_trips} question${d.server_trips > 1 ? "s" : ""}, typical ${d.server_median_s}s, slowest ${d.server_slowest_s}s` +
+        (d.slowest_heard_ms ? ` (watch waited up to ${(d.slowest_heard_ms / 1000).toFixed(1)}s for the words)` : "") : "";
+      return `<div><b>${esc(d.day)}</b>: ${bad}${q}</div>`;
+    };
+    $("#wStab").innerHTML = days.length ? "<div>Stability, day by day:</div>" + days.map(row).join("") : "";
+  } catch (e) { $("#wStab").textContent = ""; }
+}
 function openWatch(id) {
   WATCH = id; $("#wTitle").textContent = id; $("#wTitle").classList.remove("mute");
   $("#wDl").disabled = $("#wClear").disabled = false;
   document.querySelectorAll("#wlist .w").forEach(el => el.classList.toggle("on", el.dataset.id === id));
-  wText = ""; refreshWatchLog(); loadWatches();
+  wText = ""; refreshWatchLog(); loadWatches(); loadStability();
   clearInterval(wTimer);
   wTimer = setInterval(() => { if ($('[data-panel="watches"]').classList.contains("hidden")) return; refreshWatchLog(); loadWatches(); }, 5000);
 }

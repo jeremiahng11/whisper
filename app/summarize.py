@@ -1,5 +1,6 @@
 """Meeting summary with a local LLM (Ollama) or any OpenAI-compatible API."""
 import json
+import os
 import logging
 import re
 import threading
@@ -610,9 +611,47 @@ def warm_cloud() -> None:
     threading.Thread(target=go, daemon=True).start()
 
 
+class CloudBusy(RuntimeError):
+    """The cloud AI couldn't take the question (rate limit, overloaded, down, too slow): another model may."""
+
+
+def fallback_model() -> str:
+    """LIVE_LLM_FALLBACK_MODEL, or on Groq another model (each model has its own rate limits); "" = none."""
+    m = os.getenv("LIVE_LLM_FALLBACK_MODEL", "").strip().strip("'\"").strip()
+    if m or "groq.com" not in settings.live_llm_base_url:
+        return m if m != settings.live_llm_model else ""
+    return "qwen/qwen3-32b" if "qwen" not in settings.live_llm_model else "openai/gpt-oss-20b"
+
+
+cloud_status: dict = {"fallbacks": 0, "last_error": "", "at": 0.0}
+
+
 def _cloud_pieces(messages: list[dict]):
+    """The answer from the cloud AI, piece by piece. Busy / down / no first word in 12 s: once more on the fallback
+    model (before a word was shown); still nothing: a clear "busy, try again" instead of a long wait."""
+    models = [settings.live_llm_model] + ([fallback_model()] if fallback_model() else [])
+    last: Exception = RuntimeError("cloud AI didn't answer")
+    for i, m in enumerate(models):
+        started = False
+        try:
+            for piece in _cloud_model_pieces(messages, m):
+                started = True
+                yield piece
+            return
+        except (CloudBusy, httpx.TimeoutException, httpx.TransportError) as e:
+            if started:
+                raise
+            last = e
+            cloud_status.update(last_error=f"{m}: {str(e)[:160]}", at=time.time())
+            log.warning("cloud AI %s: %s%s", m, e, " - trying " + models[i + 1] if i + 1 < len(models) else "")
+            if i + 1 < len(models):
+                cloud_status["fallbacks"] += 1
+    raise RuntimeError("cloud AI is busy right now - try again in a minute" + (f" ({str(last)[:120]})" if str(last) else ""))
+
+
+def _cloud_model_pieces(messages: list[dict], model: str):
     import json as _json
-    base, model = settings.live_llm_base_url, settings.live_llm_model
+    base = settings.live_llm_base_url
     extra: dict = {}
     if "groq.com" in base:                            # reasoning models: as little thinking as possible, none shown
         if "gpt-oss" in model:
@@ -622,7 +661,7 @@ def _cloud_pieces(messages: list[dict]):
     for attempt in (0, 1):
         body = {"model": model, "messages": messages, "temperature": 0.2, "stream": True, **(extra if attempt == 0 else {})}
         opener = cloud_client().stream if httpx.stream is _HX_STREAM else httpx.stream   # (tests stand in for httpx)
-        with opener("POST", f"{base}/chat/completions", timeout=settings.llm_timeout_s,
+        with opener("POST", f"{base}/chat/completions", timeout=httpx.Timeout(12.0, connect=5.0),
                           headers={"Authorization": f"Bearer {settings.live_llm_api_key}"}, json=body) as r:
             if r.status_code >= 400:                  # say why (a wrong model name, base URL or key)
                 raw = r.read().decode(errors="replace")[:300]
@@ -633,6 +672,8 @@ def _cloud_pieces(messages: list[dict]):
                 if attempt == 0 and extra and r.status_code == 400:
                     log.info("cloud AI refused the reasoning settings (%s) - without them", msg)
                     continue
+                if r.status_code in (408, 409, 425, 429, 498, 500, 502, 503, 504):
+                    raise CloudBusy(f"{r.status_code}: {msg}")
                 raise RuntimeError(f"cloud AI said {r.status_code}: {msg} (model {model!r})")
             for line in r.iter_lines():
                 if not line.startswith("data:"):

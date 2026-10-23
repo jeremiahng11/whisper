@@ -58,6 +58,14 @@ class Settings:
     watchai_minutes: float = float(os.getenv("WATCHAI_MINUTES", "120"))  # longest a training run may take
     research_auto: bool = _bool("RESEARCH_AUTO", True)        # research your company's topics on the web by itself
     research_live: bool = _bool("RESEARCH_LIVE", True)        # Ask: a quick web search when nothing is known yet
+    # Web search for questions: TAVILY_API_KEY or BRAVE_API_KEY (free tiers) when set - reliable; else Bing / DuckDuckGo
+    # (free, often blocked from servers). A question that needs fresh facts and found nothing: Groq's own search
+    # (GROQ_SEARCH_MODEL, on the LIVE_LLM key; ~1-3 s more). GROQ_SEARCH=0 turns that off.
+    tavily_api_key: str = os.getenv("TAVILY_API_KEY", "").strip().strip("'\"").strip()
+    brave_api_key: str = os.getenv("BRAVE_API_KEY", "").strip().strip("'\"").strip()
+    groq_search: bool = _bool("GROQ_SEARCH", True)
+    groq_search_model: str = os.getenv("GROQ_SEARCH_MODEL", "groq/compound-mini").strip()
+    groq_search_timeout_s: float = float(os.getenv("GROQ_SEARCH_TIMEOUT_S", "6"))
     bundled_firmware: bool = _bool("BUNDLED_FIRMWARE", True)  # offer the watch firmware that comes with this version
     # new watch firmware straight from GitHub (no redeploy): the .bin files in this folder of this repo. "" = off
     firmware_repo: str = os.getenv("FIRMWARE_REPO", "jeremiahng11/whisper").strip()

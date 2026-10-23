@@ -2832,3 +2832,98 @@ def test_first_sentence_voice_streamed(monkeypatch, tmp_path):
     long = "This first part of the answer is fairly long, and the second part carries on for a while longer too."
     a, b = _m._first_split(long)
     assert a.endswith(",") and b.startswith("and")
+
+
+def test_web_search_providers_and_groq_fallback(monkeypatch):
+    import httpx as _hx
+    from app import sources, research, summarize
+    calls = []
+
+    class R:
+        status_code = 200
+        def __init__(self, j): self.j = j
+        def raise_for_status(self): pass
+        def json(self): return self.j
+
+    def fake_post(url, **k):
+        calls.append(url)
+        return R({"results": [{"url": "https://a.example/x", "title": "Best observatory in space", "content": "JWST is"}]})
+    monkeypatch.setattr(settings, "tavily_api_key", "tv")
+    monkeypatch.setattr(_hx, "post", fake_post)
+    hits = sources.web_search("best observatory in space", 3)
+    assert calls[0].startswith("https://api.tavily.com") and hits[0]["title"] == "Best observatory in space"
+    assert sources.search_status["provider"] == "Tavily"
+    # nothing found anywhere, a question about now: Groq's own search
+    monkeypatch.setattr(settings, "tavily_api_key", "")
+    monkeypatch.setattr(sources, "_free_search", lambda q, t: [])
+    monkeypatch.setattr(settings, "research_live", True)
+    monkeypatch.setattr(settings, "live_llm_api_key", "gk")
+    monkeypatch.setattr(settings, "live_llm_base_url", "https://api.groq.com/openai/v1")
+
+    class C:
+        def post(self, url, **k):
+            calls.append((url, k["json"]["model"]))
+            return R({"choices": [{"message": {"content": "JWST is the most powerful space telescope (nasa.gov)"}}]})
+    monkeypatch.setattr(summarize, "cloud_client", lambda: C())
+    assert research.needs_fresh("what is the best observer in space right now") and not research.needs_fresh("what is love")
+    out = research.live_context("what is the best observer in space right now", 2500, True)
+    assert "JWST" in out and calls[-1][1] == "groq/compound-mini"
+    assert research.live_context("what is love", 2500, True) == ""            # not about now: no extra search
+
+
+def test_cloud_ai_falls_back_when_busy(monkeypatch):
+    import contextlib
+    import json as _j
+    from app import summarize
+    monkeypatch.setattr(settings, "live_llm_api_key", "gk")
+    monkeypatch.setattr(settings, "live_llm_base_url", "https://api.groq.com/openai/v1")
+    monkeypatch.setattr(settings, "live_llm_model", "openai/gpt-oss-20b")
+    seen = []
+
+    class R:
+        def __init__(self, code): self.status_code = code
+        def read(self): return b'{"error":{"message":"Rate limit reached"}}'
+        def iter_lines(self):
+            yield "data: " + _j.dumps({"choices": [{"delta": {"content": "Hello from the fallback."}}]})
+            yield "data: [DONE]"
+
+    def fake_stream(method, url, timeout=None, headers=None, json=None):
+        seen.append(json["model"])
+        return contextlib.nullcontext(R(429 if json["model"] == "openai/gpt-oss-20b" else 200))
+    monkeypatch.setattr(summarize.httpx, "stream", fake_stream)
+    assert summarize.fallback_model() == "qwen/qwen3-32b"
+    assert "".join(summarize.chat_stream([{"role": "user", "content": "hi"}])) == "Hello from the fallback."
+    assert seen[0] == "openai/gpt-oss-20b" and seen[-1] == "qwen/qwen3-32b"
+    monkeypatch.setattr(summarize.httpx, "stream", lambda *a, **k: contextlib.nullcontext(R(429)))
+    try:
+        list(summarize.chat_stream([{"role": "user", "content": "hi"}]))
+        assert False
+    except RuntimeError as e:
+        assert "busy right now" in str(e) and summarize.explain_llm_error(e).startswith("cloud AI is busy")
+
+
+def test_long_first_sentence_voiced_from_its_comma(client, monkeypatch):
+    import base64 as _b64
+    from app import speech, summarize
+    monkeypatch.setattr(speech, "stt", lambda path, lang=None, cands=None: {"text": "Tell me about the moon landing", "language": "en"})
+    voiced = []
+    monkeypatch.setattr(speech, "tts", lambda text, lang="en", strict=False, live=False:
+                        (voiced.append(text), speech.to_wav16k(__import__("numpy").zeros(1600), 16000))[1])
+    monkeypatch.setattr(summarize, "chat_stream", lambda msgs: iter(["The first crewed moon landing was in July 1969, ",
+                        "when Apollo 11 touched down on the Sea of Tranquility. ", "Armstrong stepped out first."]))
+    r = client.post("/api/voice?speak=1", content=wav_bytes(1), headers={**H, "Content-Type": "audio/wav"})
+    assert r.status_code == 200
+    assert voiced[0] == "The first crewed moon landing was in July 1969,", voiced
+    assert "when Apollo 11 touched down on the Sea of Tranquility." in voiced
+
+
+def test_watch_stability_by_day(client):
+    log = "\n".join(["[    0s] boot: W1B-1.9.7 (Oracle OS), reset reason 4", "[    0s] boot: restarted after a crash (1 in a row)",
+                     "[   30s] voice: one trip - heard back 1800 ms after sending", "[   40s] voice: sending failed (x)",
+                     "[   50s] mem: lowest 0 KB (now 2 KB)"])
+    assert client.post("/api/devices/w1b-test/log", content=log, headers=H).status_code == 200
+    from app import timing
+    timing.note("voice trip", 1.6, "first sentence at 1.6s")
+    d = client.get("/api/devices/w1b-test/stability", headers=H).json()["days"][0]
+    assert d["restarts"] == 1 and d["crashes"] == 1 and d["failed_sends"] == 1 and d["memory_lows"] == 1
+    assert d["questions"] == 1 and d["slowest_heard_ms"] == 1800 and d["server_trips"] >= 1

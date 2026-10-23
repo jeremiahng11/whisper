@@ -85,6 +85,52 @@ def list_devices() -> list[dict]:
     return out
 
 
+_STAB = [("restarts", re.compile(r"\bboot: \S+ \(Oracle OS\)")),
+         ("crashes", re.compile(r"restarted after a crash")),
+         ("failed_sends", re.compile(r"sending failed|Connection dropped|send payload failed|live: held up|"
+                                     r"voice: the connection dropped")),
+         ("memory_lows", re.compile(r"mem: lowest 0 KB")),
+         ("questions", re.compile(r"voice: one trip - heard back|voice: sent while talking"))]
+_HEARD = re.compile(r"heard back (\d+) ms")
+
+
+def stability(did: str, days: int = 7, tz_min: int = 480) -> list[dict]:
+    """Per day (newest first): restarts, crashes, failed sends, memory running out, questions and how long the slowest
+    took (the watch's "heard back" and the server's trip) - from the watch's log and the server's question times."""
+    from . import timing
+    tz = tz_min * 60
+    out: dict[str, dict] = {}
+
+    def day(ts: float) -> dict:
+        k = time.strftime("%Y-%m-%d", time.gmtime(ts + tz))
+        return out.setdefault(k, {"day": k, "restarts": 0, "crashes": 0, "failed_sends": 0, "memory_lows": 0,
+                                  "questions": 0, "slowest_heard_ms": 0, "server_trips": 0, "server_slowest_s": 0.0,
+                                  "server_median_s": 0.0, "_t": []})
+    for ln in read_log(did, 200000).splitlines():
+        try:
+            ts = time.mktime(time.strptime(ln[:19], "%Y-%m-%d %H:%M:%S"))
+        except ValueError:
+            continue
+        d = None
+        for k, rx in _STAB:
+            if rx.search(ln):
+                d = d or day(ts)
+                d[k] += 1
+        m = _HEARD.search(ln)
+        if m:
+            d = d or day(ts)
+            d["slowest_heard_ms"] = max(d["slowest_heard_ms"], int(m.group(1)))
+    for t in timing.trips():
+        d = day(t["at"])
+        d["server_trips"] += 1
+        d["server_slowest_s"] = max(d["server_slowest_s"], t["s"])
+        d["_t"].append(t["s"])
+    for d in out.values():
+        ts = sorted(d.pop("_t"))
+        d["server_median_s"] = ts[len(ts) // 2] if ts else 0.0
+    return sorted(out.values(), key=lambda x: x["day"], reverse=True)[:days]
+
+
 def read_log(did: str, lines: int) -> str:
     lp = _logdir() / f"{did}.log"
     if not lp.exists():
