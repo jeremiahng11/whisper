@@ -60,6 +60,9 @@ class Settings:
     watchai_nightly: bool = _bool("WATCHAI_NIGHTLY", True)   # retrain the watch model at night when facts changed
     watchai_minutes: float = float(os.getenv("WATCHAI_MINUTES", "120"))  # longest a training run may take
     research_auto: bool = _bool("RESEARCH_AUTO", True)        # research your company's topics on the web by itself
+    # your company's name, as it's spelled (the watch's essentials, web searches about it, fixing misheard names);
+    # unset: the first research topic or the name most facts are about
+    company_name: str = os.getenv("COMPANY_NAME", "").strip().strip("'\"").strip()
     research_live: bool = _bool("RESEARCH_LIVE", True)        # Ask: a quick web search when nothing is known yet
     # Web search for questions: BRAVE_API_KEY and/or TAVILY_API_KEY (free tiers) when set - reliable, Brave first
     # (SEARCH_ORDER=brave,tavily), the other if it fails; else Bing / DuckDuckGo

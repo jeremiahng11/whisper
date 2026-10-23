@@ -194,7 +194,10 @@ def refresh_found(fs: list[dict] | None = None) -> list[str]:
 
 # ---------------------------------------------------------------- questions it couldn't answer
 def company_name() -> str:
-    """The name most facts are about (to search a question with), "" if none yet."""
+    """COMPANY_NAME, else the first research topic / the name most facts are about (to search a question with), ""
+    if none yet."""
+    if settings.company_name:
+        return settings.company_name
     d = load()
     if d["topics"]:
         return d["topics"][0]

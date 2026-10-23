@@ -1469,11 +1469,11 @@ async function loadKb() {
     const q = $("#kbFind").value.trim();
     const k = await (await api("/api/knowledge?limit=300" + (q ? "&q=" + encodeURIComponent(q) : ""))).json();
     const kinds = Object.entries(k.kinds || {}).map(([a, n]) => `${n} ${a}${n > 1 ? "s" : ""}`).join(", ");
-    const pack = await (await api("/api/watch/pack")).json();
+    const pack = await (await api("/api/watch/pack?limit=300")).json();   // (what a watch with room - watch1b - gets)
     $("#kbAuto").checked = k.auto_learning !== false;
     $("#kbAutoMsg").textContent = k.auto_learning === false ? "Off - nothing is learned in the background; use the buttons when you want it." : "";
     $("#kbNow").innerHTML = `<b>${k.facts}</b> facts from ${k.meetings_read} meetings${k.sources ? " and " + k.sources + " sources" : ""}${kinds ? " (" + esc(kinds) + ")" : ""}. ` +
-      `The watch can answer <b>${pack.count}</b> of them offline.` +
+      `The watch can answer <b>${pack.count}</b> of them offline (a watch with less room: up to 150).` +
       (k.core ? `<br><b>${k.core}</b> company essentials${k.core_company ? " about " + esc(k.core_company) : ""} are always on the watch and answered on it directly (founder, leaders, products, services; written ${k.core_made ? new Date(k.core_made * 1000).toLocaleString() : "-"}, again when what's known changes). ` +
         `<a href="#" id="coreNow">Rewrite now</a>` : (k.core_company ? `<br>Company essentials about ${esc(k.core_company)}: written once there's enough material. <a href="#" id="coreNow">Write now</a>` : "")) +
       (k.rag && k.rag.enabled ? `<br>Find by meaning: <b>${k.rag.passages}</b> passages indexed (${esc(k.rag.model)})${k.rag.state === "indexing" ? " - indexing…" : ""}${k.rag.state === "error" ? " - " + esc(k.rag.error) : ""}.` : "") +

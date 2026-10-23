@@ -431,6 +431,9 @@ owners, dates, budgets, terms, and who people are. In the background it reads on
 - **Optional cloud AI for questions** (`LIVE_LLM_API_KEY`, `LIVE_LLM_BASE_URL`, `LIVE_LLM_MODEL`): any
   OpenAI-compatible API answers the watch's and Ask's questions in about a second (streamed). Off unless the key is
   set - the question and the company context sent with it then leave this server. Meetings always stay local.
+- **COMPANY_NAME** (1.40.1): your company's name as it's spelled - the watch's company essentials, web searches about
+  it and fixing misheard names use it (unset: the first research topic, as before). The Account page now counts the
+  offline answers a watch with room gets (up to 300), as the watch shows them.
 - **"Hey Oracle, do a speed test"** (1.40.0): the watch says how long each step takes right now - sending the
   question, speech to text, the AI's first words, a web search (and which one), a voice - and what a question adds up
   to. Also "how fast are you" / "test your speed".

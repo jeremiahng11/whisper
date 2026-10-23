@@ -2976,3 +2976,9 @@ def test_speed_test_by_voice(client, monkeypatch):
     r = client.post("/api/voice?speak=0", content=wav_bytes(1), headers={**H, "Content-Type": "audio/wav"})
     a = [ln for ln in r.text.split("\n") if ln.startswith("A ")][0]
     assert "Speed test:" in a and "speech to text" in a and "on Groq" in a and "web search" in a
+
+
+def test_company_name_setting(monkeypatch):
+    from app import research
+    monkeypatch.setattr(settings, "company_name", "Aleta Planet")
+    assert research.company_name() == "Aleta Planet"
