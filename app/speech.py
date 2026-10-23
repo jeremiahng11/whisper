@@ -87,7 +87,8 @@ def _cloud_stt(path: str, language: Optional[str]) -> Optional[dict]:
         prompt = voices.whisper_prompt()
         if prompt:
             data["prompt"] = prompt[:800]
-        r = httpx.post(f"{base}/audio/transcriptions", headers={"Authorization": f"Bearer {key}"}, data=data,
+        post = summarize.cloud_client().post if httpx.post is summarize._HX_POST else httpx.post   # kept-open connection
+        r = post(f"{base}/audio/transcriptions", headers={"Authorization": f"Bearer {key}"}, data=data,
                        files={"file": ("question.wav", buf.getvalue(), "audio/wav")}, timeout=settings.cloud_stt_timeout_s)
         r.raise_for_status()
         j = r.json()
@@ -349,7 +350,46 @@ def _eleven_speed() -> float:
 
 import urllib.request as _ur
 _URLOPEN = _ur.urlopen
-_el_local = threading.local()
+_el_local = threading.local()        # (kept for tests; the connections themselves are in _el_pool)
+_el_pool: list = []                  # open connections to ElevenLabs, shared by all threads (one per request at a time)
+_el_pool_lock = threading.Lock()
+
+
+def _el_get(host: str = "api.elevenlabs.io"):
+    import http.client
+    with _el_pool_lock:
+        while _el_pool:
+            c, at = _el_pool.pop()
+            if time.time() - at < 50:                   # (ElevenLabs closes idle ones after about a minute)
+                return c
+            c.close()
+    return http.client.HTTPSConnection(host, timeout=30)
+
+
+def _el_put(conn) -> None:
+    with _el_pool_lock:
+        if len(_el_pool) < 4:
+            _el_pool.append((conn, time.time()))
+            return
+    conn.close()
+
+
+def warm_voice() -> None:
+    """A question is coming: an ElevenLabs connection opened now (TLS done) for its first sentence."""
+    if not eleven_on() or _ur.urlopen is not _URLOPEN:
+        return
+    with _el_pool_lock:
+        if any(time.time() - at < 40 for _, at in _el_pool):
+            return
+
+    def go():
+        try:
+            c = _el_get()
+            c.connect()
+            _el_put(c)
+        except Exception:                                # noqa: BLE001 - only a head start
+            pass
+    threading.Thread(target=go, daemon=True).start()
 
 
 def _eleven_post(req) -> bytes:
@@ -364,20 +404,17 @@ def _eleven_post(req) -> bytes:
     host, path = u.split("/", 1)
     hdrs = dict(req.header_items())
     for attempt in range(2):
-        conn = getattr(_el_local, "conn", None)
-        if conn is None or getattr(_el_local, "host", "") != host:
-            conn = http.client.HTTPSConnection(host, timeout=60)
-            _el_local.conn, _el_local.host = conn, host
+        conn = _el_get(host)
         try:
             conn.request("POST", "/" + path, body=req.data, headers=hdrs)
             resp = conn.getresponse()
             data = resp.read()
         except (http.client.HTTPException, OSError):
             conn.close()
-            _el_local.conn = None
             if attempt:
                 raise
             continue                                  # a kept connection the server had closed: a fresh one
+        _el_put(conn)
         if resp.status >= 400:
             raise urllib.error.HTTPError(req.full_url, resp.status, resp.reason, resp.headers, io.BytesIO(data))
         return data
@@ -555,6 +592,108 @@ def wav_to_ima_adpcm(wav16: bytes) -> bytes:
            struct.pack("<IHHIIHHHH", 20, 0x11, 1, rate, rate * align // spb, align, 4, 2, spb) +
            b"data" + struct.pack("<I", len(data)))
     return hdr + data
+
+
+def adpcm_blocks(pcm: np.ndarray) -> bytes:
+    """16 kHz PCM16 samples -> IMA ADPCM blocks (256 bytes, 505 samples each; a short last block is padded)."""
+    import audioop
+    from . import transcribe
+    pcm = np.asarray(pcm, dtype="<i2")
+    pad = (-len(pcm)) % 505
+    if pad:
+        pcm = np.concatenate([pcm, np.zeros(pad, dtype="<i2")])
+    out, idx = [], 0
+    for b in range(len(pcm) // 505):
+        blk = pcm[b * 505:(b + 1) * 505]
+        pred = int(blk[0])
+        nib, state = audioop.lin2adpcm(blk[1:].tobytes(), 2, (pred, idx))
+        out.append(struct.pack("<hBB", pred, idx, 0) + nib.translate(transcribe._SWAP))
+        idx = state[1]
+    return b"".join(out)
+
+
+STREAM_GAIN = 2.6         # ElevenLabs peaks ~1/3 of full scale: as loud() would make it, without seeing the whole
+
+
+def _limit(a: np.ndarray, g: float) -> np.ndarray:
+    y = a.astype(np.float32) * g / 32767
+    y = np.where(np.abs(y) > 0.9, np.sign(y) * (0.9 + 0.1 * np.tanh((np.abs(y) - 0.9) / 0.1)), y)
+    return np.clip(y * 32767, -32768, 32767).astype("<i2")
+
+
+def tts_stream(text: str, chunk_samples: int = 2020):
+    """The answer's voice as it is made: 16 kHz PCM16 pieces (numpy) - with ElevenLabs the first piece comes ~0.2-0.3 s
+    sooner than the whole sentence. Anything else (Piper, a sentence already made, tests): the whole sentence at once."""
+    import hashlib
+    import http.client
+    import json as _json
+    clean = re.sub(r"[*#`_>\[\]]", "", text or "").strip()[:2000]
+    if not clean:
+        return
+    whole = lambda: np.frombuffer(tts(clean, live=True)[44:], dtype="<i2")   # noqa: E731
+    if not eleven_on() or _ur.urlopen is not _URLOPEN:
+        yield whole()
+        return
+    model = (settings.elevenlabs_model_live or settings.elevenlabs_model).strip() or "eleven_multilingual_v2"
+    key = hashlib.sha1((voice_name() + "|" + (model if model != settings.elevenlabs_model.strip() else "") + "|" + clean)
+                       .encode()).hexdigest()
+    cache = settings.data_dir / "tts_cache" / f"{key}.pcm"
+    if cache.exists():
+        yield whole()
+        return
+    path = (f"/v1/text-to-speech/{settings.elevenlabs_voice.strip()}/stream?output_format=pcm_16000")
+    body = _json.dumps({"text": clean, "model_id": model,
+                        **({"voice_settings": {"speed": _eleven_speed()}} if _eleven_speed() != 1.0 else {})}).encode()
+    hdrs = {"xi-api-key": settings.elevenlabs_key.strip(), "Content-Type": "application/json", "Accept": "audio/pcm, */*",
+            "User-Agent": "OracleMinutes/1.36 (+https://github.com/jeremiahng11/whisper)"}
+    got, rest = [], b""
+    try:
+        conn = None
+        for attempt in range(2):
+            conn = _el_get()
+            try:
+                conn.request("POST", path, body=body, headers=hdrs)
+                resp = conn.getresponse()
+                break
+            except (http.client.HTTPException, OSError):
+                conn.close()
+                if attempt:
+                    raise
+        if resp.status >= 400:
+            resp.read()
+            raise RuntimeError(f"ElevenLabs HTTP {resp.status}")
+        need = chunk_samples * 2
+        while True:
+            b = resp.read1(8192) if hasattr(resp, "read1") else resp.read(8192)
+            if not b:
+                break
+            got.append(b)
+            rest += b
+            if len(rest) >= need:
+                n = len(rest) // 2 * 2
+                yield _limit(np.frombuffer(rest[:n], dtype="<i2"), STREAM_GAIN)
+                rest = rest[n:]
+    except Exception as e:                               # noqa: BLE001 - nothing yet: the usual way
+        log.warning("ElevenLabs stream failed (%s)", str(e)[:120])
+        if conn is not None:
+            conn.close()
+        if not got:
+            yield whole()
+            return
+        conn = None
+    if conn is not None:
+        _el_put(conn)                                     # (read to the end: it can be used again)
+    if len(rest) >= 2:
+        yield _limit(np.frombuffer(rest[:len(rest) // 2 * 2], dtype="<i2"), STREAM_GAIN)
+    pcm = b"".join(got)
+    if len(pcm) >= 320:                                   # kept like _eleven's: the same sentence next time is free
+        try:
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            tmp = cache.with_suffix(".tmp")
+            tmp.write_bytes(pcm[:len(pcm) // 2 * 2])
+            tmp.replace(cache)
+        except OSError:
+            pass
 
 
 def tts(text: str, lang: str = "en", strict: bool = False, live: bool = False) -> bytes:

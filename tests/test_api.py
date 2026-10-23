@@ -2449,6 +2449,8 @@ def test_watch_everyday_questions(client, monkeypatch):
     assert "WEB(Who won the football match yesterday?|True)" in SYSTEMS[-1]
     h = client.get("/api/health").json()
     assert "tts_voice" in h
+    w = client.get("/api/watch/weather?city=Tokyo", headers=H).json()
+    assert w["today"].startswith("Right now in Tokyo") and w["tomorrow"].startswith("Tomorrow in Tokyo")
 
 
 def test_elevenlabs_error_shown_and_model_fallback(monkeypatch, tmp_path):
@@ -2795,3 +2797,38 @@ def test_world_question_searches_the_web(client, monkeypatch):
         time.sleep(0.05)
     assert ("Who invented the telephone?", True) in asked                  # searched as asked, not with the company
     assert "WEB[Who invented the telephone?]" in SYSTEMS[-1] and "never say you don't know" in SYSTEMS[-1]
+
+
+def test_first_sentence_voice_streamed(monkeypatch, tmp_path):
+    import http.client
+    import base64 as _b64
+    from app import speech, main as _m
+    monkeypatch.setattr(settings, "elevenlabs_key", "k")
+    monkeypatch.setattr(settings, "elevenlabs_voice", "vv")
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    monkeypatch.setattr(speech._el_local, "conn", None, raising=False)
+    sent = []
+
+    class Resp:
+        status = 200
+        def __init__(self): self.left = [struct.pack("<h", 3000) * 3000, struct.pack("<h", -3000) * 4000, b""]
+        def read1(self, n): return self.left.pop(0)
+        def read(self, n=-1): return b""
+
+    class Conn:
+        def __init__(self, host, timeout=0): pass
+        def request(self, m, path, body=None, headers=None): sent.append(path)
+        def getresponse(self): return Resp()
+        def close(self): pass
+    monkeypatch.setattr(http.client, "HTTPSConnection", Conn)
+    pieces = list(speech.tts_stream("Hello there, this is streamed."))
+    assert sent and "/stream?output_format=pcm_16000" in sent[0] and sum(len(p) for p in pieces) == 7000
+    assert max(abs(int(x)) for p in pieces for x in p) > 3000            # made louder
+    assert list((tmp_path / "tts_cache").glob("*.pcm"))                    # kept: next time from the cache
+    fv = _m._FirstVoice("Another sentence to stream now.")
+    blob = b"".join(_b64.b64decode(ln[2:].strip()) for ln in fv.finish())
+    assert len(blob) and len(blob) % 256 == 0
+    assert _m._first_split("Short one.") == ["Short one."]
+    long = "This first part of the answer is fairly long, and the second part carries on for a while longer too."
+    a, b = _m._first_split(long)
+    assert a.endswith(",") and b.startswith("and")

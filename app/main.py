@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.36.1"
+VERSION = "1.37.0"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -1328,6 +1328,21 @@ def watch_crashes():
     return {"items": rows}
 
 
+@app.get("/api/watch/weather", dependencies=[Depends(auth)])
+def watch_weather(city: str = Query("")):
+    """Today's and tomorrow's weather as spoken sentences, kept on the watch (every 2 hours) so "what's the weather"
+    is answered even offline."""
+    from . import worldinfo
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(2) as ex:
+        t = ex.submit(worldinfo.weather_answer, "how's the weather today", city)
+        m = ex.submit(worldinfo.weather_answer, "what's the weather tomorrow", city)
+        today, tomorrow = t.result(), m.result()
+    if not today:
+        raise HTTPException(503, "no weather right now")
+    return {"today": today, "tomorrow": tomorrow, "city": city or worldinfo.home_city()}
+
+
 @app.get("/api/watch/prompts", dependencies=[Depends(auth)])
 def watch_prompts():
     """The watch's own spoken words ("Okay.", "Starting the meeting."), in the answers' voice: {"voice", "names"}."""
@@ -1863,6 +1878,63 @@ def _voice_lines(text: str):
     yield from _b_lines(_voice_bytes(text))
 
 
+class _FirstVoice:
+    """The first sentence's voice, sent while ElevenLabs is still making it (its first sound ~0.2-0.3 s sooner than
+    waiting for the whole sentence). take() = the B lines ready so far; done when all of it went."""
+
+    def __init__(self, text: str):
+        self.parts: list[bytes] = []
+        self.done = False
+        self._lock = threading.Lock()
+        self.t0 = time.time()
+        self.text = text
+        threading.Thread(target=self._run, daemon=True, name="voice1").start()
+
+    def _run(self):
+        import numpy as _np
+        held = _np.zeros(0, dtype="<i2")
+        try:
+            for pcm in speech.tts_stream(self.text):
+                held = _np.concatenate([held, pcm])
+                n = len(held) // 505 * 505
+                if n:
+                    b = speech.adpcm_blocks(held[:n])
+                    held = held[n:]
+                    with self._lock:
+                        self.parts.append(b)
+            if len(held):
+                with self._lock:
+                    self.parts.append(speech.adpcm_blocks(held))
+        except Exception as e:                       # noqa: BLE001 - the text still shows
+            log.warning("first voice for %r: %s", self.text[:40], e)
+        from . import timing
+        timing.note("voice part", time.time() - self.t0, f"{len(self.text)} characters, streamed")
+        self.done = True
+
+    def take(self):
+        with self._lock:
+            parts, self.parts = self.parts, []
+        for b in parts:
+            yield from _b_lines(b)
+
+    def finish(self):
+        while not self.done:
+            yield from self.take()
+            time.sleep(0.03)
+        yield from self.take()
+
+
+def _first_split(sent: str) -> list[str]:
+    """A long first sentence is voiced in two (at a comma near the middle): its first half is heard sooner."""
+    if len(sent) < 90:
+        return [sent]
+    best = None
+    for m in re.finditer(r"[,;:]\s", sent):
+        if 25 <= m.start() <= len(sent) - 25 and (best is None or abs(m.start() - len(sent) / 2) < abs(best - len(sent) / 2)):
+            best = m.start()
+    return [sent] if best is None else [sent[:best + 1].strip(), sent[best + 1:].strip()]
+
+
 _FILLERS = ("Let me check.", "One moment.", "Let me look that up.")
 from concurrent.futures import TimeoutError as FutureTimeout  # noqa: E402
 
@@ -1921,6 +1993,8 @@ async def voice_question(request: Request, language: Optional[str] = Query(None)
     The voice of the first sentence comes while the AI is still writing the rest."""
     tmp = settings.upload_dir / f"voice_{secrets.token_hex(6)}.wav"
     t_in = time.time()
+    summarize.warm_cloud()                           # while you're still talking (the watch sends as you speak):
+    speech.warm_voice()                              # the connections to Groq and ElevenLabs open now
     n = await save_body(request, tmp)
     from . import timing as _timing
     _timing.note("voice question in", time.time() - t_in, f"{n // 1024} KB, one trip")
@@ -1984,9 +2058,14 @@ async def voice_question(request: Request, language: Optional[str] = Query(None)
             a = plan["instant"]
             yield line("A", {"answer": a})
             if speak:                                    # sentence by sentence: the first one starts sooner
-                futs = [_tts_pool().submit(_voice_bytes, s_) for s_ in _sentences(a)]
-                for f in futs:
-                    yield from _b_lines(f.result())
+                ss = _sentences(a)
+                if ss:
+                    ss = _first_split(ss[0]) + ss[1:]
+                    fv = _FirstVoice(ss[0])              # (streamed as it's made)
+                    futs = [_tts_pool().submit(_voice_bytes, s_) for s_ in ss[1:]]
+                    yield from fv.finish()
+                    for f in futs:
+                        yield from _b_lines(f.result())
             timing.note("voice trip", time.time() - t0, "without the AI")
             yield line("E", {})
             return
@@ -2011,6 +2090,7 @@ async def voice_question(request: Request, language: Optional[str] = Query(None)
         full, pending, shown, first = "", "", "", None
         from collections import deque
         futs: deque = deque()                        # voices being made, in the answer's order
+        fv: Optional[_FirstVoice] = None             # the first sentence's, streamed (before all the others)
         try:
             with chat._sem:
                 for piece in summarize.chat_stream([{"role": "system", "content": system}] + data["messages"]):
@@ -2026,8 +2106,18 @@ async def voice_question(request: Request, language: Optional[str] = Query(None)
                             first = time.time() - t0
                         yield line("P", {"text": shown})
                         if speak:                    # made while the AI writes on
-                            futs.append(_tts_pool().submit(_voice_bytes, sent))
-                    while futs and futs[0].done():   # the voices ready so far, in order
+                            if fv is None:
+                                parts = _first_split(sent)
+                                fv = _FirstVoice(parts[0])
+                                for p_ in parts[1:]:
+                                    futs.append(_tts_pool().submit(_voice_bytes, p_))
+                            else:
+                                futs.append(_tts_pool().submit(_voice_bytes, sent))
+                    if fv is not None:
+                        yield from fv.take()
+                    while futs and futs[0].done() and (fv is None or fv.done):   # the voices ready so far, in order
+                        if fv is not None:
+                            yield from fv.take()
                         yield from _b_lines(futs.popleft().result())
         except Exception as e:                       # noqa: BLE001
             yield line("E", {"error": summarize.explain_llm_error(e)[:200]})
@@ -2035,10 +2125,17 @@ async def voice_question(request: Request, language: Optional[str] = Query(None)
         rest = re.sub(r"<think>.*?</think>", "", pending, flags=re.S).strip()
         answer = re.sub(r"<think>.*?</think>", "", full, flags=re.S).strip()
         if speak and rest:
-            futs.append(_tts_pool().submit(_voice_bytes, rest))
-        while futs and futs[0].done():
+            if fv is None:
+                fv = _FirstVoice(rest)
+            else:
+                futs.append(_tts_pool().submit(_voice_bytes, rest))
+        if fv is not None:
+            yield from fv.take()
+        while futs and futs[0].done() and (fv is None or fv.done):
             yield from _b_lines(futs.popleft().result())
         yield line("A", {"answer": answer})
+        if fv is not None:
+            yield from fv.finish()
         while futs:
             yield from _b_lines(futs.popleft().result())
         timing.note("voice trip", time.time() - t0, f"first sentence at {first or time.time() - t0:.1f}s")

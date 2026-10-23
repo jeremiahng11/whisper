@@ -576,6 +576,40 @@ def _no_think(pieces):
         yield buf
 
 
+_HX_STREAM, _HX_POST = httpx.stream, httpx.post
+_client = None
+_client_lock = threading.Lock()
+_warm_at = 0.0
+
+
+def cloud_client() -> httpx.Client:
+    """One kept-open connection pool for the cloud AI and cloud speech to text (Groq): no new TLS handshake
+    (~150-300 ms from here) on every question."""
+    global _client
+    with _client_lock:
+        if _client is None:
+            _client = httpx.Client(timeout=settings.llm_timeout_s,
+                                   limits=httpx.Limits(max_keepalive_connections=4, keepalive_expiry=120))
+        return _client
+
+
+def warm_cloud() -> None:
+    """A question is coming (the watch started sending): open the connection to the cloud AI now, in the background,
+    if it isn't open already - by the time the words are known it's ready."""
+    global _warm_at
+    if not settings.live_llm_api_key or time.time() - _warm_at < 60 or httpx.stream is not _HX_STREAM:
+        return
+    _warm_at = time.time()
+
+    def go():
+        try:
+            cloud_client().get(f"{settings.live_llm_base_url}/models", timeout=5,
+                               headers={"Authorization": f"Bearer {settings.live_llm_api_key}"})
+        except Exception:                                # noqa: BLE001 - only a head start
+            pass
+    threading.Thread(target=go, daemon=True).start()
+
+
 def _cloud_pieces(messages: list[dict]):
     import json as _json
     base, model = settings.live_llm_base_url, settings.live_llm_model
@@ -587,7 +621,8 @@ def _cloud_pieces(messages: list[dict]):
             extra = {"reasoning_effort": "none", "reasoning_format": "hidden"}
     for attempt in (0, 1):
         body = {"model": model, "messages": messages, "temperature": 0.2, "stream": True, **(extra if attempt == 0 else {})}
-        with httpx.stream("POST", f"{base}/chat/completions", timeout=settings.llm_timeout_s,
+        opener = cloud_client().stream if httpx.stream is _HX_STREAM else httpx.stream   # (tests stand in for httpx)
+        with opener("POST", f"{base}/chat/completions", timeout=settings.llm_timeout_s,
                           headers={"Authorization": f"Bearer {settings.live_llm_api_key}"}, json=body) as r:
             if r.status_code >= 400:                  # say why (a wrong model name, base URL or key)
                 raw = r.read().decode(errors="replace")[:300]
