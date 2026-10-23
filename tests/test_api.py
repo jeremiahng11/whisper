@@ -22,6 +22,7 @@ os.environ["AUTOTAG_SWEEP"] = "0"
 os.environ["PEOPLE_SWEEP"] = "0"
 os.environ["KNOWLEDGE_SWEEP"] = "0"
 os.environ["RESEARCH_LIVE"] = "0"
+os.environ["WARM_UP"] = "0"
 os.environ["RAG"] = "0"                   # finding by meaning: its own test (with a stand-in embedding model)         # no web searches from the Ask tests (turned on in its own test)
 
 import pytest
@@ -2936,3 +2937,25 @@ def test_watch_stability_by_day(client):
     d = client.get("/api/devices/w1b-test/stability", headers=H).json()["days"][0]
     assert d["restarts"] == 1 and d["crashes"] == 1 and d["failed_sends"] == 1 and d["memory_lows"] == 1
     assert d["questions"] == 1 and d["slowest_heard_ms"] == 1800 and d["server_trips"] >= 1
+
+
+def test_company_question_skips_the_web_and_fresh_ones_search_early(client, monkeypatch):
+    from app import research, speech, summarize, main as _m
+    r = client.post("/api/knowledge/custom", json={"q": "Where is Aleta Planet located?", "a": "Aleta Planet is in Singapore, at One North."}, headers=H)
+    assert r.status_code == 200
+    monkeypatch.setattr(settings, "research_live", True)
+    monkeypatch.setattr(research, "company_name", lambda: "Aleta Planet")
+    calls = []
+    monkeypatch.setattr(research, "live_context", lambda q, limit=2500, plain=False: (calls.append(q), "WEB")[1])
+    said = {"t": ""}
+    monkeypatch.setattr(speech, "stt", lambda path, lang=None, cands=None: {"text": said["t"], "language": "en"})
+    monkeypatch.setattr(summarize, "chat_stream", lambda msgs: iter(["It is in Singapore."]))
+
+    def ask(t):
+        said["t"] = t
+        r = client.post("/api/voice?speak=0", content=wav_bytes(1), headers={**H, "Content-Type": "audio/wav"})
+        assert r.status_code == 200
+    ask("Can you tell me where exactly the Alita Planet office is located for our visitors")
+    assert calls == []                                              # the company's own knowledge: no web search
+    ask("What is the latest price of gold")
+    assert calls == ["What is the latest price of gold"]           # about now: searched (started early, once)

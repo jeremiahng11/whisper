@@ -149,8 +149,9 @@ def weather_answer(q: str, city: str = "") -> str:
         return ""
 
 
-def context(q: str, tz_min: int | None = None, city: str = "") -> str:
-    """What goes along with an everyday question (besides the date and time, which always does)."""
+def context(q: str, tz_min: int | None = None, city: str = "", web=None) -> str:
+    """What goes along with an everyday question (besides the date and time, which always does). web: a search for
+    it that already started (a future) - used instead of searching again."""
     parts = []
     if WEATHER.search(q):
         w = weather(q, city)
@@ -159,7 +160,7 @@ def context(q: str, tz_min: int | None = None, city: str = "") -> str:
     if is_world(q) and not (WEATHER.search(q) and parts):
         from . import research
         t0 = time.time()
-        w = research.live_context(q, plain=True)
+        w = web.result() if web is not None else research.live_context(q, plain=True)
         log.info("world search %.1fs: %d chars", time.time() - t0, len(w))
         if w:
             parts.append(w)

@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.38.3"
+VERSION = "1.39.0"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -44,9 +44,38 @@ async def lifespan(app: FastAPI):
     if speech.tts_available():                       # load the voices now, not on the first spoken answer
         import threading
         threading.Thread(target=speech.warm_voices, daemon=True).start()
+    if settings.warm_up:                             # the first question after a redeploy as quick as the rest
+        import threading
+        threading.Thread(target=_warm_up, daemon=True, name="warm-up").start()
     log.info("whisper service %s ready - model %s, summary %s", VERSION, settings.whisper_model, settings.summary_backend)
     yield
     worker.stop()
+
+
+warm_status: dict = {"done": False, "s": 0.0, "steps": []}
+
+
+def _warm_up() -> None:
+    """After a restart: what the first question would otherwise wait for - the connections to Groq and ElevenLabs,
+    the company knowledge and the search over it (and its index of meaning), the voices for "Let me check"."""
+    time.sleep(3)
+    t0 = time.time()
+
+    def step(name, fn):
+        t = time.time()
+        try:
+            fn()
+            warm_status["steps"].append(f"{name} {time.time() - t:.1f}s")
+        except Exception as e:                       # noqa: BLE001 - only a head start
+            warm_status["steps"].append(f"{name} failed: {str(e)[:60]}")
+    step("cloud AI", summarize.warm_cloud)
+    step("voice", speech.warm_voice)
+    step("company knowledge", lambda: (knowledge.find("what does the company do", 2), company_context("what does the company do")))
+    step("about the company", lambda: about_company("where is the company located"))
+    if speech.tts_available():
+        step("let me check", lambda: [_voice_bytes(f) for f in _FILLERS])
+    warm_status.update(done=True, s=round(time.time() - t0, 1))
+    log.info("warmed up in %.1fs: %s", time.time() - t0, ", ".join(warm_status["steps"]))
 
 
 app = FastAPI(title="Oracle Minutes", version=VERSION, lifespan=lifespan)
@@ -690,6 +719,12 @@ def about_company(q: str) -> bool:
         return True
     words = knowledge._words(q)
     try:
+        cn = knowledge._words(research.company_name() or "")
+        if cn and (cn <= words or (len(cn) > 1 and len(cn & words) >= len(cn) - 1)):   # "Alita Planet": 1 of 2 is enough
+            return True
+    except Exception:                                # noqa: BLE001
+        pass
+    try:
         d = research.load()
         for t in (d.get("topics") or []) + (d.get("found") or [])[:3]:
             tw = knowledge._words(t)
@@ -837,19 +872,28 @@ def _ask_start(data: dict, plan: bool = False) -> dict:
             # A question about the world ("weather tomorrow", "who won the match", "price of gold"): the weather
             # and a web search for the question as asked, like a phone assistant
             if world:
-                out = worldinfo.context(last_q, tz, city)
+                out = worldinfo.context(last_q, tz, city, web=data.get("_prefetch"))
                 if out:
                     return out + "\n\nAnswer from this (it is current); say where it's from in a few words."
             ours = about_company(last_q)
             if data.get("offline"):
                 return company_context(q)
+            # about the company, and your knowledge has it: answered from that alone - no web search (1.5-2 s less,
+            # and the search quota lasts longer). Something current ("latest news about ...") is still searched.
+            pre = data.get("_prefetch")
+            if ours and not research.needs_fresh(last_q) and pre is None and knowledge.find(q, 2):
+                out = company_context(q)
+                if out:
+                    from . import timing
+                    timing.note("web search", 0, "skipped - your company's knowledge has it")
+                    return out
             # every question is also searched on the web as asked, at the same time as the company's knowledge is
             # looked through: the AI answers from your knowledge when that has it, else from the web ("how many payment
             # companies are there in Singapore" - before, a question that looked a little like the company's got only
             # the company's notes, and the answer was "I don't have that")
             from concurrent.futures import ThreadPoolExecutor
             with ThreadPoolExecutor(2) as ex:
-                fw = ex.submit(research.live_context, last_q, 2500, True)
+                fw = pre if pre is not None else ex.submit(research.live_context, last_q, 2500, True)   # (started early?)
                 out = company_context(q)
                 w = fw.result()
             if ours and web and "closest in meaning" not in out and not w:   # about us, nothing found either way
@@ -2051,6 +2095,11 @@ async def voice_question(request: Request, language: Optional[str] = Query(None)
                 return
         msgs = [m for m in (ask.get("messages") or []) if isinstance(m, dict)][-12:]
         data = {"messages": msgs + [{"role": "user", "content": text}], "tz": tzm, "city": city or ask.get("city") or ""}
+        from . import worldinfo as _wi
+        if research.needs_fresh(text) and not _wi.WEATHER.search(text) and settings.research_live and not scope:
+            # clearly about now ("latest", "price", "who won"): the search starts at once, while the server is still
+            # working out the rest (it used to start only after that: ~0.2-0.5 s)
+            data["_prefetch"] = _late_pool().submit(research.live_context, text, 2500, True)
         if scope:
             data["scope"] = scope
         try:
@@ -2515,6 +2564,8 @@ def health():
                           if t else "")(speech.cloud_stt_target())) + str(transcribe.quick_model_status()),
         "web_search": __import__("app.sources", fromlist=["search_status"]).search_status,
         "live_ai_fallback": {"model": summarize.fallback_model(), **summarize.cloud_status},
+        "warm_up": warm_status,
+        "cpu_threads": f"{settings.whisper_threads} of {os.cpu_count()} for meetings (the rest for questions)",
         "live_ai": (settings.live_llm_model + " at " + settings.live_llm_base_url.split("//")[-1].split("/")[0])
                    if settings.live_llm_api_key else "",
         "tts_voice": ("ElevenLabs " + settings.elevenlabs_model) if speech.eleven_on() else

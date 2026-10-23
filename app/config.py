@@ -30,7 +30,10 @@ class Settings:
     whisper_model: str = os.getenv("WHISPER_MODEL", "large-v3-turbo")
     whisper_device: str = os.getenv("WHISPER_DEVICE", "auto")       # auto | cpu | cuda
     whisper_compute: str = os.getenv("WHISPER_COMPUTE", "auto")     # auto -> int8 on CPU, float16 on GPU
-    whisper_threads: int = _int("WHISPER_THREADS", 0)               # 0 = all cores
+    # meetings into text / speaker separation: how many CPU threads (0 = all but 4, so questions and the web page stay
+    # quick while a meeting is processed; e.g. 12 of 16)
+    whisper_threads: int = _int("WHISPER_THREADS", 0) or max(2, (os.cpu_count() or 4) - 4)
+    warm_up: bool = _bool("WARM_UP", True)          # after a restart: connections, knowledge and voices loaded at once
     whisper_beam: int = _int("WHISPER_BEAM", 5)
     stt_model: str = os.getenv("STT_MODEL", "distil-small.en")      # short spoken questions (/api/stt): e.g. "small" - quicker
     default_language: str = os.getenv("DEFAULT_LANGUAGE", "")       # "" = auto-detect, e.g. "en"

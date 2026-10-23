@@ -431,6 +431,14 @@ owners, dates, budgets, terms, and who people are. In the background it reads on
 - **Optional cloud AI for questions** (`LIVE_LLM_API_KEY`, `LIVE_LLM_BASE_URL`, `LIVE_LLM_MODEL`): any
   OpenAI-compatible API answers the watch's and Ask's questions in about a second (streamed). Off unless the key is
   set - the question and the company context sent with it then leave this server. Meetings always stay local.
+- **Quicker again** (1.39.0):
+  - a question about the company that your knowledge answers isn't searched on the web (1.5-2 s less, and the search
+    quota lasts longer); the company's name counts even misheard a little ("Alita Planet");
+  - a question clearly about now ("latest", "price", "who won") starts its search the moment its words are known;
+  - meetings use all CPU threads but 4 (WHISPER_THREADS to change), speaker separation too - questions and the web
+    page stay quick while a meeting is processed;
+  - after a restart the server warms up by itself (connections, company knowledge, "Let me check"): /api/health
+    "warm_up". WARM_UP=0 turns it off.
 - **Brave first, Tavily if it fails** (1.38.3): BRAVE_API_KEY and TAVILY_API_KEY can both be set; SEARCH_ORDER
   (default `brave,tavily`) picks the order. /api/health "web_search" shows which one answered and any fall-back.
 - **Quicker searches with Tavily/Brave** (1.38.2): their results carry the page's own passage, so the top pages are

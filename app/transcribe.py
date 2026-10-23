@@ -626,6 +626,7 @@ def _get_diarizer():
             raise RuntimeError(f"could not load {settings.diarize_model} - accept its terms on huggingface.co")
         try:
             import torch
+            torch.set_num_threads(settings.whisper_threads)   # (the same cap: cores left for live questions)
             if torch.cuda.is_available():
                 _diar.to(torch.device("cuda"))
         except Exception:
