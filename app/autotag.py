@@ -38,7 +38,7 @@ def job_lock(jid: str) -> threading.Lock:
         return _job_locks.setdefault(jid, threading.Lock())
 
 
-RULES = "r4"          # bump when the matching rules change: every meeting is checked again
+RULES = "r5"          # bump when the matching rules change: every meeting is checked again
 
 
 # ---------------------------------------------------------------- pitch: a cheap, strong check against mix-ups
@@ -298,6 +298,16 @@ def apply(jid: str) -> int:
             people.pop(lab, None)
             pp.pop(lab, None)
     has_lines = {s.get("speaker") for s in segs}
+    # the speaker groups your tags came from: a group you tagged ONLY as X is X's own - not "someone else" competing
+    # with X (before: tag one line of Amos and his own group, as heard by the separation, was the rival that kept all
+    # his other lines from matching him - "No other lines clearly sound like AMOS")
+    tagged_from: dict[str, set] = {}
+    for i, lab in manual.items():
+        if i < len(segs) and segs[i].get("orig"):
+            tagged_from.setdefault(lab, set()).add(segs[i]["orig"])
+
+    def own_group(lab: str, g: str) -> bool:
+        return g in tagged_from.get(lab, set()) and not any(g in v for l2, v in tagged_from.items() if l2 != lab)
     group_to: dict[str, str] = {}
     for g, info in spk.items():
         e = (info or {}).get("embedding")
@@ -314,6 +324,8 @@ def apply(jid: str) -> int:
         # the separation already heard this group as a different person from someone talking under their own
         # label here: only a very close voice overrides that
         need = max(settings.autotag_group, 0.65) if sims[0][1] in has_lines else settings.autotag_group
+        if own_group(sims[0][1], g):                       # you tagged lines of this group as them, nobody else
+            need = settings.autotag_group - 0.05
         if sims[0][1] in remembered:                       # a voice from another meeting: the stricter bar
             need = max(need, settings.voice_match)
         if sims[0][0] >= need and sims[0][0] - second >= 0.05:
@@ -342,7 +354,7 @@ def apply(jid: str) -> int:
             continue
         sims = sorted(((_cos(e, c), lab) for lab, c in people.items()), reverse=True)
         best, lab = sims[0]
-        rival = max([x for x, _ in sims[1:]] + [_cos(e, v) for v in others.values()] + [-1.0])
+        rival = max([x for x, _ in sims[1:]] + [_cos(e, v) for o, v in others.items() if not own_group(lab, o)] + [-1.0])
         if best >= (max(thr, settings.voice_match - 0.05) if lab in remembered else thr) and best - rival >= margin:
             decide[i] = lab
         else:

@@ -1193,7 +1193,7 @@ async function followAutotag(id, who, known) {
       const prev = $("#tagMsg").dataset.moved | 0;
       const n = st.changed + prev, them = known ? "people you've named before" : who || "the people you tagged";
       $("#tagMsg").textContent = n ? `${n} more line${n > 1 ? "s" : ""} sound like ${them} - tagged (marked "auto"). Fix any that are wrong.`
-        : `No other lines clearly sound like ${them}.`;
+        : `No other lines clearly sound like ${them} yet. One or two lines are little to go on, especially if the speaker separation put them with someone else: tag 2 or 3 more of their lines (longer ones are best) and each one sharpens their voice - or tick "Match more".`;
       return;
     }
   }

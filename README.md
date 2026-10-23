@@ -431,6 +431,9 @@ owners, dates, budgets, terms, and who people are. In the background it reads on
 - **Optional cloud AI for questions** (`LIVE_LLM_API_KEY`, `LIVE_LLM_BASE_URL`, `LIVE_LLM_MODEL`): any
   OpenAI-compatible API answers the watch's and Ask's questions in about a second (streamed). Off unless the key is
   set - the question and the company context sent with it then leave this server. Meetings always stay local.
+- **Tagging finds more of the same person** (1.36.1): a speaker group whose lines you tagged only as X is no longer
+  counted as "someone else" competing with X, and joins X more easily - tag one line of Amos and the rest of his
+  group follows. Every meeting is checked again with the new rule.
 - **Faster, more natural questions** (1.36.0, watch W1B-1.9.3):
   - the watch sends your question **while you talk** (the connection opens as you start; when you stop, only the
     last quarter second is left to send);
