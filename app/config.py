@@ -103,6 +103,15 @@ class Settings:
     live_llm_base_url: str = os.getenv("LIVE_LLM_BASE_URL", "https://api.openai.com/v1").strip().strip("'\"").strip().rstrip("/")
     live_llm_api_key: str = os.getenv("LIVE_LLM_API_KEY", "").strip().strip("'\"").strip()
     live_llm_model: str = os.getenv("LIVE_LLM_MODEL", "gpt-4o-mini").strip().strip("'\"").strip()
+    # Spoken questions (not meetings) turned into text by a cloud Whisper - Groq's whisper-large-v3-turbo takes
+    # ~0.3 s where this server's CPU takes 1-3 s. CLOUD_STT_API_KEY, or on its own when LIVE_LLM is Groq (the same key).
+    # CLOUD_STT=0: always on this server. The question's audio then leaves this server (its text already did).
+    cloud_stt: bool = _bool("CLOUD_STT", True)
+    filler_after_s: float = float(os.getenv("FILLER_AFTER_S", "1.2"))   # "Let me check" when a search takes longer; 0 off
+    cloud_stt_base_url: str = os.getenv("CLOUD_STT_BASE_URL", "").strip().strip("'\"").strip().rstrip("/")
+    cloud_stt_api_key: str = os.getenv("CLOUD_STT_API_KEY", "").strip().strip("'\"").strip()
+    cloud_stt_model: str = os.getenv("CLOUD_STT_MODEL", "whisper-large-v3-turbo").strip().strip("'\"").strip()
+    cloud_stt_timeout_s: float = float(os.getenv("CLOUD_STT_TIMEOUT_S", "6"))
     openai_embed_model: str = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
     summary_chunk_chars: int = _int("SUMMARY_CHUNK_CHARS", 24000)   # longer transcripts are summarised in parts
     llm_timeout_s: int = _int("LLM_TIMEOUT_S", 1800)

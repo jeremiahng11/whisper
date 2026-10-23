@@ -2651,6 +2651,74 @@ def test_voice_question_in_one_trip(client, monkeypatch):
     assert sent[-1][1]["content"] == "You are Oracle." and sent[-1][-1]["content"] == "Tell me a joke"
     lines = ask("Set a timer for 5 minutes")
     assert [k for k, _ in lines] == ["T", "X", "E"] and _j.loads(lines[1][1])["type"] == "timer"
+    # sent while talking: the recording comes in pieces (chunked), its header still saying 0 bytes
+    said["t"] = "Tell me a joke"
+    w = bytearray(wav_bytes(1))
+    w[4:8] = b"\0\0\0\0"
+    w[40:44] = b"\0\0\0\0"
+
+    def pieces():
+        for i in range(0, len(w), 1000):
+            yield bytes(w[i:i + 1000])
+    r = client.post("/api/voice?speak=1&tz=480", content=pieces(), headers={**H, "Content-Type": "audio/wav"})
+    assert r.status_code == 200 and r.text.startswith("T ") and r.text.strip().endswith("E {}"), r.text[:200]
+    # a slow search: "Let me check" is said first (before the answer's words)
+    from app import research
+    monkeypatch.setattr(settings, "filler_after_s", 0.05)
+    monkeypatch.setattr(research, "live_context", lambda *a, **k: (time.sleep(0.4), "")[1])
+    lines = ask("Tell me something funny about cats")
+    kinds = [k for k, _ in lines]
+    assert kinds[0] == "T" and kinds[1] == "B" and kinds.index("B") < kinds.index("P"), kinds
+
+
+def test_cloud_speech_to_text(monkeypatch, tmp_path):
+    from app import speech
+    import httpx as _hx
+    monkeypatch.setattr(settings, "live_llm_api_key", "gk")
+    monkeypatch.setattr(settings, "live_llm_base_url", "https://api.groq.com/openai/v1")
+    monkeypatch.setattr(speech, "_cloud_off_until", 0.0)
+    assert speech.cloud_stt_target()[2] == "whisper-large-v3-turbo"
+    p = tmp_path / "q.wav"
+    p.write_bytes(wav_bytes(1))
+    seen = {}
+
+    class R:
+        def raise_for_status(self): pass
+        def json(self): return {"text": " What time is it? ", "language": "english"}
+
+    def fake(url, headers=None, data=None, files=None, timeout=0):
+        seen.update(url=url, auth=headers["Authorization"], model=data["model"], size=len(files["file"][1]))
+        return R()
+    monkeypatch.setattr(_hx, "post", fake)
+    r = speech.stt(str(p), "en")
+    assert r["text"] == "What time is it?" and r["language"] == "en" and r.get("cloud")
+    assert seen["url"].endswith("/audio/transcriptions") and seen["auth"] == "Bearer gk" and seen["size"] > 1000
+
+    def boom(*a, **k):
+        raise _hx.ConnectError("down")
+    monkeypatch.setattr(_hx, "post", boom)
+    monkeypatch.setattr(speech.transcribe, "transcribe", lambda *a, **k: type("T", (), {
+        "segments": [type("S", (), {"text": "local words"})()], "language": "en", "duration": 1.0})())
+    assert speech.stt(str(p), "en")["text"] == "local words"         # cloud down: this server's own
+    monkeypatch.setattr(settings, "cloud_stt", False)
+    assert speech.cloud_stt_target() is None
+
+
+def test_watch_crash_decoded(client, monkeypatch, tmp_path):
+    import gzip as _gz
+    from app import crashdecode
+    d = tmp_path / "syms"
+    d.mkdir()
+    (d / "W1B-9.9.9.sym.gz").write_bytes(_gz.compress(
+        b"42000000 00000100 T setup\n42000100 00000080 t voiceReadBody(NetworkClient*)\n3fc00000 00000010 D data\n"))
+    monkeypatch.setattr(crashdecode, "BUNDLED", d)
+    crashdecode._cache.clear()
+    text = "W1B-9.9.9 task net pc 0x42000110 cause 29 addr 0x00000000 elf ab bt 0x42000110 0x42000004 0x42f00000"
+    r = client.post("/api/watch/crash", json={"fw": "W1B-9.9.9", "text": text}, headers=H).json()
+    assert r["decoded"]["frames"][:2] == ["0x42000110 voiceReadBody(NetworkClient*)+0x10", "0x42000110 voiceReadBody(NetworkClient*)+0x10"]
+    assert r["decoded"]["frames"][2] == "0x42000004 setup+0x4" and r["decoded"]["frames"][3].endswith(" ?")
+    items = client.get("/api/watch/crashes", headers=H).json()["items"]
+    assert items[0]["decoded"]["version"] == "W1B-9.9.9"
 
 
 def test_chat_stream_leaves_out_thinking(monkeypatch):

@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.35.0"
+VERSION = "1.36.0"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -1300,11 +1300,16 @@ async def watch_crash(request: Request):
     text = str(d.get("text") or "")[:2000]
     if not text:
         raise HTTPException(400, "send {'text': ...}")
+    from . import crashdecode
+    from starlette.concurrency import run_in_threadpool
+    fw = str(d.get("fw") or "")[:20]
+    dec = await run_in_threadpool(crashdecode.decode, text, fw)
     p = settings.data_dir / "watch_crashes.jsonl"
     with open(p, "a") as f:
-        f.write(json.dumps({"at": time.time(), "fw": str(d.get("fw") or "")[:20], "text": text}) + "\n")
-    log.warning("watch crash report: %s", text)
-    return {"ok": True}
+        f.write(json.dumps({"at": time.time(), "fw": fw, "text": text, "device": str(d.get("device") or "")[:40],
+                            "decoded": dec}) + "\n")
+    log.warning("watch crash report: %s | %s", text, " < ".join(dec.get("frames") or [dec.get("error", "")]))
+    return {"ok": True, "decoded": dec}
 
 
 @app.get("/api/watch/crashes", dependencies=[Depends(auth)])
@@ -1315,7 +1320,12 @@ def watch_crashes():
         rows = [json.loads(x) for x in p.read_text().splitlines() if x.strip()]
     except (OSError, ValueError):
         rows = []
-    return {"items": rows[::-1][:50]}
+    rows = rows[::-1][:50]
+    from . import crashdecode
+    for r in rows[:5]:                                   # reported before the symbols were there: decode now
+        if not (r.get("decoded") or {}).get("frames"):
+            r["decoded"] = crashdecode.decode(r.get("text", ""), r.get("fw", ""))
+    return {"items": rows}
 
 
 @app.get("/api/watch/prompts", dependencies=[Depends(auth)])
@@ -1853,6 +1863,10 @@ def _voice_lines(text: str):
     yield from _b_lines(_voice_bytes(text))
 
 
+_FILLERS = ("Let me check.", "One moment.", "Let me look that up.")
+from concurrent.futures import TimeoutError as FutureTimeout  # noqa: E402
+
+
 # the sentences' voices are made side by side (ElevenLabs takes a few hundred ms each) and sent in order
 _TTS_POOL = None
 
@@ -1863,6 +1877,17 @@ def _tts_pool():
         from concurrent.futures import ThreadPoolExecutor
         _TTS_POOL = ThreadPoolExecutor(3, thread_name_prefix="voice")
     return _TTS_POOL
+
+
+_LATE_POOL = None
+
+
+def _late_pool():
+    global _LATE_POOL
+    if _LATE_POOL is None:
+        from concurrent.futures import ThreadPoolExecutor
+        _LATE_POOL = ThreadPoolExecutor(4, thread_name_prefix="late")
+    return _LATE_POOL
 
 
 def _sentences(text: str) -> list[str]:
@@ -1967,8 +1992,18 @@ async def voice_question(request: Request, language: Optional[str] = Query(None)
             return
         system = plan["system"] + (("\n\n" + plan["context"]) if plan["context"] else "")
         if plan.get("late"):
+            # the web search / company knowledge for the answer: when it takes a moment, say so ("Let me check")
+            # instead of a silence - like a phone assistant (the phrases are voiced once and kept)
+            fl = _late_pool().submit(plan["late"])
             try:
-                extra = plan["late"]()
+                extra = fl.result(timeout=settings.filler_after_s) if speak and settings.filler_after_s > 0 else fl.result()
+            except FutureTimeout:
+                yield from _b_lines(_voice_bytes(_FILLERS[int(time.time()) % len(_FILLERS)]))
+                timing.note("said", 0, "let me check")
+                try:
+                    extra = fl.result()
+                except Exception:                    # noqa: BLE001
+                    extra = ""
             except Exception:                        # noqa: BLE001
                 extra = ""
             if extra:
@@ -2353,7 +2388,8 @@ def health():
         "tts": speech.tts_available(),
         "tts_error": speech.tts_error,
         "timing": __import__("app.timing", fromlist=["recent"]).recent(),
-        "question_stt": transcribe.quick_model_status(),
+        "question_stt": ((lambda t: f"cloud {t[2]} at {t[0].split('//')[-1].split('/')[0]}, else "
+                          if t else "")(speech.cloud_stt_target())) + str(transcribe.quick_model_status()),
         "live_ai": (settings.live_llm_model + " at " + settings.live_llm_base_url.split("//")[-1].split("/")[0])
                    if settings.live_llm_api_key else "",
         "tts_voice": ("ElevenLabs " + settings.elevenlabs_model) if speech.eleven_on() else

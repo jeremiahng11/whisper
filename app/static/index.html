@@ -1510,7 +1510,12 @@ async function loadKb() {
     else if (st.state === "error") t += `<br>The last training failed: ${esc((st.error || "").slice(-200))}`;
     try {
       const cr = (await (await api("/api/watch/crashes")).json()).items || [];
-      if (cr.length) t += `<br><span class="mute">Watch's last crash (${new Date(cr[0].at * 1000).toLocaleString()}): <code style="user-select:all">${esc(cr[0].text)}</code></span>`;
+      if (cr.length) {
+        const dc = cr[0].decoded || {};
+        t += `<br><span class="mute">Watch's last crash (${new Date(cr[0].at * 1000).toLocaleString()}): <code style="user-select:all">${esc(cr[0].text)}</code></span>`;
+        if ((dc.frames || []).length) t += `<br><span class="mute">Where it crashed (${esc(dc.version)}, newest first):</span><pre style="white-space:pre-wrap;user-select:all;font-size:12px">${esc(dc.frames.join("\n"))}</pre>`;
+        else if (dc.error) t += `<br><span class="mute">${esc(dc.error)}</span>`;
+      }
     } catch (e) {}
     $("#wmNow").innerHTML = t;
     $("#wmTrain").classList.toggle("hidden", w.training); $("#wmStop").classList.toggle("hidden", !w.training);

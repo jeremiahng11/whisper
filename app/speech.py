@@ -44,9 +44,76 @@ def pick_language(path: str, candidates: list[str]) -> Optional[str]:
         return cands[0]
 
 
+def cloud_stt_target() -> Optional[tuple[str, str, str]]:
+    """(base url, key, model) of the cloud Whisper for spoken questions, or None (this server's own)."""
+    if not settings.cloud_stt:
+        return None
+    if settings.cloud_stt_api_key:
+        return (settings.cloud_stt_base_url or "https://api.groq.com/openai/v1", settings.cloud_stt_api_key,
+                settings.cloud_stt_model)
+    if settings.live_llm_api_key and "groq.com" in settings.live_llm_base_url:
+        return settings.live_llm_base_url, settings.live_llm_api_key, settings.cloud_stt_model
+    return None
+
+
+_cloud_off_until = 0.0                              # after a failure: this server's own for a minute
+
+
+def _cloud_stt(path: str, language: Optional[str]) -> Optional[dict]:
+    global _cloud_off_until
+    tgt = cloud_stt_target()
+    if not tgt or time.time() < _cloud_off_until:
+        return None
+    import io
+    import wave
+    import httpx
+    import numpy as np
+    t0 = time.time()
+    try:
+        pcm = transcribe.load_audio(path)                   # the watch's IMA ADPCM -> plain 16-bit WAV (16 kHz)
+        dur = len(pcm) / 16000
+        if dur < 0.3:
+            return {"text": "", "language": language or "", "duration": round(dur, 2)}
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(16000)
+            w.writeframes((np.clip(pcm, -1, 1) * 32767).astype("<i2").tobytes())
+        base, key, model = tgt
+        data = {"model": model, "response_format": "verbose_json", "temperature": "0"}
+        if language:
+            data["language"] = language
+        prompt = voices.whisper_prompt()
+        if prompt:
+            data["prompt"] = prompt[:800]
+        r = httpx.post(f"{base}/audio/transcriptions", headers={"Authorization": f"Bearer {key}"}, data=data,
+                       files={"file": ("question.wav", buf.getvalue(), "audio/wav")}, timeout=settings.cloud_stt_timeout_s)
+        r.raise_for_status()
+        j = r.json()
+    except Exception as e:                               # noqa: BLE001 - any trouble: this server's own Whisper
+        _cloud_off_until = time.time() + 60
+        log.warning("cloud speech to text failed (%s) - this server's own for a minute", str(e)[:200])
+        from . import timing
+        timing.note("speech to text (cloud failed)", time.time() - t0, str(e)[:80])
+        return None
+    text = (j.get("text") or "").strip()
+    if settings.redact:
+        text = redact.redact(text)
+    lang = (j.get("language") or language or "").lower()
+    lang = {"english": "en", "chinese": "zh", "malay": "ms", "indonesian": "id", "japanese": "ja", "korean": "ko",
+            "thai": "th", "tamil": "ta", "vietnamese": "vi", "french": "fr", "spanish": "es", "german": "de"}.get(lang, lang)
+    from . import timing
+    timing.note("speech to text", time.time() - t0, f"{dur:.1f}s of speech, cloud {tgt[2]}")
+    log.info("speech to text (cloud): %.2fs for %.1fs of speech", time.time() - t0, dur)
+    return {"text": text, "language": lang, "duration": round(dur, 2), "cloud": True}
+
+
 def stt(path: str, language: Optional[str] = None, candidates: Optional[list[str]] = None) -> dict:
     if not language and candidates:
         language = pick_language(path, candidates)
+    if (r := _cloud_stt(path, language)) is not None:
+        return r
     transcribe.quick.on = True
     t0 = time.time()
     try:
@@ -280,6 +347,43 @@ def _eleven_speed() -> float:
     return round(min(1.2, max(0.7, settings.elevenlabs_speed or 1.0)), 2)
 
 
+import urllib.request as _ur
+_URLOPEN = _ur.urlopen
+_el_local = threading.local()
+
+
+def _eleven_post(req) -> bytes:
+    """POST to ElevenLabs on a kept-open connection (one per worker thread): no new TLS handshake for every sentence
+    (~150-300 ms each). Errors come back as urllib's HTTPError, like urlopen's."""
+    import http.client
+    import urllib.error
+    if _ur.urlopen is not _URLOPEN:                   # (tests stand in for urlopen)
+        with _ur.urlopen(req, timeout=60) as r:
+            return r.read()
+    u = req.full_url.split("//", 1)[1]
+    host, path = u.split("/", 1)
+    hdrs = dict(req.header_items())
+    for attempt in range(2):
+        conn = getattr(_el_local, "conn", None)
+        if conn is None or getattr(_el_local, "host", "") != host:
+            conn = http.client.HTTPSConnection(host, timeout=60)
+            _el_local.conn, _el_local.host = conn, host
+        try:
+            conn.request("POST", "/" + path, body=req.data, headers=hdrs)
+            resp = conn.getresponse()
+            data = resp.read()
+        except (http.client.HTTPException, OSError):
+            conn.close()
+            _el_local.conn = None
+            if attempt:
+                raise
+            continue                                  # a kept connection the server had closed: a fresh one
+        if resp.status >= 400:
+            raise urllib.error.HTTPError(req.full_url, resp.status, resp.reason, resp.headers, io.BytesIO(data))
+        return data
+    return b""
+
+
 def _eleven(text: str, model: str = "") -> bytes:
     """16 kHz PCM from ElevenLabs, kept on disk (the same sentence is never paid for twice)."""
     import hashlib
@@ -305,8 +409,7 @@ def _eleven(text: str, model: str = "") -> bytes:
             # (a browser-like agent: Python's default one can be turned away by the API's firewall)
             headers={"xi-api-key": settings.elevenlabs_key.strip(), "Content-Type": "application/json",
                      "Accept": "audio/pcm, */*", "User-Agent": "OracleMinutes/1.23 (+https://github.com/jeremiahng11/whisper)"})
-        with urllib.request.urlopen(req, timeout=60) as r:
-            return r.read()
+        return _eleven_post(req)
     try:
         pcm = call(model)
     except urllib.error.HTTPError as e:

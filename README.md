@@ -431,6 +431,18 @@ owners, dates, budgets, terms, and who people are. In the background it reads on
 - **Optional cloud AI for questions** (`LIVE_LLM_API_KEY`, `LIVE_LLM_BASE_URL`, `LIVE_LLM_MODEL`): any
   OpenAI-compatible API answers the watch's and Ask's questions in about a second (streamed). Off unless the key is
   set - the question and the company context sent with it then leave this server. Meetings always stay local.
+- **Faster, more natural questions** (1.36.0, watch W1B-1.9.3):
+  - the watch sends your question **while you talk** (the connection opens as you start; when you stop, only the
+    last quarter second is left to send);
+  - spoken questions are turned into text by **Groq's whisper-large-v3-turbo** (~0.3 s) when LIVE_LLM is Groq (the
+    same key) or CLOUD_STT_API_KEY is set - this server's own Whisper if it fails (and for a minute after).
+    CLOUD_STT=0 keeps it on this server. Meetings always stay on this server;
+  - a search that takes over 1.2 s is covered by "Let me check" (FILLER_AFTER_S, 0 = off);
+  - ElevenLabs is called on a kept-open connection (no new handshake per sentence);
+  - after a "Hey Oracle" answer the watch listens ~5 s for a **follow-up** without "Hey Oracle" (silence: it stops;
+    tap the answer to stop it talking and end the conversation);
+  - **crash reports decoded**: the watch sends its crash as soon as it's back on WiFi, and Watches shows the
+    functions it crashed in (from app/watch_files/firmware/syms, pushed with each firmware).
 - **Live recordings say why they stopped** (1.35.0): "Paused" is now "No signal" (nothing from the watch - out of
   WiFi, it sends the rest when back) or "Catching up" (the watch is still recording but couldn't send; its reason is
   shown). Watch W1B-1.9.2 opens a fresh connection after a failed piece and logs its live state every minute.
