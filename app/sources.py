@@ -14,6 +14,7 @@ import hashlib
 import html
 import io
 import json
+import os
 import logging
 import re
 import threading
@@ -404,15 +405,20 @@ def _brave(query: str, timeout: float) -> list[dict]:
 def web_search(query: str, timeout: float = 25) -> list[dict]:
     """Web results for a query: Tavily / Brave when their key is set (reliable), else Bing's RSS results, else
     DuckDuckGo's HTML page (free, no key): [{"url", "title", "snippet", "date", "source"}]."""
-    for name, key, fn in (("Tavily", settings.tavily_api_key, _tavily), ("Brave", settings.brave_api_key, _brave)):
+    # SEARCH_ORDER (default "brave,tavily"): the first with a key; it fails -> the next, then the free ones
+    known = {"brave": ("Brave", settings.brave_api_key, _brave), "tavily": ("Tavily", settings.tavily_api_key, _tavily)}
+    order = [known[x.strip().lower()] for x in (os.getenv("SEARCH_ORDER") or "brave,tavily").split(",") if x.strip().lower() in known]
+    failed = []
+    for name, key, fn in order:
         if not key:
             continue
         try:
             out = fn(query, timeout)
-            search_status.update(provider=name, error="", at=time.time())
+            search_status.update(provider=name, error="", fell_back="; ".join(failed), at=time.time())
             return out
-        except Exception as e:                       # noqa: BLE001 - the free ones then
-            search_status.update(provider=name, error=f"{name}: {str(e)[:120]}", at=time.time())
+        except Exception as e:                       # noqa: BLE001 - the next one, then the free ones
+            failed.append(f"{name}: {str(e)[:120]}")
+            search_status.update(provider=name, error=failed[-1], fell_back="", at=time.time())
             log.warning("web search %s failed: %s", name, e)
     out = _free_search(query, timeout)
     if not (settings.tavily_api_key or settings.brave_api_key):

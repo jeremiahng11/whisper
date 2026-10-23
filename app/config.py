@@ -58,7 +58,8 @@ class Settings:
     watchai_minutes: float = float(os.getenv("WATCHAI_MINUTES", "120"))  # longest a training run may take
     research_auto: bool = _bool("RESEARCH_AUTO", True)        # research your company's topics on the web by itself
     research_live: bool = _bool("RESEARCH_LIVE", True)        # Ask: a quick web search when nothing is known yet
-    # Web search for questions: TAVILY_API_KEY or BRAVE_API_KEY (free tiers) when set - reliable; else Bing / DuckDuckGo
+    # Web search for questions: BRAVE_API_KEY and/or TAVILY_API_KEY (free tiers) when set - reliable, Brave first
+    # (SEARCH_ORDER=brave,tavily), the other if it fails; else Bing / DuckDuckGo
     # (free, often blocked from servers). A question that needs fresh facts and found nothing: Groq's own search
     # (GROQ_SEARCH_MODEL, on the LIVE_LLM key; ~1-3 s more). GROQ_SEARCH=0 turns that off.
     tavily_api_key: str = os.getenv("TAVILY_API_KEY", "").strip().strip("'\"").strip()

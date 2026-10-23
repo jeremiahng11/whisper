@@ -2854,6 +2854,14 @@ def test_web_search_providers_and_groq_fallback(monkeypatch):
     hits = sources.web_search("best observatory in space", 3)
     assert calls[0].startswith("https://api.tavily.com") and hits[0]["title"] == "Best observatory in space"
     assert sources.search_status["provider"] == "Tavily"
+    # Brave first when both are set; Brave failing -> Tavily
+    monkeypatch.setattr(settings, "brave_api_key", "bk")
+    def brave_down(url, **k):
+        raise _hx.ConnectError("down")
+    monkeypatch.setattr(_hx, "get", brave_down)
+    assert sources.web_search("best observatory in space", 3)[0]["title"] == "Best observatory in space"
+    assert sources.search_status["provider"] == "Tavily" and "Brave" in sources.search_status["fell_back"]
+    monkeypatch.setattr(settings, "brave_api_key", "")
     # nothing found anywhere, a question about now: Groq's own search
     monkeypatch.setattr(settings, "tavily_api_key", "")
     monkeypatch.setattr(sources, "_free_search", lambda q, t: [])

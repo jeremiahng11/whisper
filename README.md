@@ -431,6 +431,8 @@ owners, dates, budgets, terms, and who people are. In the background it reads on
 - **Optional cloud AI for questions** (`LIVE_LLM_API_KEY`, `LIVE_LLM_BASE_URL`, `LIVE_LLM_MODEL`): any
   OpenAI-compatible API answers the watch's and Ask's questions in about a second (streamed). Off unless the key is
   set - the question and the company context sent with it then leave this server. Meetings always stay local.
+- **Brave first, Tavily if it fails** (1.38.3): BRAVE_API_KEY and TAVILY_API_KEY can both be set; SEARCH_ORDER
+  (default `brave,tavily`) picks the order. /api/health "web_search" shows which one answered and any fall-back.
 - **Quicker searches with Tavily/Brave** (1.38.2): their results carry the page's own passage, so the top pages are
   no longer fetched a second time (2-3 s less per search question).
 - **Reliability** (1.38.0, watch W1B-1.9.8):
