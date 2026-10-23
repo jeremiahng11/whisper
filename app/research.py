@@ -308,8 +308,10 @@ def live_context(q: str, limit: int = 2500, plain: bool = False) -> str:
     search = q if plain or not name or knowledge._words(name) & words else f"{name} {q}"   # (plain: about the world)
     t0 = time.time()
     try:
-        hits = sources.web_search(search, 6)[:6]
-        hits += [h for h in sources.news_search(search, 6)[:4] if h["url"] not in {x["url"] for x in hits}]
+        # a question you're waiting for: the search at most 3 s, news only for the company's own (plain = about the world)
+        hits = sources.web_search(search, 3 if plain else 6)[:6]
+        if not plain:
+            hits += [h for h in sources.news_search(search, 6)[:4] if h["url"] not in {x["url"] for x in hits}]
     except Exception as e:                          # noqa: BLE001 - offline, blocked: answer without it
         log.info("live search: %s", e)
         return ""
@@ -322,7 +324,7 @@ def live_context(q: str, limit: int = 2500, plain: bool = False) -> str:
         lines.append(f"- {h['title']} ({h.get('source') or ''}, {h.get('date') or ''}): {h['snippet'][:300]} <{h['url']}>")
     # a search result's few words rarely hold the answer ("how many payment companies are there in Singapore"): the top
     # pages are read too (at the same time, a few seconds at most) and their passages closest to the question kept
-    read = _read_top(kept[:3], words, deadline=4.0) if plain and kept else []
+    read = _read_top(kept[:3], words, deadline=2.5) if plain and kept else []
     try:
         from . import timing
         timing.note("web search", time.time() - t0, f"{len(lines)} results, {len(read)} pages read")

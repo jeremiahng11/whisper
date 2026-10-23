@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.33.3"
+VERSION = "1.34.0"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -1827,20 +1827,56 @@ async def speech_to_text(request: Request, language: Optional[str] = Query(None)
 _SENT_END = re.compile(r"(?<=[.!?])\s+")
 
 
-def _voice_lines(text: str):
-    """The text read out (ElevenLabs' fast model / Piper), as "B <base64>" lines of 16 IMA ADPCM blocks (256 bytes,
-    505 samples each, 16 kHz) - blocks stand on their own, so the watch plays them as they come."""
-    import base64 as _b64
+def _voice_bytes(text: str) -> bytes:
+    """The text read out (ElevenLabs' fast model / Piper) as IMA ADPCM blocks (256 bytes, 505 samples each, 16 kHz) -
+    blocks stand on their own, so the watch plays them as they come. b"" if it couldn't be made."""
     t0 = time.time()
     try:
         data = speech.wav_to_ima_adpcm(speech.tts(text, live=True))[48:]
     except Exception as e:                           # noqa: BLE001 - the text still shows
         log.warning("voice for %r: %s", text[:40], e)
-        return
+        return b""
     from . import timing
     timing.note("voice part", time.time() - t0, f"{len(text)} characters")
+    return data
+
+
+def _b_lines(data: bytes):
+    import base64 as _b64
     for i in range(0, len(data), 4096):
         yield "B " + _b64.b64encode(data[i:i + 4096]).decode() + "\n"
+
+
+def _voice_lines(text: str):
+    yield from _b_lines(_voice_bytes(text))
+
+
+# the sentences' voices are made side by side (ElevenLabs takes a few hundred ms each) and sent in order
+_TTS_POOL = None
+
+
+def _tts_pool():
+    global _TTS_POOL
+    if _TTS_POOL is None:
+        from concurrent.futures import ThreadPoolExecutor
+        _TTS_POOL = ThreadPoolExecutor(3, thread_name_prefix="voice")
+    return _TTS_POOL
+
+
+def _sentences(text: str) -> list[str]:
+    """A spoken answer in sentences, short ones joined to the next (the first comes out on its own: it starts the voice)."""
+    out, cur = [], ""
+    for part in _SENT_END.split(text.strip()):
+        cur = (cur + " " + part).strip()
+        if len(cur) >= 12:
+            out.append(cur)
+            cur = ""
+    if cur:
+        if out:
+            out[-1] += " " + cur
+        else:
+            out.append(cur)
+    return out
 
 
 @app.post("/api/voice", dependencies=[Depends(auth)])
@@ -1920,8 +1956,10 @@ async def voice_question(request: Request, language: Optional[str] = Query(None)
         if "instant" in plan:
             a = plan["instant"]
             yield line("A", {"answer": a})
-            if speak:
-                yield from _voice_lines(a)
+            if speak:                                    # sentence by sentence: the first one starts sooner
+                futs = [_tts_pool().submit(_voice_bytes, s_) for s_ in _sentences(a)]
+                for f in futs:
+                    yield from _b_lines(f.result())
             timing.note("voice trip", time.time() - t0, "without the AI")
             yield line("E", {})
             return
@@ -1934,6 +1972,8 @@ async def voice_question(request: Request, language: Optional[str] = Query(None)
             if extra:
                 system += "\n\n" + extra
         full, pending, shown, first = "", "", "", None
+        from collections import deque
+        futs: deque = deque()                        # voices being made, in the answer's order
         try:
             with chat._sem:
                 for piece in summarize.chat_stream([{"role": "system", "content": system}] + data["messages"]):
@@ -1948,16 +1988,22 @@ async def voice_question(request: Request, language: Optional[str] = Query(None)
                         if first is None:
                             first = time.time() - t0
                         yield line("P", {"text": shown})
-                        if speak:
-                            yield from _voice_lines(sent)
+                        if speak:                    # made while the AI writes on
+                            futs.append(_tts_pool().submit(_voice_bytes, sent))
+                    while futs and futs[0].done():   # the voices ready so far, in order
+                        yield from _b_lines(futs.popleft().result())
         except Exception as e:                       # noqa: BLE001
             yield line("E", {"error": summarize.explain_llm_error(e)[:200]})
             return
         rest = re.sub(r"<think>.*?</think>", "", pending, flags=re.S).strip()
         answer = re.sub(r"<think>.*?</think>", "", full, flags=re.S).strip()
-        yield line("A", {"answer": answer})
         if speak and rest:
-            yield from _voice_lines(rest)
+            futs.append(_tts_pool().submit(_voice_bytes, rest))
+        while futs and futs[0].done():
+            yield from _b_lines(futs.popleft().result())
+        yield line("A", {"answer": answer})
+        while futs:
+            yield from _b_lines(futs.popleft().result())
         timing.note("voice trip", time.time() - t0, f"first sentence at {first or time.time() - t0:.1f}s")
         yield line("E", {})
 

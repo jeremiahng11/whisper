@@ -431,6 +431,9 @@ owners, dates, budgets, terms, and who people are. In the background it reads on
 - **Optional cloud AI for questions** (`LIVE_LLM_API_KEY`, `LIVE_LLM_BASE_URL`, `LIVE_LLM_MODEL`): any
   OpenAI-compatible API answers the watch's and Ask's questions in about a second (streamed). Off unless the key is
   set - the question and the company context sent with it then leave this server. Meetings always stay local.
+- **Voice sooner** (1.34.0): the answer's sentences are voiced side by side while the AI writes on (and an instant
+  answer sentence by sentence), sent to the watch in order - the first sentence's voice no longer waits for the next
+  sentence to be written. The web search for a question takes at most ~3 s (2.5 s to read the top pages).
 - **Questions about the world searched on the web** (1.33.0): a question that isn't about your company (it names
   neither the company, its topics nor its people, and no fact answers it) is searched on the web as asked, at the
   same time as your knowledge is looked through, and the AI (Groq when set up) answers from the results. 1.33.1: every
