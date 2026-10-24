@@ -431,6 +431,11 @@ owners, dates, budgets, terms, and who people are. In the background it reads on
 - **Optional cloud AI for questions** (`LIVE_LLM_API_KEY`, `LIVE_LLM_BASE_URL`, `LIVE_LLM_MODEL`): any
   OpenAI-compatible API answers the watch's and Ask's questions in about a second (streamed). Off unless the key is
   set - the question and the company context sent with it then leave this server. Meetings always stay local.
+- **Choose the voice** (1.41.0, watch W1B-1.11.0): Settings > Voice on the watch - your ElevenLabs voice, or OpenAI's
+  **Cedar** (male) / **Coral** (female) with `OPENAI_API_KEY` (model OPENAI_TTS_MODEL, default gpt-4o-mini-tts; speed
+  OPENAI_TTS_SPEED 1.08; OPENAI_TTS_INSTRUCTIONS for the speaking style). Every answer, the watch's spoken answers and
+  "Let me check" switch to it; with Cedar or Coral the watch doesn't play your MP3s (About, hello...) but has them
+  said in that voice. GET/POST /api/voice/pick.
 - **COMPANY_NAME** (1.40.1): your company's name as it's spelled - the watch's company essentials, web searches about
   it and fixing misheard names use it (unset: the first research topic, as before). The Account page now counts the
   offline answers a watch with room gets (up to 300), as the watch shows them.

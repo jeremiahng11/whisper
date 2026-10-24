@@ -2818,7 +2818,7 @@ def test_first_sentence_voice_streamed(monkeypatch, tmp_path):
         def read(self, n=-1): return b""
 
     class Conn:
-        def __init__(self, host, timeout=0): pass
+        def __init__(self, host, timeout=0): self.host = host
         def request(self, m, path, body=None, headers=None): sent.append(path)
         def getresponse(self): return Resp()
         def close(self): pass
@@ -2982,3 +2982,39 @@ def test_company_name_setting(monkeypatch):
     from app import research
     monkeypatch.setattr(settings, "company_name", "Aleta Planet")
     assert research.company_name() == "Aleta Planet"
+
+
+def test_voice_pick_openai_cedar(client, monkeypatch, tmp_path):
+    import http.client
+    from app import speech
+    monkeypatch.setattr(settings, "openai_api_key", "")
+    monkeypatch.delenv("OPENAI_TTS_API_KEY", raising=False)
+    r = client.post("/api/voice/pick", json={"voice": "cedar"}, headers=H)
+    assert r.status_code == 400 and "OPENAI_API_KEY" in r.text            # no key: can't pick it
+    monkeypatch.setattr(settings, "openai_api_key", "ok")
+    assert client.post("/api/voice/pick", json={"voice": "cedar"}, headers=H).json()["voice"] == "cedar"
+    assert speech.openai_voice() == "cedar" and not speech.eleven_on() and speech.voice_name().startswith("openai:cedar")
+    sent = []
+
+    class Resp:
+        status = 200
+        def __init__(self): self.left = [struct.pack("<h", 2000) * 4800, b""]
+        def read(self, n=-1): return b"".join(self.left) if n == -1 else self.left.pop(0)
+        def read1(self, n): return self.left.pop(0)
+
+    class Conn:
+        host = "api.openai.com"
+        def __init__(self, host, timeout=0): pass
+        def request(self, m, path, body=None, headers=None): sent.append((path, json.loads(body)))
+        def getresponse(self): return Resp()
+        def close(self): pass
+    monkeypatch.setattr(http.client, "HTTPSConnection", Conn)
+    with speech._el_pool_lock:
+        speech._el_pool.clear()
+    pieces = list(speech.tts_stream("A sentence in Cedar's voice."))
+    assert sent[0][0] == "/v1/audio/speech" and sent[0][1]["voice"] == "cedar" and sent[0][1]["response_format"] == "pcm"
+    assert sum(len(p) for p in pieces) == 3200                           # 4800 samples at 24 kHz -> 3200 at 16 kHz
+    wav = speech.tts("A sentence in Cedar's voice.")                      # the same sentence: from the cache
+    assert len(sent) == 1 and len(wav) > 6000
+    assert client.get("/api/voice/pick", headers=H).json()["voice"] == "cedar"
+    client.post("/api/voice/pick", json={"voice": "eleven"}, headers=H)

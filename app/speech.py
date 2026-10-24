@@ -376,12 +376,102 @@ def tts_voices() -> dict:
 tts_error = ""          # why the last ElevenLabs call failed ("" = fine) - shown in /api/health
 
 
+# ---- which voice speaks: chosen on the watch (Settings > Voice) - "eleven" (your ElevenLabs voice), or OpenAI's
+# "cedar" (male) / "coral" (female) with OPENAI_API_KEY. Kept in voice_pick.json (all watches share it).
+OPENAI_VOICES = {"cedar": "male", "coral": "female"}
+OPENAI_TTS_MODEL = os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts").strip() or "gpt-4o-mini-tts"
+OPENAI_TTS_SPEED = float(os.getenv("OPENAI_TTS_SPEED", "1.08") or 1.08)
+OPENAI_TTS_STYLE = os.getenv("OPENAI_TTS_INSTRUCTIONS", "").strip() or (
+    "Speak calmly, clearly and naturally, in a warm, concise personal-assistant style.")
+
+
+def voice_pick() -> str:
+    try:
+        v = json.loads((settings.data_dir / "voice_pick.json").read_text()).get("voice", "")
+    except (OSError, ValueError):
+        v = ""
+    return v if v in OPENAI_VOICES or v == "eleven" else "eleven"
+
+
+def set_voice_pick(v: str) -> str:
+    v = (v or "").strip().lower()
+    if v not in OPENAI_VOICES and v != "eleven":
+        raise ValueError("voice must be eleven, cedar or coral")
+    if v in OPENAI_VOICES and not _openai_key():
+        raise ValueError("cedar and coral need OPENAI_API_KEY on the server")
+    p = settings.data_dir / "voice_pick.json"
+    p.write_text(json.dumps({"voice": v, "at": time.time()}))
+    return v
+
+
+def _openai_key() -> str:
+    return (os.getenv("OPENAI_TTS_API_KEY") or settings.openai_api_key or "").strip().strip("'\"").strip()
+
+
+def openai_voice() -> str:
+    """"cedar" / "coral" when that's the chosen voice (and there's a key), else ""."""
+    v = voice_pick()
+    return v if v in OPENAI_VOICES and _openai_key() and settings.tts_backend != "none" else ""
+
+
 def eleven_on() -> bool:
-    return bool(settings.elevenlabs_key and settings.elevenlabs_voice) and settings.tts_backend != "none"
+    return (bool(settings.elevenlabs_key and settings.elevenlabs_voice) and settings.tts_backend != "none"
+            and not openai_voice())
+
+
+def _openai_body(text: str, fmt: str = "pcm") -> bytes:
+    return json.dumps({"model": OPENAI_TTS_MODEL, "voice": openai_voice(), "input": text, "speed": OPENAI_TTS_SPEED,
+                       "instructions": OPENAI_TTS_STYLE, "response_format": fmt}).encode()
+
+
+def _pcm24_to_16(raw: bytes) -> np.ndarray:
+    """OpenAI's 24 kHz PCM -> 16 kHz (2 of every 3 samples' worth, interpolated)."""
+    a = np.frombuffer(raw[:len(raw) // 2 * 2], dtype="<i2").astype(np.float32)
+    if not len(a):
+        return a.astype("<i2")
+    n = int(len(a) * 2 / 3)
+    return np.interp(np.arange(n) * 1.5, np.arange(len(a)), a).astype("<i2")
+
+
+def _openai_tts(text: str) -> np.ndarray:
+    """16 kHz PCM from OpenAI (kept on disk like ElevenLabs': the same sentence is never paid for twice)."""
+    import hashlib
+    global tts_error
+    d = settings.data_dir / "tts_cache"
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / (hashlib.sha1((voice_name() + "|" + text).encode()).hexdigest() + ".pcm16")
+    if p.exists():
+        os.utime(p)
+        return np.frombuffer(p.read_bytes(), dtype="<i2")
+    hdrs = {"Authorization": f"Bearer {_openai_key()}", "Content-Type": "application/json"}
+    for attempt in range(2):
+        conn = _el_get("api.openai.com")
+        try:
+            conn.request("POST", "/v1/audio/speech", body=_openai_body(text), headers=hdrs)
+            resp = conn.getresponse()
+            data = resp.read()
+        except Exception:                               # noqa: BLE001
+            conn.close()
+            if attempt:
+                raise
+            continue
+        _el_put(conn)
+        if resp.status >= 400:
+            tts_error = f"OpenAI voice HTTP {resp.status}: {data[:200].decode(errors='replace')}"
+            raise RuntimeError(tts_error)
+        tts_error = ""
+        pcm = _pcm24_to_16(data)
+        tmp = p.with_suffix(".tmp")
+        tmp.write_bytes(pcm.tobytes())
+        tmp.replace(p)
+        return pcm
+    return np.zeros(0, dtype="<i2")
 
 
 def voice_name() -> str:
     """Which voice speaks (spoken files made earlier are made again when it changes)."""
+    if openai_voice():
+        return f"openai:{openai_voice()}:{OPENAI_TTS_MODEL}:x{OPENAI_TTS_SPEED:g}"
     if eleven_on():
         sp = _eleven_speed()
         return f"eleven:{settings.elevenlabs_voice}:{settings.elevenlabs_model}" + (f":x{sp:g}" if sp != 1.0 else "")
@@ -402,9 +492,12 @@ _el_pool_lock = threading.Lock()
 def _el_get(host: str = "api.elevenlabs.io"):
     import http.client
     with _el_pool_lock:
-        while _el_pool:
-            c, at = _el_pool.pop()
-            if time.time() - at < 50:                   # (ElevenLabs closes idle ones after about a minute)
+        for i in range(len(_el_pool) - 1, -1, -1):
+            c, at = _el_pool[i]
+            if c.host != host:
+                continue
+            _el_pool.pop(i)
+            if time.time() - at < 50:                   # (idle ones are closed by the far side after about a minute)
                 return c
             c.close()
     return http.client.HTTPSConnection(host, timeout=30)
@@ -412,23 +505,25 @@ def _el_get(host: str = "api.elevenlabs.io"):
 
 def _el_put(conn) -> None:
     with _el_pool_lock:
-        if len(_el_pool) < 4:
+        if len(_el_pool) < 6:
             _el_pool.append((conn, time.time()))
             return
     conn.close()
 
 
 def warm_voice() -> None:
-    """A question is coming: an ElevenLabs connection opened now (TLS done) for its first sentence."""
-    if not eleven_on() or _ur.urlopen is not _URLOPEN:
+    """A question is coming: a connection to the voice (ElevenLabs / OpenAI) opened now (TLS done) for its first
+    sentence."""
+    if not (eleven_on() or openai_voice()) or _ur.urlopen is not _URLOPEN:
         return
+    host = "api.openai.com" if openai_voice() else "api.elevenlabs.io"
     with _el_pool_lock:
-        if any(time.time() - at < 40 for _, at in _el_pool):
+        if any(time.time() - at < 40 and c.host == host for c, at in _el_pool):
             return
 
     def go():
         try:
-            c = _el_get()
+            c = _el_get(host)
             c.connect()
             _el_put(c)
         except Exception:                                # noqa: BLE001 - only a head start
@@ -524,7 +619,7 @@ def _eleven(text: str, model: str = "") -> bytes:
 
 
 def tts_available() -> bool:
-    if eleven_on():
+    if eleven_on() or openai_voice():
         return True
     if settings.tts_backend != "piper":
         return False
@@ -675,6 +770,9 @@ def tts_stream(text: str, chunk_samples: int = 2020):
     if not clean:
         return
     whole = lambda: np.frombuffer(tts(clean, live=True)[44:], dtype="<i2")   # noqa: E731
+    if openai_voice() and _ur.urlopen is _URLOPEN:
+        yield from _openai_stream(clean, whole, chunk_samples)
+        return
     if not eleven_on() or _ur.urlopen is not _URLOPEN:
         yield whole()
         return
@@ -740,13 +838,82 @@ def tts_stream(text: str, chunk_samples: int = 2020):
             pass
 
 
+OPENAI_STREAM_GAIN = 1.8   # OpenAI's voices peak around half of full scale: about as loud() would make them
+
+
+def _openai_stream(clean: str, whole, chunk_samples: int):
+    """OpenAI's voice as it's made (24 kHz PCM, turned into 16 kHz pieces); a sentence made before: from the cache."""
+    import hashlib
+    p = settings.data_dir / "tts_cache" / (hashlib.sha1((voice_name() + "|" + clean).encode()).hexdigest() + ".pcm16")
+    if p.exists():
+        yield whole()
+        return
+    hdrs = {"Authorization": f"Bearer {_openai_key()}", "Content-Type": "application/json"}
+    conn, got, rest = None, [], b""
+    try:
+        for attempt in range(2):
+            conn = _el_get("api.openai.com")
+            try:
+                conn.request("POST", "/v1/audio/speech", body=_openai_body(clean), headers=hdrs)
+                resp = conn.getresponse()
+                break
+            except Exception:                           # noqa: BLE001
+                conn.close()
+                if attempt:
+                    raise
+        if resp.status >= 400:
+            resp.read()
+            raise RuntimeError(f"OpenAI voice HTTP {resp.status}")
+        need = chunk_samples * 3                         # bytes of 24 kHz audio for chunk_samples at 16 kHz
+        while True:
+            b = resp.read1(8192) if hasattr(resp, "read1") else resp.read(8192)
+            if not b:
+                break
+            rest += b
+            if len(rest) >= need:
+                n = len(rest) // 6 * 6                   # whole groups of 3 samples
+                pcm = _pcm24_to_16(rest[:n])
+                got.append(pcm)
+                yield _limit(pcm, OPENAI_STREAM_GAIN)
+                rest = rest[n:]
+    except Exception as e:                               # noqa: BLE001 - nothing yet: the usual way
+        log.warning("OpenAI voice stream failed (%s)", str(e)[:120])
+        if conn is not None:
+            conn.close()
+        if not got:
+            yield whole()
+            return
+        conn = None
+    if conn is not None:
+        _el_put(conn)
+    if len(rest) >= 6:
+        pcm = _pcm24_to_16(rest[:len(rest) // 6 * 6])
+        got.append(pcm)
+        yield _limit(pcm, OPENAI_STREAM_GAIN)
+    if got:
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            tmp = p.with_suffix(".tmp")
+            tmp.write_bytes(np.concatenate(got).astype("<i2").tobytes())
+            tmp.replace(p)
+        except OSError:
+            pass
+
+
 def tts(text: str, lang: str = "en", strict: bool = False, live: bool = False) -> bytes:
     """strict: with ElevenLabs set up, only ElevenLabs (an error instead of Piper) - for files kept on the watch, which
     would otherwise keep Piper's voice for good when ElevenLabs failed once (quota, rate limit, no internet)."""
     text = re.sub(r"[*#`_>\[\]]", "", text or "").strip()[:2000]
     if not text:
         return to_wav16k(np.zeros(1600), 16000)
-    if eleven_on():
+    if openai_voice():
+        try:
+            return to_wav16k(_openai_tts(text), 16000)
+        except Exception as e:                      # noqa: BLE001 - no internet / quota: the next voice says it
+            log.warning("OpenAI voice failed (%s)", e)
+            if strict:
+                raise
+    if eleven_on() or (openai_voice() and settings.elevenlabs_key and settings.elevenlabs_voice):
         try:
             pcm = np.frombuffer(_eleven(text, settings.elevenlabs_model_live if live else ""), dtype="<i2")
             return to_wav16k(pcm, 16000)

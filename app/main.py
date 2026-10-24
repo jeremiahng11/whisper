@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.40.1"
+VERSION = "1.41.0"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -1372,6 +1372,25 @@ def watch_crashes():
     return {"items": rows}
 
 
+@app.get("/api/voice/pick", dependencies=[Depends(auth)])
+def voice_pick_get():
+    """Which voice answers: {"voice": "eleven" | "cedar" | "coral", "choices": [...]} (Settings > Voice on the watch)."""
+    ch = [{"id": "eleven", "name": "ElevenLabs", "ok": bool(settings.elevenlabs_key and settings.elevenlabs_voice)}]
+    ch += [{"id": v, "name": v.capitalize() + f" ({g}, OpenAI)", "ok": bool(speech._openai_key())}
+           for v, g in speech.OPENAI_VOICES.items()]
+    return {"voice": speech.voice_pick(), "speaking": speech.voice_name(), "choices": ch}
+
+
+@app.post("/api/voice/pick", dependencies=[Depends(auth)])
+async def voice_pick_set(request: Request):
+    d = await body_extra(request)
+    try:
+        v = speech.set_voice_pick(str(d.get("voice") or ""))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"voice": v, "speaking": speech.voice_name()}
+
+
 @app.get("/api/watch/weather", dependencies=[Depends(auth)])
 def watch_weather(city: str = Query("")):
     """Today's and tomorrow's weather as spoken sentences, kept on the watch (every 2 hours) so "what's the weather"
@@ -2627,8 +2646,10 @@ def health():
         "cpu_threads": f"{settings.whisper_threads} of {os.cpu_count()} for meetings (the rest for questions)",
         "live_ai": (settings.live_llm_model + " at " + settings.live_llm_base_url.split("//")[-1].split("/")[0])
                    if settings.live_llm_api_key else "",
-        "tts_voice": ("ElevenLabs " + settings.elevenlabs_model) if speech.eleven_on() else
-                     ("Piper " + str(speech.tts_voices().get("en", ""))) if speech.tts_available() else "",
+        "tts_voice": (f"OpenAI {speech.openai_voice()} ({speech.OPENAI_TTS_MODEL})" if speech.openai_voice() else
+                      ("ElevenLabs " + settings.elevenlabs_model) if speech.eleven_on() else
+                      ("Piper " + str(speech.tts_voices().get("en", ""))) if speech.tts_available() else ""),
+        "voice_pick": speech.voice_pick(),
         "jobs": db.counts(),
         "running": worker.current_job,
         "progress": worker.progress_info(),
