@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.42.0"
+VERSION = "1.42.1"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -2637,6 +2637,7 @@ def health():
         "ok": True,
         "version": VERSION,
         "background": background.load()["mode"],
+        "memory": background.memory(),
         "model": settings.whisper_model,
         "model_loaded": transcribe.model_loaded() or settings.transcriber == "fake",
         "summary_backend": settings.summary_backend,

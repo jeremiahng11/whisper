@@ -101,3 +101,51 @@ def summary() -> dict:
     d = load()
     return {"mode": d["mode"], "from": d["from"], "to": d["to"], "running_now": allowed(), "hour": local_hour(),
             "tz": settings.calendar_tz}
+
+
+# ---------------------------------------------------------------- what is using the RAM (/api/health "memory")
+_mem: dict = {"at": 0.0, "d": None}
+
+
+def _meminfo() -> dict:
+    out = {}
+    try:
+        for ln in open("/proc/meminfo"):
+            k, v = ln.split(":", 1)
+            out[k] = int(v.split()[0]) * 1024
+    except (OSError, ValueError):
+        pass
+    return out
+
+
+def _rss() -> int:
+    try:
+        for ln in open("/proc/self/status"):
+            if ln.startswith("VmRSS:"):
+                return int(ln.split()[1]) * 1024
+    except (OSError, ValueError):
+        pass
+    return 0
+
+
+def memory() -> dict:
+    """The machine's RAM, this server's share, and the AI models Ollama holds right now (cached 30 s)."""
+    if _mem["d"] is not None and time.time() - _mem["at"] < 30:
+        return _mem["d"]
+    from . import transcribe
+    gb = lambda n: round(n / 2**30, 1)                     # noqa: E731
+    mi = _meminfo()
+    tot, avail = mi.get("MemTotal", 0), mi.get("MemAvailable", 0)
+    d = {"total_gb": gb(tot), "available_gb": gb(avail),
+         "used_pct": round(100 * (tot - avail) / tot) if tot else None,
+         "oracle_minutes_gb": gb(_rss()), "speech_models": transcribe.models_in_ram(), "ollama": []}
+    if settings.summary_backend.lower() == "ollama" or settings.rag:
+        try:
+            import httpx
+            r = httpx.get(f"{settings.ollama_url}/api/ps", timeout=2)
+            d["ollama"] = [{"model": m.get("name"), "gb": gb(m.get("size") or 0),
+                            "until": m.get("expires_at", "")[:19]} for m in r.json().get("models", [])]
+        except Exception:                                  # noqa: BLE001 - Ollama not there / not reachable
+            d["ollama"] = None
+    _mem.update(at=time.time(), d=d)
+    return d

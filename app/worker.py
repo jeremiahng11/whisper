@@ -412,6 +412,10 @@ def _loop() -> None:
         if not job:
             if live_pass():
                 continue
+            try:                                     # nothing to do for a while: the speech models out of RAM
+                transcribe.unload_idle(settings.whisper_unload_min)
+            except Exception as e:                   # noqa: BLE001
+                log.warning("unloading models: %s", e)
             _wake.wait(5)
             _wake.clear()
             continue

@@ -8,6 +8,7 @@ import os
 import logging
 import struct
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
@@ -189,6 +190,13 @@ def fix_wav_header(path: str) -> None:
 # ---------------------------------------------------------------- whisper model (loaded once, kept in RAM)
 _model = None
 _model_lock = threading.Lock()
+_used = 0.0                                          # last time a speech / voice model was asked for
+_parked = False                                      # loaded once, let go after being unused (it loads again on use)
+
+
+def _touch() -> None:
+    global _used
+    _used = time.time()
 
 
 def _device_and_compute() -> tuple[str, str]:
@@ -207,6 +215,7 @@ def _device_and_compute() -> tuple[str, str]:
 
 def get_model():
     global _model
+    _touch()
     with _model_lock:
         if _model is None:
             from faster_whisper import WhisperModel
@@ -231,6 +240,7 @@ def get_quick_model(language: Optional[str] = None):
     spoken questions - quicker, and it doesn't wait for a meeting being transcribed with the main model. An English-only
     model (".en") is used for English; other languages get the main model. "" = the main model."""
     global _quick_model
+    _touch()
     if not settings.stt_model or settings.stt_model == settings.whisper_model:
         return get_model()
     lang = language or settings.default_language or "en"
@@ -264,7 +274,44 @@ def quick_model_status() -> str:
 
 
 def model_loaded() -> bool:
-    return _model is not None
+    return _model is not None or _parked
+
+
+def models_in_ram() -> list[str]:
+    return [n for n, m in (("whisper", _model), ("quick whisper", _quick_model if _quick_model != "main" else None),
+                           ("speakers", _diar), ("voice prints", _embedder)) if m is not None]
+
+
+def unload_idle(minutes: float) -> list[str]:
+    """Let the speech models go after `minutes` unused (WHISPER_UNLOAD_MIN): ~2-4 GB of RAM back. The next meeting
+    loads them again (~10-20 s). A job still using one keeps its own reference, so this never breaks a running one."""
+    global _model, _quick_model, _diar, _embedder, _parked
+    if minutes <= 0 or not _used or time.time() - _used < minutes * 60:
+        return []
+    with _model_lock:
+        gone = models_in_ram()
+        if not gone:
+            return []
+        _parked = _parked or _model is not None
+        _model = None
+        _quick_model = None if _quick_model != "main" else "main"
+        _diar = None
+        _embedder = None
+    import gc
+    gc.collect()
+    try:                                              # hand the freed memory back to the system (glibc keeps it)
+        import ctypes
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except Exception:                                 # noqa: BLE001 - not glibc
+        pass
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:                                 # noqa: BLE001
+        pass
+    log.info("unused for %d min: let go of %s (they load again when needed)", minutes, ", ".join(gone))
+    return gone
 
 
 quick = threading.local()                           # quick.on: a short spoken question (/api/stt) - speed first
@@ -524,6 +571,7 @@ def _get_embedder():
     """The speaker-embedding model the diarizer uses (same "voice print" space as its speaker embeddings).
     pyannote 3.x pipelines carry it as ._embedding; otherwise load the model itself."""
     global _embedder
+    _touch()
     if _embedder is not None:
         return _embedder
     import torch
@@ -614,6 +662,7 @@ def lib_versions() -> str:
 
 def _get_diarizer():
     global _diar
+    _touch()
     if _diar is None:
         if not settings.hf_token:
             raise RuntimeError("DIARIZE=1 needs HF_TOKEN (and accepting the pyannote model terms on huggingface.co)")

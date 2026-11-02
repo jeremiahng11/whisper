@@ -28,6 +28,8 @@ class Settings:
     # --- transcription ---
     transcriber: str = os.getenv("TRANSCRIBER", "faster-whisper")   # "fake" is only for tests
     whisper_model: str = os.getenv("WHISPER_MODEL", "large-v3-turbo")
+    whisper_unload_min: float = float(os.getenv("WHISPER_UNLOAD_MIN", "30"))   # let the speech models go when unused (0 = keep)
+    ollama_keep: str = os.getenv("OLLAMA_KEEP_ALIVE", "15m")   # how long Ollama keeps the quick model in RAM after use
     whisper_device: str = os.getenv("WHISPER_DEVICE", "auto")       # auto | cpu | cuda
     whisper_compute: str = os.getenv("WHISPER_COMPUTE", "auto")     # auto -> int8 on CPU, float16 on GPU
     # meetings into text / speaker separation: how many CPU threads (0 = all but 4, so questions and the web page stay

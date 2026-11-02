@@ -3039,3 +3039,14 @@ def test_background_modes(client, monkeypatch):
     assert client.put("/api/background", headers=H, json={"mode": "loud"}).status_code == 400
     assert client.get("/api/health").json()["background"] == "night"
     client.put("/api/background", headers=H, json={"mode": "on"})
+
+
+def test_memory_and_unload(client, monkeypatch):
+    from app import transcribe
+    m = client.get("/api/health").json()["memory"]
+    assert "used_pct" in m and "speech_models" in m
+    transcribe._model, transcribe._used = object(), 1.0          # pretend: loaded, unused for a long time
+    assert transcribe.unload_idle(30) == ["whisper"]
+    assert transcribe._model is None and transcribe.model_loaded()   # "parked": the page doesn't say "starting"
+    assert transcribe.unload_idle(30) == []
+    transcribe._parked = False

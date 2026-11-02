@@ -424,7 +424,7 @@ def _ollama_chat(messages: list[dict], retry: bool = True, model: str = "", ctx:
         "options": {"num_ctx": ctx or settings.ollama_num_ctx, "temperature": 0.2},
     }
     if model == settings.ollama_model_fast and model != settings.ollama_model:
-        body["keep_alive"] = "24h"                # the quick model stays loaded: no load time before an answer
+        body["keep_alive"] = settings.ollama_keep  # the quick model stays loaded a while (was 24h: ~3 GB all day)
     if any(k in model.lower() for k in ("qwen3", "deepseek-r1", "gpt-oss")):
         body["think"] = False                     # reasoning models: answer straight away (much faster)
         if "qwen3" in model.lower() and messages:  # older Ollama ignores "think": qwen3's own switch
@@ -705,7 +705,7 @@ def chat_stream(messages: list[dict]):
             "options": {"num_ctx": settings.ollama_fast_ctx if m == settings.ollama_model_fast else settings.ollama_num_ctx,
                         "temperature": 0.2}}
     if m == settings.ollama_model_fast and m != settings.ollama_model:
-        body["keep_alive"] = "24h"
+        body["keep_alive"] = settings.ollama_keep
     if any(k in m.lower() for k in ("qwen3", "deepseek-r1", "gpt-oss")):
         body["think"] = False
         if "qwen3" in m.lower():
