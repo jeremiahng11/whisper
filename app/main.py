@@ -15,12 +15,12 @@ from typing import Optional
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse, FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
 
-from . import agenda, autotag, chat, db, devices, dynamics, knowledge, login, sources, watchlm, watchpack, people, rag, research, vocab, redact, render, search, speech, summarize, terms, transcribe, voices, wakeword, worker
+from . import agenda, autotag, background, chat, db, devices, dynamics, knowledge, login, sources, watchlm, watchpack, people, rag, research, vocab, redact, render, search, speech, summarize, terms, transcribe, voices, wakeword, worker
 from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.41.0"
+VERSION = "1.42.0"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -1190,6 +1190,26 @@ def refresh_source(sid: str):
         raise HTTPException(404, "no such source")
     _learn_source_bg(sid, True)
     return {"started": summarize.enabled()}
+
+
+# ---------------------------------------------------------------- background work: on / night / off (background.py)
+@app.get("/api/background", dependencies=[Depends(auth)])
+def background_state():
+    from . import background
+    return background.summary()
+
+
+@app.put("/api/background", dependencies=[Depends(auth)])
+async def background_set(request: Request):
+    """{"mode": "on" | "night" | "off", "from": 1, "to": 7} - everything the server does by itself (learning,
+    research, watch AI training, voices, profiles, search by meaning): always, only in the quiet hours, or never.
+    Meetings you upload, the watch's questions and the buttons still work at once."""
+    from . import background
+    d = await body_extra(request)
+    try:
+        return background.set_mode(str(d.get("mode", "")).lower(), d.get("from"), d.get("to"))
+    except (ValueError, TypeError) as e:
+        raise HTTPException(400, str(e))
 
 
 # ---------------------------------------------------------------- research on its own (research.py)
@@ -2616,6 +2636,7 @@ def health():
     return {
         "ok": True,
         "version": VERSION,
+        "background": background.load()["mode"],
         "model": settings.whisper_model,
         "model_loaded": transcribe.model_loaded() or settings.transcriber == "fake",
         "summary_backend": settings.summary_backend,

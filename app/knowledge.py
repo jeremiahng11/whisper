@@ -709,7 +709,11 @@ def set_auto_learning(on: bool) -> None:
 def _sweep() -> None:
     time.sleep(180)
     last_rag = last_rebuild = 0.0
+    from . import background
     while True:
+        if not background.allowed():                # Account > Background work: off, or not the quiet hours yet
+            time.sleep(60)
+            continue
         try:                                        # the watch's questions about people / your last meetings / your
             if time.time() - last_rebuild > 3 * 3600:   # tasks: kept fresh (they're made from the latest meetings)
                 last_rebuild = time.time()

@@ -626,9 +626,12 @@ _cleaned: dict[str, float] = {}
 
 
 def _sweep() -> None:
-    from . import autotag
+    from . import autotag, background
     time.sleep(90)
     while True:
+        if not background.allowed():                        # Account > Background work
+            time.sleep(60)
+            continue
         try:
             if worker.current_job is None and db.next_queued() is None and not autotag._running:
                 for j in db.list_jobs(200, "done"):         # meetings whose names changed: more voice samples

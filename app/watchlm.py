@@ -232,10 +232,12 @@ def stop() -> None:
 
 
 def nightly(facts: list[dict]) -> bool:
-    """Called by the knowledge sweep: between 02:00 and 05:00 server time, train again if the facts changed since
-    the last model (WATCHAI_NIGHTLY=0 turns it off). True if it started."""
+    """Called by the knowledge sweep: between 02:00 and 05:00 your time (CALENDAR_TZ - the container's clock is
+    often UTC, which made it train in the early afternoon), train again if the facts changed since the last model
+    (WATCHAI_NIGHTLY=0 turns it off). True if it started."""
+    from .background import local_hour
     facts = watch_facts(facts)
-    if not settings.watchai_nightly or not 2 <= time.localtime().tm_hour < 5 or len(facts) < 5:
+    if not settings.watchai_nightly or not 2 <= local_hour() < 5 or len(facts) < 5:
         return False
     st = state()
     if st["training"]:

@@ -498,6 +498,17 @@ ul.replies{margin:4px 0;padding-left:20px;font-size:13.5px}
         <div class="row" style="margin-top:10px"><button class="ghost" id="pkAdd">Add this device</button><button class="danger" id="logout">Sign out</button><span class="mute" id="pkMsg"></span></div>
       </div>
       <div class="block">
+        <div class="sub2">Background work</div>
+        <p class="mute" style="margin:0 0 8px">What the server does by itself when nobody asked: learning facts from meetings, researching on the web, training the watch AI, recognising voices again, updating people's profiles and the AI read of meetings, search by meaning. It can make the fan spin. Your meetings, the watch's questions and the buttons still work at once whatever you pick.</p>
+        <div class="row" style="gap:14px">
+          <label><input type="radio" name="bgMode" value="on"> Always</label>
+          <label><input type="radio" name="bgMode" value="night"> Only at night,
+            <select id="bgFrom"></select> to <select id="bgTo"></select></label>
+          <label><input type="radio" name="bgMode" value="off"> Off</label>
+          <span class="mute" id="bgMsg"></span>
+        </div>
+      </div>
+      <div class="block">
         <div class="sub2">Watch wake word</div>
         <p class="mute" style="margin:0 0 8px">What the Idea Saver Round listens for. It checks for a new set every few hours (or Settings &gt; Hey Oracle on the watch). Train one with <code>training/wakeword/run.sh</code>, then upload <code>oracle_wakeword.zip</code> here.</p>
         <div id="wwNow" class="mute">…</div>
@@ -1462,6 +1473,28 @@ $("#wwReset").onclick = async () => {
   if (!confirm("Go back to the starter wake word on the watch?")) return;
   await api("/api/wakeword", { method: "DELETE" }); loadWake();
 };
+// ---------------------------------------------------------------- Background work: always / only at night / off
+for (const id of ["#bgFrom", "#bgTo"]) $(id).innerHTML = [...Array(24).keys()].map(h => `<option value="${h}">${String(h).padStart(2, "0")}:00</option>`).join("");
+function showBg(b) {
+  for (const r of document.querySelectorAll('input[name="bgMode"]')) r.checked = r.value === b.mode;
+  $("#bgFrom").value = b.from; $("#bgTo").value = b.to;
+  $("#bgMsg").textContent = b.mode === "off" ? "Off - nothing runs by itself." :
+    b.mode === "night" ? (b.running_now ? "Quiet hours now - working." : "Waiting for the quiet hours (" + b.tz + ").") : "";
+}
+async function loadBg() {
+  try { showBg(await (await api("/api/background")).json()); } catch (e) { $("#bgMsg").textContent = ""; }
+}
+async function saveBg() {
+  const r = document.querySelector('input[name="bgMode"]:checked');
+  if (!r) return;
+  try {
+    showBg(await (await api("/api/background", { method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: r.value, from: +$("#bgFrom").value, to: +$("#bgTo").value }) })).json());
+  } catch (e) { $("#bgMsg").textContent = "Couldn't save - try again"; loadBg(); }
+}
+for (const r of document.querySelectorAll('input[name="bgMode"]')) r.onchange = saveBg;
+$("#bgFrom").onchange = $("#bgTo").onchange = () => { const r = document.querySelector('input[name="bgMode"][value="night"]'); r.checked = true; saveBg(); };
+
 // ---------------------------------------------------------------- Watch AI: knowledge base, answer pack, model
 let kbTimer = null;
 async function loadKb() {
@@ -1709,7 +1742,7 @@ $("#wmFile").onclick = async (e) => {
 $("#logout").onclick = async () => { await fetch("/api/logout", { method: "POST" }); location.href = "/login"; };
 (async () => {
   try { SESSION = await (await fetch("/api/session")).json(); } catch (e) {}
-  loadAccount(); loadWake(); loadKb(); loadSources(); loadGlossary(); loadVoices(); load(); loadDevices();
+  loadAccount(); loadBg(); loadWake(); loadKb(); loadSources(); loadGlossary(); loadVoices(); load(); loadDevices();
 })();
 $("#refresh").onclick = load;
 

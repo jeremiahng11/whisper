@@ -823,9 +823,12 @@ def _sweep() -> None:
         relearn()                                          # voices lost on an old redeploy: back from your tags
     except Exception as e:                                 # noqa: BLE001
         log.warning("re-learning voices: %s", e)
+    from . import background
     while True:
         time.sleep(60)
         try:
+            if not background.allowed():                    # Account > Background work
+                continue
             if w.current_job is not None or db.next_queued() is not None or _running:
                 continue
             redo = next((j for j in db.list_jobs(200, "done") if needs_speakers(j)), None)

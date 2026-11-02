@@ -3018,3 +3018,24 @@ def test_voice_pick_openai_cedar(client, monkeypatch, tmp_path):
     assert len(sent) == 1 and len(wav) > 6000
     assert client.get("/api/voice/pick", headers=H).json()["voice"] == "cedar"
     client.post("/api/voice/pick", json={"voice": "eleven"}, headers=H)
+
+
+def test_background_modes(client, monkeypatch):
+    from app import background
+    r = client.get("/api/background", headers=H)
+    assert r.status_code == 200 and r.json()["mode"] == "on"
+    assert background.allowed()
+    r = client.put("/api/background", headers=H, json={"mode": "off"})
+    assert r.json()["mode"] == "off" and not background.allowed()
+    monkeypatch.setattr(background, "local_hour", lambda: 3)
+    r = client.put("/api/background", headers=H, json={"mode": "night", "from": 1, "to": 7})
+    assert r.json()["running_now"] is True and background.allowed()
+    monkeypatch.setattr(background, "local_hour", lambda: 14)
+    background._cache["at"] = 0
+    assert not background.allowed()
+    monkeypatch.setattr(background, "local_hour", lambda: 23)
+    client.put("/api/background", headers=H, json={"mode": "night", "from": 22, "to": 6})
+    assert background.allowed()                         # a window across midnight
+    assert client.put("/api/background", headers=H, json={"mode": "loud"}).status_code == 400
+    assert client.get("/api/health").json()["background"] == "night"
+    client.put("/api/background", headers=H, json={"mode": "on"})
