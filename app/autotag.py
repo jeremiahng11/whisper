@@ -829,7 +829,7 @@ def _sweep() -> None:
         try:
             if not background.allowed():                    # Account > Background work
                 continue
-            if w.current_job is not None or db.next_queued() is not None or _running:
+            if w.busy() or db.next_queued() is not None or _running:
                 continue
             redo = next((j for j in db.list_jobs(200, "done") if needs_speakers(j)), None)
             if redo:                                        # speaker separation failed when it was transcribed

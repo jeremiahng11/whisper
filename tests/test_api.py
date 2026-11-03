@@ -3050,3 +3050,13 @@ def test_memory_and_unload(client, monkeypatch):
     assert transcribe._model is None and transcribe.model_loaded()   # "parked": the page doesn't say "starting"
     assert transcribe.unload_idle(30) == []
     transcribe._parked = False
+
+
+def test_live_and_file_at_once():
+    from app import worker
+    worker.current_job, worker.live_job = None, "live:abc"
+    assert worker.busy() and worker.progress_info()["kind"] == "live"
+    worker.current_job = "job1"                                 # a file being processed too: both run
+    assert worker.progress_info()["kind"] == "job"
+    worker.current_job = worker.live_job = None
+    assert not worker.busy()

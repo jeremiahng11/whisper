@@ -17,7 +17,10 @@ log = logging.getLogger("worker")
 _wake = threading.Event()
 _stop = threading.Event()
 _thread: threading.Thread | None = None
-current_job: str | None = None
+current_job: str | None = None    # the uploaded / finished meeting being processed
+live_job: str | None = None       # "live:<id>": a recording still coming in, being transcribed (its own thread)
+_live_wake = threading.Event()
+_live_thread: threading.Thread | None = None
 live_info: dict = {}                # the live recording being transcribed now: {"rid", "until", "received"}
 
 
@@ -43,7 +46,7 @@ def wav_seconds(path) -> float:
 
 def progress_info() -> dict | None:
     """What the transcriber is doing right now, with a percentage (for the web page header)."""
-    cj = current_job
+    cj = current_job or live_job                  # (both at once: the meeting; the live one shows under Live)
     if not cj:
         return None
     if cj.startswith("live:"):
@@ -60,6 +63,12 @@ def progress_info() -> dict | None:
 
 def wake() -> None:
     _wake.set()
+    _live_wake.set()
+
+
+def busy() -> bool:
+    """Transcribing something right now (a meeting, or a live recording): background work waits."""
+    return current_job is not None or live_job is not None
 
 
 def result_dir(jid: str) -> Path:
@@ -280,8 +289,8 @@ def live_pass() -> bool:
             state = json.loads(st_path.read_text())
         except ValueError:
             state = {}
-        global current_job
-        current_job = f"live:{rid}"
+        global live_job
+        live_job = f"live:{rid}"
         live_info.clear()
         live_info.update(rid=rid, until=float(state.get("until", 0)), received=wav_seconds(part))
         n0 = len(state.get("segments") or [])
@@ -298,7 +307,7 @@ def live_pass() -> bool:
                 except Exception as e:               # noqa: BLE001 - only the live labels are lost
                     log.warning("live speakers for %s failed: %s", rid, e)
         finally:
-            current_job = None
+            live_job = None
         with live_lock:
             if did and st_path.exists():            # it may have been completed meanwhile
                 tmp = st_path.with_suffix(".tmp")
@@ -345,7 +354,7 @@ def live_now() -> list[dict]:
             "held_up": held, "held_reason": (beat.get("why") or "") if held else "",
             "watch_seen_s_ago": round(min(age, beat_age), 1),
             "transcribed_s": float(state.get("until", 0)), "language": state.get("language", ""),
-            "transcribing": current_job == f"live:{rid}",
+            "transcribing": live_job == f"live:{rid}",
             "segments": [{"start": round(s.get("start", 0), 1), "text": (s.get("text") or "").strip(),
                           "speaker": names.get(s.get("speaker") or "", s.get("speaker") or "")} for s in segs[-300:]],
             "seg_from": max(0, len(segs) - 300),
@@ -410,7 +419,7 @@ def _loop() -> None:
                 log.warning("cleanup failed: %s", e)
         job = db.next_queued()
         if not job:
-            if live_pass():
+            if not settings.live_parallel and live_pass():
                 continue
             try:                                     # nothing to do for a while: the speech models out of RAM
                 transcribe.unload_idle(settings.whisper_unload_min)
@@ -431,17 +440,35 @@ def _loop() -> None:
             current_job = None
 
 
+def _live_loop() -> None:
+    """Live recordings on their own thread (LIVE_PARALLEL=1, the default): a meeting coming in from the watch keeps
+    being transcribed while an uploaded file is being processed - before, it waited until that whole file (its
+    transcript, speakers, minutes) was done. The speech model takes two at once (WHISPER_WORKERS=2)."""
+    while not _stop.is_set():
+        try:
+            if live_pass():
+                continue
+        except Exception as e:                       # noqa: BLE001 - keep the thread alive
+            log.warning("live: %s", e)
+        _live_wake.wait(3)
+        _live_wake.clear()
+
+
 def start() -> None:
-    global _thread
+    global _thread, _live_thread
     if _thread is None or not _thread.is_alive():
         _stop.clear()
         _thread = threading.Thread(target=_loop, name="worker", daemon=True)
         _thread.start()
+    if settings.live_parallel and (_live_thread is None or not _live_thread.is_alive()):
+        _live_thread = threading.Thread(target=_live_loop, name="live", daemon=True)
+        _live_thread.start()
 
 
 def stop() -> None:
     _stop.set()
     _wake.set()
+    _live_wake.set()
 
 
 _REACH = ("ollama", "name or service", "refused", "timed out", "timeout", "connect", "unreachable", "502", "503")

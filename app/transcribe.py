@@ -226,6 +226,7 @@ def get_model():
                 device=device,
                 compute_type=compute,
                 cpu_threads=settings.whisper_threads,
+                num_workers=max(1, settings.whisper_workers),   # a live recording + a file at the same time
                 download_root=str(settings.model_dir),
             )
             log.info("whisper model ready")

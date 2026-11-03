@@ -633,7 +633,7 @@ def _sweep() -> None:
             time.sleep(60)
             continue
         try:
-            if worker.current_job is None and db.next_queued() is None and not autotag._running:
+            if not worker.busy() and db.next_queued() is None and not autotag._running:
                 for j in db.list_jobs(200, "done"):         # meetings whose names changed: more voice samples
                     o = j.get("options") or {}
                     sig = json.dumps([2, o.get("speaker_names") or {}, len(o.get("manual_lines") or {})], sort_keys=True)

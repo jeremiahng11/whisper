@@ -28,6 +28,8 @@ class Settings:
     # --- transcription ---
     transcriber: str = os.getenv("TRANSCRIBER", "faster-whisper")   # "fake" is only for tests
     whisper_model: str = os.getenv("WHISPER_MODEL", "large-v3-turbo")
+    live_parallel: bool = _bool("LIVE_PARALLEL", True)     # live recordings transcribed while a file is processed
+    whisper_workers: int = _int("WHISPER_WORKERS", 2)      # transcriptions the speech model runs at the same time
     whisper_unload_min: float = float(os.getenv("WHISPER_UNLOAD_MIN", "30"))   # let the speech models go when unused (0 = keep)
     ollama_keep: str = os.getenv("OLLAMA_KEEP_ALIVE", "15m")   # how long Ollama keeps the quick model in RAM after use
     whisper_device: str = os.getenv("WHISPER_DEVICE", "auto")       # auto | cpu | cuda
