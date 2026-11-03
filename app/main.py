@@ -1912,6 +1912,10 @@ async def put_glossary(request: Request):
 
 @app.get("/api/search", dependencies=[Depends(auth)])
 def search_meetings(q: str = Query(..., min_length=2), limit: int = Query(20, le=50)):
+    """Search your meetings (not the web): the words in q across every transcript and its minutes, best matches
+    first, at most 4 per meeting. On this server only (SQLite full-text index) - milliseconds, no Brave / Tavily.
+    -> {"hits": [{"job_id", "recording_id", "title", "date", "start" (seconds, -1 = in the minutes), "speaker",
+    "text"}]}. Example: /api/search?q=budget%20Q4&limit=10"""
     return {"hits": search.search(q, limit)}
 
 

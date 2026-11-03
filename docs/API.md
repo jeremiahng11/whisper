@@ -101,6 +101,11 @@ read of how the meeting ran (background; poll GET .../dynamics).
 
 ### `GET /api/search` 🔒
 
+Search your meetings (not the web): the words in q across every transcript and its minutes, best matches
+first, at most 4 per meeting. On this server only (SQLite full-text index) - milliseconds, no Brave / Tavily.
+-> {"hits": [{"job_id", "recording_id", "title", "date", "start" (seconds, -1 = in the minutes), "speaker",
+"text"}]}. Example: /api/search?q=budget%20Q4&limit=10
+
 Query: `q`, `limit` = 20
 
 ### `GET /api/templates`
