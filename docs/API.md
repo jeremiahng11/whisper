@@ -115,6 +115,15 @@ How many bytes the server already has -> continue the upload from there.
 
 Append the request body at byte X-Offset. Wrong offset -> 409 with the size the server has.
 
+Live (a meeting transcribed while it is still being recorded): send the pieces with header X-Live: 1. The first
+piece starts with a WAV header (16 kHz mono: PCM 16-bit, IMA ADPCM, or the watch's Opus), then keep appending
+audio as it is recorded (any size; the watch sends 4-32 KB every few seconds). The server transcribes each new
+part as it arrives (GET /api/live shows the transcript so far) and every reply carries "brief": the last line
+heard, who said it, who has talked. Nothing new to send (silence skipped)? Send an empty body at the same offset
+with X-Live-State (e.g. "quiet", "held up") and optional X-Live-Why, so the page doesn't show "Paused". When the
+recording stops: POST /api/uploads/{rid}/complete - the parts already transcribed are kept, so the minutes come
+fast. ?language=en fixes the language for the live transcript.
+
 Query: `language` = None
 
 ### `POST /api/uploads/{rid}/complete` 🔒
