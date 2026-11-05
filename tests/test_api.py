@@ -3060,3 +3060,13 @@ def test_live_and_file_at_once():
     assert worker.progress_info()["kind"] == "job"
     worker.current_job = worker.live_job = None
     assert not worker.busy()
+
+
+def test_live_never_restarted_by_offset_zero(client):
+    rid = "w1b-test-live0"
+    r = client.put(f"/api/uploads/{rid}", headers={**H, "X-Offset": "0", "X-Live": "1"}, content=b"RIFF" + b"\0" * 2000)
+    assert r.status_code == 200 and r.json()["received"] == 2004
+    r = client.put(f"/api/uploads/{rid}", headers={**H, "X-Offset": "0", "X-Live": "1", "X-Live-State": "held up"}, content=b"")
+    assert r.status_code == 409 and r.json()["received"] == 2004          # kept, not thrown away
+    r = client.get(f"/api/uploads/{rid}", headers=H)
+    assert r.json()["received"] == 2004

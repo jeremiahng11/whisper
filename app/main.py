@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.43.0"
+VERSION = "1.43.1"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -318,7 +318,11 @@ async def upload_chunk(rid: str, request: Request, x_offset: int = Header(0), x_
         return {"recording_id": rid, "received": None, "job": job_out(j)}
     p = part_path(rid)
     have = p.stat().st_size if p.exists() else 0
-    if x_offset == 0 and have:                      # client restarts from scratch
+    # a client starting again from scratch (a whole file sent again) - but never a live recording, and never an empty
+    # request: a watch's "still recording" note at offset 0, after its first piece broke part-way, threw away what had
+    # arrived (and with it the live transcript) - the watch then deletes the parts the server said it had
+    live = x_live == "1" or worker.live_state_path(rid).exists()
+    if x_offset == 0 and have and not live and int(request.headers.get("content-length") or 1) > 0:
         p.unlink()
         worker.live_state_path(rid).unlink(missing_ok=True)
         have = 0
