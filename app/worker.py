@@ -125,11 +125,12 @@ def build_outputs(jid: str) -> None:
     raw = load_json(jid, "actions_raw.json")
     if raw is not None:
         at = opts.get("names_at_summary")
-        acts = [{**a, "owner": render.rename_text(a.get("owner", ""), names, at),
-                 "task": terms.apply_corrections(render.rename_text(a.get("task", ""), names, at), fixes)} for a in raw]
+        mn = render.names_for_minutes(job)
+        acts = [{**a, "owner": render.rename_text(a.get("owner", ""), mn, at),
+                 "task": terms.apply_corrections(render.rename_text(a.get("task", ""), mn, at), fixes)} for a in raw]
         _write(jid, "actions.json", json.dumps(acts, ensure_ascii=False, indent=1))
     try:
-        summary = render.rename_text(load_summary(jid) or "", names, opts.get("names_at_summary"))
+        summary = render.rename_text(load_summary(jid) or "", render.names_for_minutes(job), opts.get("names_at_summary"))
         search.index(jid, f"{job.get('title', '')}\n{summary}", render.paragraphs(named.get("segments", [])))
     except Exception as e:
         log.warning("search index failed for %s: %s", jid, e)
@@ -160,6 +161,41 @@ def refresh_terms_everywhere() -> int:
                 log.warning("names & terms for %s: %s", j["id"], e)
     threading.Thread(target=run, daemon=True).start()
     return len(jobs)
+
+
+# ---------------------------------------------------------------- minutes follow your tags
+# Naming a speaker updates the minutes at once (the names are swapped in). Saying who really said a line - or two
+# speakers becoming one - changes who said what, which only writing the minutes again gets right: that happens by
+# itself 2 minutes after your last such change (more tags in the meantime wait with it). AUTO_REWRITE_MINUTES=0: off.
+_rewrite_due: dict[str, float] = {}
+_rewrite_lock = threading.Lock()
+
+
+def rewrite_soon(jid: str, after: float = 120) -> float:
+    if not settings.auto_rewrite_minutes or not summarize.enabled():
+        return 0
+    with _rewrite_lock:
+        _rewrite_due[jid] = time.time() + after
+    return _rewrite_due[jid]
+
+
+def rewrite_due(jid: str) -> float:
+    return _rewrite_due.get(jid, 0)
+
+
+def _rewrite_tick() -> None:
+    now = time.time()
+    with _rewrite_lock:
+        due = [j for j, t in _rewrite_due.items() if t <= now]
+        for j in due:
+            _rewrite_due.pop(j, None)
+    for jid in due:
+        job = db.get(jid)
+        if not job or job["status"] != "done":
+            continue
+        log.info("minutes for %s written again (who said what changed)", jid)
+        opts = dict(job["options"], summarize=True, resummarize=True)
+        db.update(jid, status="queued", stage="minutes: updating for your tags", progress=0, options=opts)
 
 
 def run_summary(jid: str) -> None:
@@ -411,6 +447,10 @@ def _loop() -> None:
             log.error("could not load whisper model: %s", e)
     last_cleanup = 0.0
     while not _stop.is_set():
+        try:
+            _rewrite_tick()                          # minutes to write again after your tags
+        except Exception as e:                       # noqa: BLE001
+            log.warning("minutes rewrite: %s", e)
         if time.time() - last_cleanup > 3600:
             last_cleanup = time.time()
             try:

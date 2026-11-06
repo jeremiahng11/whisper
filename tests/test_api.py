@@ -3070,3 +3070,25 @@ def test_live_never_restarted_by_offset_zero(client):
     assert r.status_code == 409 and r.json()["received"] == 2004          # kept, not thrown away
     r = client.get(f"/api/uploads/{rid}", headers=H)
     assert r.json()["received"] == 2004
+
+
+def test_minutes_names_follow_joined_speakers():
+    from app import render
+    job = {"options": {"speaker_names": {"Speaker 1": "Alan"}, "merged": {"Speaker 3": "Speaker 1"},
+                       "names_at_summary": {}}}
+    mn = render.names_for_minutes(job)
+    assert mn["Speaker 3"] == "Alan"
+    out = render.rename_text("Speaker 1 and speaker 3 agreed; SPEAKER 3 will send it.", mn, {})
+    assert out == "Alan and Alan agreed; Alan will send it."
+    # named at summary time, then joined into Alan: the old name becomes Alan, not "Speaker 3"
+    job["options"]["names_at_summary"] = {"Speaker 3": "Bob"}
+    assert render.rename_text("Bob will send it.", render.names_for_minutes(job), {"Speaker 3": "Bob"}) == "Alan will send it."
+
+
+def test_rewrite_after_retag(monkeypatch):
+    from app import worker, summarize
+    monkeypatch.setattr(summarize, "enabled", lambda: True)
+    t = worker.rewrite_soon("jobx", after=0)
+    assert t and worker.rewrite_due("jobx")
+    worker._rewrite_tick()                                      # (no such job: just dropped)
+    assert not worker.rewrite_due("jobx")

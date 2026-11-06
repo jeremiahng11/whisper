@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.43.1"
+VERSION = "1.44.0"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -974,8 +974,10 @@ async def name_speakers(jid: str, request: Request):
         worker.build_outputs(jid)
         if joined:
             autotag.start(jid)                       # their joined voice finds more of their lines
+            worker.rewrite_soon(jid)                 # two speakers are one person: who said what changed
     out = job_out(db.get(jid))
     out["joined"] = joined
+    out["minutes_update_at"] = worker.rewrite_due(jid)
     out["skipped"] = skipped
     return out
 
@@ -1002,6 +1004,7 @@ async def tag_segment(jid: str, idx: int, request: Request):
             out["learned"] = True
     if out.pop("_spread"):
         autotag.start(jid)                           # lines elsewhere that sound like them follow (background)
+    out["minutes_update_at"] = worker.rewrite_due(jid)
     return out
 
 
@@ -1041,6 +1044,7 @@ def _tag(jid: str, idx: int, data: dict) -> dict:
             raise HTTPException(400, "send {'name': 'Alan'} or {'speaker': 'Speaker 2'}")
     elif "also" not in data:
         raise HTTPException(400, "send {'name': 'Alan'}, {'speaker': 'Speaker 2'} or {'also': 'Wei Ling'}")
+    prev_spk = segs[idx].get("speaker", "")
     was = names.get(segs[idx].get("speaker", ""), "")
     if segs[idx].get("speaker") and segs[idx].get("speaker") != label:
         segs[idx].setdefault("orig", segs[idx]["speaker"])
@@ -1085,6 +1089,8 @@ def _tag(jid: str, idx: int, data: dict) -> dict:
     opts["auto_lines"] = sorted(auto_lines)
     db.update(jid, options=opts)
     worker.build_outputs(jid)
+    if moved or prev_spk != label or "also" in data:   # who said this line changed: the minutes follow (in 2 min)
+        worker.rewrite_soon(jid)
     spread = named_now and bool(data.get("spread", True)) and bool(who) and bool(j["audio_path"]) and os.path.exists(j["audio_path"])
     return {"index": idx, "speaker": label, "name": who, "learned": learned, "moved": moved, "also": segs[idx].get("also") or [],
             "also_names": [names.get(a, a) for a in segs[idx].get("also") or []], "autotag": "started" if spread else "off",

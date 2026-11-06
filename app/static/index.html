@@ -1169,7 +1169,8 @@ async function tagLine(sel) {
     tagSegs[i].speaker = r.speaker;
     if (r.name && !tagSpk.some(x => x.label === r.speaker)) tagSpk.push({ label: r.speaker, name: r.name });
     else if (r.name) tagSpk.find(x => x.label === r.speaker).name = r.name;
-    $("#tagMsg").textContent = `${mmss(tagSegs[i].start)} → ${r.name || r.speaker}` + (r.moved ? ` · ${r.moved} more line${r.moved > 1 ? "s" : ""} in the same voice tagged` : "") + (r.learned ? " · voice learned" : "");
+    $("#tagMsg").textContent = `${mmss(tagSegs[i].start)} → ${r.name || r.speaker}` + (r.moved ? ` · ${r.moved} more line${r.moved > 1 ? "s" : ""} in the same voice tagged` : "") + (r.learned ? " · voice learned" : "") +
+      (r.minutes_update_at ? " · minutes rewritten 2 min after your last tag" : "");
     tagManual.add(i); tagAuto.delete(i);
     renderLines();
     $("#tagMsg").dataset.moved = r.moved || 0;
@@ -1327,7 +1328,7 @@ $("#spkSave").onclick = async () => {
   const r = await (await api(`/api/jobs/${current}/speakers`, { method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ names, was, remember: $("#spkRemember").checked }) })).json();
   await show(current); tab("speakersTab");
-  $("#spkMsg").textContent = (r.joined && r.joined.length ? `Joined into one speaker: ${r.joined.join(", ")}. ` : "") + "Saved, minutes updated."; loadVoices();
+  $("#spkMsg").textContent = (r.joined && r.joined.length ? `Joined into one speaker: ${r.joined.join(", ")}. ` : "") + (r.minutes_update_at ? "Saved, names in the minutes updated; the minutes are rewritten in 2 min (two speakers became one)." : "Saved, minutes updated."); loadVoices();
   if (r.joined && r.joined.length) followAutotag(current, r.joined[0]);
   setTimeout(() => $("#spkMsg").textContent = "", 6000);
 };

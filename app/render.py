@@ -48,6 +48,24 @@ def names_of(job: dict) -> dict:
     return {k: v for k, v in ((job.get("options") or {}).get("speaker_names") or {}).items() if v}
 
 
+def names_for_minutes(job: dict) -> dict:
+    """The names to put in the minutes: the speakers' names, plus a joined speaker ("Speaker 12" became part of
+    Speaker 5 = Alan) under the name of the one it joined - before, the minutes kept saying "Speaker 12", or a name
+    the minutes had for it turned back into "Speaker 12"."""
+    opts = job.get("options") or {}
+    names = names_of(job)
+    merged = opts.get("merged") or {}
+    out = dict(names)
+    for gone in merged:
+        into, seen = merged[gone], {gone}
+        while into in merged and into not in seen:            # joined twice: follow it to the end
+            seen.add(into)
+            into = merged[into]
+        if gone not in out and names.get(into):
+            out[gone] = names[into]
+    return out
+
+
 def apply_names(tr: dict, names: dict) -> dict:
     """Labels -> names; a line with two people talking at once reads "Alan + Wei Ling"."""
     if not names and not any(s.get("also") for s in tr.get("segments", [])):
@@ -71,8 +89,9 @@ def rename_text(text: str, names: dict, at_summary: Optional[dict] = None) -> st
     for label in sorted(set(names) | set(at_summary), key=len, reverse=True):
         new = names.get(label) or label
         old = at_summary.get(label) or label
-        if old != new:
-            text = re.sub(rf"(?<!\w){re.escape(old)}(?!\w)", new, text)
+        if old != new:                                         # ("speaker 2" / "SPEAKER 2" too)
+            text = re.sub(rf"(?<!\w){re.escape(old)}(?!\w)", new.replace("\\", r"\\"), text,
+                          flags=re.I if old.lower().startswith("speaker ") else 0)
     return text
 
 
@@ -119,7 +138,7 @@ def markdown(job: dict, tr: dict, summary_md: Optional[str], title: str = "") ->
     opts = job.get("options") or {}
     names = names_of(job)
     tr = apply_names(tr, names)
-    summary_md = rename_text(summary_md or "", names, opts.get("names_at_summary")) or None
+    summary_md = rename_text(summary_md or "", names_for_minutes(job), opts.get("names_at_summary")) or None
     when = recorded_at(job["filename"], job["created_at"])
     mins = tr.get("duration", 0) / 60
     lines = [f"# {titled(title or job.get('title') or job['filename'], when)}", ""]
