@@ -110,7 +110,7 @@ def wait(client, jid, timeout=20):
 
 
 def test_health_and_auth(client):
-    assert client.get("/api/health").json()["ok"]
+    assert client.get("/api/health", headers=H).json()["ok"]
     assert client.get("/api/jobs").status_code == 401
     assert client.get("/api/jobs", headers={"Authorization": "Bearer nope"}).status_code == 401
     assert client.get("/api/jobs", headers={"X-API-Key": "test-key"}).status_code == 200
@@ -853,7 +853,7 @@ def test_storage_kind_detects_temporary_volume(client):
     assert m.storage_kind(anon) == "temporary"
     assert m.storage_kind(named) == "persistent"
     assert m.storage_kind(bind) == "persistent"
-    assert client.get("/api/health").json()["storage"] in ("temporary", "persistent", "unknown")
+    assert client.get("/api/health", headers=H).json()["storage"] in ("temporary", "persistent", "unknown")
 
 
 def test_tts_adpcm_is_smaller_and_decodes():
@@ -900,7 +900,7 @@ def test_microsoft_graph_calendar(client, monkeypatch):
             {"subject": "Cancelled one", "isCancelled": True, "start": {"dateTime": "2030-01-07T05:00:00"}, "end": {"dateTime": "2030-01-07T06:00:00"}},
         ]})
     monkeypatch.setattr(_h, "post", post); monkeypatch.setattr(_h, "get", get)
-    assert client.get("/api/health").json()["calendars"] == 1
+    assert client.get("/api/health", headers=H).json()["calendars"] == 1
     ev = client.get("/api/agenda?days=7", headers=H).json()["events"]
     assert len(ev) == 1 and ev[0]["title"] == "Shenzhen supplier call" and ev[0]["attendees"] == ["Jeremiah Ng", "Alan Lim"]
     assert ev[0]["start"] == 1893981600 and ev[0]["location"] == "Microsoft Teams Meeting"      # 2030-01-07 02:00 UTC
@@ -1508,7 +1508,7 @@ def test_progress_in_health(client, tmp_path):
     assert abs(worker.wav_seconds(p) - 100) < 0.5
     worker.current_job, worker.live_info = "live:ir-x", {"rid": "ir-x", "until": 30.0, "received": 120.0}
     try:
-        pr = client.get("/api/health").json()["progress"]
+        pr = client.get("/api/health", headers=H).json()["progress"]
         assert pr["kind"] == "live" and pr["pct"] == 25 and pr["received_min"] == 2.0
     finally:
         worker.current_job, worker.live_info = None, {}
@@ -2211,10 +2211,11 @@ def test_find_by_meaning_rag(client, monkeypatch):
             v = np.zeros(64)
             for w in re.findall(r"[a-z]+", t.lower()):
                 w = syn.get(w, w)
-                v[hash(w) % 64] += 1
+                v[zlib.crc32(w.encode()) % 64] += 1   # (not hash(): it changes per run - the test was flaky)
             out.append(list(v))
         return out
     import re
+    import zlib
     monkeypatch.setattr(rag, "embed", fake_embed)
     monkeypatch.setattr(rag.settings, "rag", True)
     monkeypatch.setattr(rag.settings, "rag_min_score", 0.2)
@@ -2448,7 +2449,7 @@ def test_watch_everyday_questions(client, monkeypatch):
     assert "Right now it is" in SYSTEMS[-1] and "UTC+9" in SYSTEMS[-1]
     ask("Who won the football match yesterday?")
     assert "WEB(Who won the football match yesterday?|True)" in SYSTEMS[-1]
-    h = client.get("/api/health").json()
+    h = client.get("/api/health", headers=H).json()
     assert "tts_voice" in h
     w = client.get("/api/watch/weather?city=Tokyo", headers=H).json()
     assert w["today"].startswith("Right now in Tokyo") and w["tomorrow"].startswith("Tomorrow in Tokyo")
@@ -3037,13 +3038,13 @@ def test_background_modes(client, monkeypatch):
     client.put("/api/background", headers=H, json={"mode": "night", "from": 22, "to": 6})
     assert background.allowed()                         # a window across midnight
     assert client.put("/api/background", headers=H, json={"mode": "loud"}).status_code == 400
-    assert client.get("/api/health").json()["background"] == "night"
+    assert client.get("/api/health", headers=H).json()["background"] == "night"
     client.put("/api/background", headers=H, json={"mode": "on"})
 
 
 def test_memory_and_unload(client, monkeypatch):
     from app import transcribe
-    m = client.get("/api/health").json()["memory"]
+    m = client.get("/api/health", headers=H).json()["memory"]
     assert "used_pct" in m and "speech_models" in m
     transcribe._model, transcribe._used = object(), 1.0          # pretend: loaded, unused for a long time
     assert transcribe.unload_idle(30) == ["whisper"]
@@ -3115,3 +3116,45 @@ def test_weather_only_about_the_weather():
     for q in ("is it hot today", "how hot is it", "what's the weather", "will it rain tomorrow",
               "what's the temperature in Tokyo", "what's the temperature", "how windy is it outside", "is it sunny"):
         assert is_weather(q), q
+
+
+def test_health_details_need_the_key(client):
+    open_ = client.get("/api/health").json()
+    assert open_["ok"] and "version" in open_ and "timing" not in open_ and "memory" not in open_
+    assert "timing" in client.get("/api/health", headers=H).json()
+
+
+def test_failed_job_retried_on_complete(client):
+    rid = "w1b-retry-1"
+    assert client.put(f"/api/uploads/{rid}", headers={**H, "X-Offset": "0"}, content=b"not audio").status_code == 200
+    j = wait(client, client.post(f"/api/uploads/{rid}/complete", headers=H).json()["id"])
+    assert j["status"] == "error"
+    r = client.post(f"/api/uploads/{rid}/complete", headers=H)          # the watch retries: the job, not a 404
+    assert r.status_code == 200 and r.json()["id"] == j["id"]
+
+
+def test_profile_sigs_match_the_slow_count(client):
+    from app import people
+    names = people.all_names()
+    for n in names:
+        lines = people.their_lines(n)
+        assert people._sig(n) == f"v2:{len(lines)}:{len({ln['job'] for ln in lines})}", n
+
+
+def test_signin_ip_not_chosen_by_sender():
+    from app import login
+
+    class R:
+        def __init__(self, h, host="10.0.0.5"):
+            self.headers = h
+            self.client = type("c", (), {"host": host})()
+    assert login._ip(R({"x-forwarded-for": "1.2.3.4, 172.18.0.1"})) == "172.18.0.1"
+    assert login._ip(R({"cf-connecting-ip": "9.9.9.9", "x-forwarded-for": "1.2.3.4"})) == "9.9.9.9"
+    assert login._ip(R({})) == "10.0.0.5"
+
+
+def test_failed_source_waits_before_retry():
+    import time as _t
+    from app import sources
+    assert not sources.due({"id": "x", "kind": "url", "state": "error", "failed_at": _t.time()})
+    assert sources.due({"id": "x", "kind": "url", "state": "error", "failed_at": _t.time() - 7 * 3600})

@@ -75,11 +75,22 @@ def init() -> None:
         cols = [r[1] for r in _conn.execute("PRAGMA table_info(jobs)").fetchall()]
         if "priority" not in cols:                       # upgrade older databases
             _conn.execute("ALTER TABLE jobs ADD COLUMN priority INTEGER DEFAULT 0")
-        # jobs interrupted by a restart go back to the queue
-        _conn.execute(
-            "UPDATE jobs SET status='queued', stage='requeued after restart', progress=0 "
-            "WHERE status IN ('transcribing','summarizing')"
-        )
+        # jobs interrupted by a restart go back to the queue - but one that was cut off 3 times (it may be what crashes
+        # the server, e.g. out of memory) stops there, or it would crash it again at every start and the queue behind
+        # it would never run
+        for r in _conn.execute("SELECT id, options FROM jobs WHERE status IN ('transcribing','summarizing')").fetchall():
+            try:
+                o = json.loads(r[1] or "{}")
+            except ValueError:
+                o = {}
+            o["interrupted"] = int(o.get("interrupted") or 0) + 1
+            if o["interrupted"] >= 3:
+                _conn.execute("UPDATE jobs SET status='error', stage='', options=?, error=? WHERE id=?",
+                              (json.dumps(o), "stopped: the server restarted 3 times while working on this one "
+                               "(it may be too big for the memory) - press Retry to try again", r[0]))
+            else:
+                _conn.execute("UPDATE jobs SET status='queued', stage='requeued after restart', progress=0, options=? "
+                              "WHERE id=?", (json.dumps(o), r[0]))
         _conn.commit()
 
 
@@ -129,6 +140,14 @@ def list_jobs(limit: int = 100, status: Optional[str] = None) -> list[dict]:
 def update(jid: str, **fields: Any) -> None:
     if not fields:
         return
+    if fields.get("status") in ("done", "queued") and "options" not in fields and fields.get("stage") != "requeued after restart":
+        # finished, or queued again by you (Retry, a re-sent recording): the restart count starts over - it only
+        # went up, so a meeting you retried failed again at the next deploy, and a redone one could turn to "error"
+        j = get(jid)
+        if j and (j.get("options") or {}).get("interrupted"):
+            o = dict(j["options"])
+            o.pop("interrupted", None)
+            fields["options"] = o
     if "options" in fields:
         fields["options"] = json.dumps(fields["options"])
     fields["updated_at"] = time.time()

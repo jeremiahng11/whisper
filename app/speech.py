@@ -464,6 +464,7 @@ def _openai_tts(text: str) -> np.ndarray:
         tmp = p.with_suffix(".tmp")
         tmp.write_bytes(pcm.tobytes())
         tmp.replace(p)
+        prune_voice_cache()
         return pcm
     return np.zeros(0, dtype="<i2")
 
@@ -610,12 +611,44 @@ def _eleven(text: str, model: str = "") -> bytes:
     tmp = p.with_suffix(".tmp")
     tmp.write_bytes(pcm)
     tmp.replace(p)
-    files = sorted(d.glob("*.pcm"), key=lambda f: f.stat().st_mtime)   # keep the cache to its size: oldest go
-    total = sum(f.stat().st_size for f in files)
-    while files and total > settings.elevenlabs_cache_mb * 1024 * 1024:
-        total -= files[0].stat().st_size
-        files.pop(0).unlink(missing_ok=True)
+    prune_voice_cache()
     return pcm
+
+
+_prune = {"at": 0.0, "lock": threading.Lock()}
+
+
+def prune_voice_cache(force: bool = False) -> None:
+    """Keep the saved voices (ElevenLabs .pcm and OpenAI .pcm16 - streamed or not) to ELEVENLABS_CACHE_MB, oldest
+    first. Before, only one of the four ways of making a voice pruned, and only its own .pcm files: the cache of
+    streamed answers (the watch's usual way) grew forever. At most once a minute; two at once can't trip each other."""
+    if not force and time.time() - _prune["at"] < 60:
+        return
+    if not _prune["lock"].acquire(blocking=False):
+        return
+    try:
+        _prune["at"] = time.time()
+        d = settings.data_dir / "tts_cache"
+        files = []
+        for f in list(d.glob("*.pcm")) + list(d.glob("*.pcm16")):
+            try:
+                st = f.stat()
+                files.append((st.st_mtime, st.st_size, f))
+            except OSError:
+                pass
+        files.sort(key=lambda x: x[0])
+        total = sum(x[1] for x in files)
+        cap = settings.elevenlabs_cache_mb * 1024 * 1024
+        for _, size, f in files:
+            if total <= cap:
+                break
+            try:
+                f.unlink()
+            except OSError:
+                pass
+            total -= size
+    finally:
+        _prune["lock"].release()
 
 
 def tts_available() -> bool:
@@ -834,6 +867,7 @@ def tts_stream(text: str, chunk_samples: int = 2020):
             tmp = cache.with_suffix(".tmp")
             tmp.write_bytes(pcm[:len(pcm) // 2 * 2])
             tmp.replace(cache)
+            prune_voice_cache()
         except OSError:
             pass
 
@@ -896,6 +930,7 @@ def _openai_stream(clean: str, whole, chunk_samples: int):
             tmp = p.with_suffix(".tmp")
             tmp.write_bytes(np.concatenate(got).astype("<i2").tobytes())
             tmp.replace(p)
+            prune_voice_cache()
         except OSError:
             pass
 

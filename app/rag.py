@@ -116,11 +116,14 @@ def passages() -> list[dict]:
         except OSError:
             continue
         title = (j.get("options") or {}).get("title") or j.get("title") or j.get("filename") or "meeting"
-        date = str(j.get("created") or "")[:10]
+        date = time.strftime("%Y-%m-%d", time.localtime(j.get("created_at") or 0)) if j.get("created_at") else ""
         for part in _split(md):
             out.append({"kind": "meeting", "ref": j["id"], "title": f"{title} {date}".strip(), "text": part})
     for x in out:
-        x["h"] = hashlib.sha1((x["kind"] + "|" + x["title"] + "|" + x["text"]).encode()).hexdigest()[:16]
+        # (the embedding model is part of it: a new model = every passage embedded again - vectors of two models
+        #  don't mix, and searches by meaning came back empty for good after OLLAMA_EMBED_MODEL changed)
+        x["h"] = hashlib.sha1((settings.ollama_embed_model + "|" + x["kind"] + "|" + x["title"] + "|" + x["text"]).encode()
+                              ).hexdigest()[:16]
     return out
 
 

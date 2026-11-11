@@ -617,9 +617,44 @@ def context_for(names: list[str], limit: int = 1800) -> str:
     return out[:limit]
 
 
+_sigs: dict = {"key": None, "d": {}}
+
+
+def _all_sigs() -> dict:
+    """Everyone's profile signature (lines, meetings) in ONE pass over the meetings, kept until a meeting changes.
+    It used to be one full pass per person, every 2 minutes, even with nothing new: 40 people x 500 meetings =
+    20,000 transcripts read again and again - the fan, around the clock."""
+    jobs = db.list_jobs(100000, "done")
+    try:
+        nm = _notme_path().stat().st_mtime
+    except OSError:
+        nm = 0
+    key = (len(jobs), max((j.get("updated_at") or 0 for j in jobs), default=0), nm)
+    if _sigs["key"] == key:
+        return _sigs["d"]
+    try:
+        notme = {k: set(v) for k, v in json.loads(_notme_path().read_text()).items()}
+    except (OSError, ValueError):
+        notme = {}
+    lines: Counter = Counter()
+    meets: dict = {}
+    for j in jobs:
+        names = {lab: (n or "").lower() for lab, n in ((j.get("options") or {}).get("speaker_names") or {}).items() if n}
+        if not names:
+            continue
+        tr = worker.load_transcript(j["id"]) or {}
+        for i, s in enumerate(tr.get("segments", [])):
+            low = names.get(s.get("speaker"))
+            if not low or s.get("also") or f"{j['id']}:{i}" in notme.get(low, ()):
+                continue
+            lines[low] += 1
+            meets.setdefault(low, set()).add(j["id"])
+    _sigs.update(key=key, d={n: f"v2:{lines[n]}:{len(meets.get(n, ()))}" for n in lines})
+    return _sigs["d"]
+
+
 def _sig(name: str) -> str:
-    lines = their_lines(name)
-    return f"v2:{len(lines)}:{len({ln['job'] for ln in lines})}"
+    return _all_sigs().get(name.lower(), "v2:0:0")
 
 
 _cleaned: dict[str, float] = {}

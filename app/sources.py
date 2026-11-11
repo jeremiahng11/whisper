@@ -569,6 +569,8 @@ def remove(sid: str) -> bool:
 
 
 def due(m: dict) -> bool:
+    if m.get("state") == "error":                   # it failed: try again in 6 hours, not at every sweep (2.5 min) -
+        return time.time() - (m.get("failed_at") or 0) > 6 * 3600   # a broken page was crawled around the clock
     if m.get("state") in ("new", "changed"):
         return True
     if m.get("state") == "reading" and time.time() - (m.get("since") or 0) > 3600 and not _lock(m["id"]).locked():
@@ -663,7 +665,8 @@ def _learn(sid: str, force: bool) -> int:
                 facts.append(f)
         m.update(facts=facts, sig=sig, state="ok", error="", progress="")
     except Exception as e:                          # noqa: BLE001
-        m.update(state="error", error=summarize.explain_llm_error(e) if not isinstance(e, ValueError) else str(e))
+        m.update(state="error", failed_at=time.time(),
+                 error=summarize.explain_llm_error(e) if not isinstance(e, ValueError) else str(e))
         _save(m)
         raise
     _save(m)

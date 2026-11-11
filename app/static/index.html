@@ -582,7 +582,7 @@ const when = t => new Date(t * 1000).toLocaleString([], { dateStyle: "medium", t
 let diarSet = false;
 async function health() {
   try {
-    const h = await (await fetch("/api/health")).json();
+    const h = await (await fetch("/api/health", { headers: hdr() })).json();
     if (!diarSet) {                       // first load: follow the server (DIARIZE), off if pyannote isn't installed
       diarSet = true;
       $("#diar").checked = h.diarize_installed !== false && h.diarize_default !== false;

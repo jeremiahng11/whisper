@@ -109,13 +109,23 @@ def _set_cookie(resp: Response, request: Request, user: str) -> None:
 
 
 def _ip(request: Request) -> str:
-    return (request.headers.get("cf-connecting-ip") or request.headers.get("x-forwarded-for") or
-            (request.client.host if request.client else "?")).split(",")[0].strip()
+    """Who is signing in. Cloudflare sets CF-Connecting-IP itself (a sender can't choose it); X-Forwarded-For: the
+    last entry, the one our own proxy added - the first one is whatever the sender wrote, so a new made-up address on
+    every try got past the 8-tries limit."""
+    cf = (request.headers.get("cf-connecting-ip") or "").strip()
+    if cf and settings.trust_cloudflare:            # (only when every request comes through Cloudflare - otherwise
+        return cf[:64]                              #  anyone can write it: TRUST_CLOUDFLARE=0)
+    xff = [x.strip() for x in (request.headers.get("x-forwarded-for") or "").split(",") if x.strip()]
+    if xff:
+        return xff[-1][:64]
+    return request.client.host if request.client else "?"
 
 
 def _too_many(ip: str) -> bool:
     now = time.time()
     with _lock:
+        for k in [k for k, v in _fails.items() if not v or now - v[-1] > 900]:   # (old ones: gone, not kept forever)
+            _fails.pop(k, None)
         _fails[ip] = [t for t in _fails.get(ip, []) if now - t < 900]
         return len(_fails[ip]) >= 8
 
@@ -186,7 +196,12 @@ async def login(request: Request):
     ip = _ip(request)
     if _too_many(ip):
         raise HTTPException(429, "too many tries - wait 15 minutes")
-    data = await request.json()
+    try:
+        data = await request.json()
+    except ValueError:
+        data = None
+    if not isinstance(data, dict):
+        raise HTTPException(400, 'send {"id": ..., "password": ...}')
     uid, pw = str(data.get("id") or ""), str(data.get("password") or "")
     ok = hmac.compare_digest(uid.lower().encode(), settings.admin_id.lower().encode()) & \
         hmac.compare_digest(pw.encode(), settings.admin_pass.encode())

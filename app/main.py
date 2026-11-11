@@ -1,4 +1,5 @@
 """HTTP API + small web page. Run: uvicorn app.main:app --host 0.0.0.0 --port 8000"""
+import asyncio
 import importlib.util
 import logging
 import os
@@ -20,7 +21,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.45.1"
+VERSION = "1.46.0"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -87,7 +88,7 @@ def auth(request: Request, authorization: Optional[str] = Header(None), x_api_ke
     key = x_api_key or ""
     if authorization and authorization.lower().startswith("bearer "):
         key = authorization[7:].strip()
-    if key and secrets.compare_digest(key, settings.api_key):
+    if key and secrets.compare_digest(key.encode("utf-8", "replace"), settings.api_key.encode("utf-8", "replace")):
         return
     if login.session_user(request):
         if request.method in ("GET", "HEAD") or login.same_origin(request):
@@ -199,12 +200,18 @@ def apply_extra(o: dict, extra: dict) -> dict:
     return o
 
 
-def existing_for(rid: Optional[str]) -> Optional[dict]:
-    """Same recording uploaded again: reuse the job, unless it failed (then start over)."""
+def existing_for(rid: Optional[str], retry: bool = False) -> Optional[dict]:
+    """Same recording uploaded again: reuse the job; one that failed starts over with the new audio. retry (a
+    "complete" with no new audio): a failed one is tried again with the audio the server already has - it used to be
+    deleted, and a watch retrying "complete" got "nothing uploaded" (and may have deleted its own copy already)."""
     if not rid:
         return None
     j = db.get_by_recording(rid)
     if j and j["status"] == "error":
+        if retry and j.get("audio_path") and os.path.exists(j["audio_path"]):
+            db.update(j["id"], status="queued", stage="queued again", progress=0, error="")
+            worker.wake()
+            return db.get(j["id"])
         worker.delete_job_files(j)
         db.delete(j["id"])
         return None
@@ -220,7 +227,14 @@ def new_job(src: Path, filename: str, opts: dict, rid: Optional[str], priority: 
     shutil.move(str(src), dest)
     if ext == ".wav":
         transcribe.fix_wav_header(str(dest))          # a live upload's header still says "0 bytes"
-    j = db.create(filename, str(dest), opts, rid, 1 if priority == "high" else 0)
+    import sqlite3
+    try:
+        j = db.create(filename, str(dest), opts, rid, 1 if priority == "high" else 0)
+    except sqlite3.IntegrityError:                    # the same recording finished twice at once (a retry overlapped):
+        dest.unlink(missing_ok=True)                  # one job, not a 500 and an audio file nobody owns
+        if rid and (old := db.get_by_recording(rid)):
+            return old
+        raise
     with worker.live_lock:
         if rid and (live := worker.live_state_path(rid)).exists():
             d = worker.result_dir(j["id"])
@@ -230,13 +244,22 @@ def new_job(src: Path, filename: str, opts: dict, rid: Optional[str], priority: 
     return j
 
 
-async def save_body(request: Request, dest: Path, mode: str = "wb", already: int = 0) -> int:
+async def save_body(request: Request, dest: Path, mode: str = "wb", already: int = 0, limit: int = 0) -> int:
     n = already
+    lim = limit or limit_bytes()
+    it = request.stream().__aiter__()
     with open(dest, mode) as f:
-        async for chunk in request.stream():
+        while True:
+            try:                                     # a connection that went silent mid-upload (WiFi gone, no close)
+                chunk = await asyncio.wait_for(it.__anext__(), 60)   # is cut off: it held the recording's lock
+            except StopAsyncIteration:
+                break
+            except asyncio.TimeoutError:
+                raise HTTPException(408, "the upload stopped arriving")
             n += len(chunk)
-            if n > limit_bytes():
-                raise HTTPException(413, f"upload bigger than MAX_UPLOAD_MB={settings.max_upload_mb}")
+            if n > lim:
+                raise HTTPException(413, "clip too long" if limit else
+                                    f"upload bigger than MAX_UPLOAD_MB={settings.max_upload_mb}")
             f.write(chunk)
     return n
 
@@ -316,6 +339,32 @@ async def upload_chunk(rid: str, request: Request, x_offset: int = Header(0), x_
     check_id(rid)
     if (j := existing_for(rid)):
         return {"recording_id": rid, "received": None, "job": job_out(j)}
+    # one piece at a time per recording: the same piece sent again while the first is still arriving (weak WiFi: the
+    # watch timed out and resent) was appended twice. The second waits for the first (a stalled one is cut off by
+    # save_body's read timeout), then gets the usual answer - "offset mismatch" + what the server has, if it's late.
+    ent = _upload_locks.setdefault(rid, [asyncio.Lock(), 0])
+    ent[1] += 1
+    try:
+        try:
+            await asyncio.wait_for(ent[0].acquire(), 25)
+        except asyncio.TimeoutError:
+            p = part_path(rid)
+            return JSONResponse({"recording_id": rid, "received": p.stat().st_size if p.exists() else 0,
+                                 "error": "offset mismatch"}, status_code=409)
+        try:
+            return await _upload_chunk(rid, request, x_offset, x_live, x_live_state, x_live_why, language)
+        finally:
+            ent[0].release()
+    finally:
+        ent[1] -= 1
+        if ent[1] <= 0 and _upload_locks.get(rid) is ent:
+            _upload_locks.pop(rid, None)
+
+
+_upload_locks: dict = {}
+
+
+async def _upload_chunk(rid, request, x_offset, x_live, x_live_state, x_live_why, language):
     p = part_path(rid)
     have = p.stat().st_size if p.exists() else 0
     # a client starting again from scratch (a whole file sent again) - but never a live recording, and never an empty
@@ -381,7 +430,7 @@ async def upload_complete(
 ):
     check_id(rid)
     extra = await body_extra(request)
-    if (j := existing_for(rid)):
+    if (j := existing_for(rid, retry=True)):
         return JSONResponse(job_out(j), status_code=200)
     p = part_path(rid)
     if not p.exists():
@@ -933,6 +982,13 @@ async def name_speakers(jid: str, request: Request):
     remember = keep their voices so later recordings are named automatically."""
     j = _job(jid)
     data = await body_extra(request)
+    from starlette.concurrency import run_in_threadpool
+    return await run_in_threadpool(_name_speakers_work, jid, data, j)
+
+
+def _name_speakers_work(jid, data, j):
+    # (the work off the event loop: it waited on the meeting's lock and rewrote outputs, and every other
+    #  request - the watch's live pieces, spoken questions - stalled meanwhile)
     names = data.get("names")
     if not isinstance(names, dict):
         raise HTTPException(400, "send {'names': {'Speaker 1': 'Name'}}")
@@ -1105,6 +1161,13 @@ async def edit_line(jid: str, idx: int, request: Request):
     if j["status"] != "done":
         raise HTTPException(409, f"job is {j['status']}")
     data = await body_extra(request)
+    from starlette.concurrency import run_in_threadpool
+    return await run_in_threadpool(_edit_line_work, jid, idx, data, j)
+
+
+def _edit_line_work(jid, idx, data, j):
+    # (the work off the event loop: it waited on the meeting's lock and rewrote outputs, and every other
+    #  request - the watch's live pieces, spoken questions - stalled meanwhile)
     text = re.sub(r"\s+", " ", str(data.get("text") or "")).strip()[:2000]
     if not text:
         raise HTTPException(400, "send {'text': '...'}")
@@ -1466,12 +1529,19 @@ async def watch_asked(request: Request):
         d = await request.json()
     except Exception:
         raise HTTPException(400, "body must be JSON")
-    n = 0
-    for it in (d.get("items") or [])[:200]:
-        if isinstance(it, dict) and it.get("q"):
-            knowledge.note_question(str(it["q"]), "watch", str(it.get("id") or ""))
-            n += 1
-    return {"noted": n}
+    if not isinstance(d, dict):
+        raise HTTPException(400, "body must be a JSON object")
+    items = [it for it in (d.get("items") or [])[:200] if isinstance(it, dict) and it.get("q")]
+
+    def note_all() -> int:                           # (off the event loop; one rebuild for the whole batch)
+        linked = 0
+        for it in items:
+            linked += bool(knowledge.note_question(str(it["q"]), "watch", str(it.get("id") or ""), rebuild_now=False))
+        if linked:
+            knowledge.rebuild()
+        return len(items)
+    from starlette.concurrency import run_in_threadpool
+    return {"noted": await run_in_threadpool(note_all)}
 
 
 @app.get("/api/watch/speech", dependencies=[Depends(auth)])
@@ -2169,7 +2239,11 @@ async def voice_question(request: Request, language: Optional[str] = Query(None)
         typed = str(body["text"]).strip()[:2000]
         n = 0
     else:
-        n = await save_body(request, tmp)
+        try:                                         # (a dropped connection / too long: the clip isn't left behind)
+            n = await save_body(request, tmp, limit=8 * 1024 * 1024 + 1)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
     from . import timing as _timing
     t_upload = time.time() - t_in
     _timing.note("voice question in", t_upload, f"{n // 1024} KB, one trip")
@@ -2674,7 +2748,13 @@ def firmware_delete(board: str, version: str):
 
 
 @app.get("/api/health")
-def health():
+def health(request: Request):
+    """Up or not (for Coolify / a monitor) - without the key or a sign-in only {ok, version, model_loaded}: the rest
+    shows your recent questions, meeting titles and what is running (it was open to anyone)."""
+    try:
+        auth(request, request.headers.get("authorization"), request.headers.get("x-api-key"))
+    except HTTPException:
+        return {"ok": True, "version": VERSION, "model_loaded": transcribe.model_loaded() or settings.transcriber == "fake"}
     return {
         "ok": True,
         "version": VERSION,

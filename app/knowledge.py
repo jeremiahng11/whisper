@@ -575,7 +575,7 @@ def link_question(q: str) -> str:
     return ""
 
 
-def note_question(q: str, where: str = "ask", fid: str = "") -> str:
+def note_question(q: str, where: str = "ask", fid: str = "", rebuild_now: bool = True) -> str:
     """Remember a question you asked; returns the fact id it was linked to ("" if none)."""
     q = _clean_text(q, 160).rstrip("?").strip()
     if len(q) < 4:
@@ -587,9 +587,10 @@ def note_question(q: str, where: str = "ask", fid: str = "") -> str:
         tmp = _asked_path().with_suffix(f".{threading.get_ident()}.tmp")
         tmp.write_text(json.dumps(log_[-MAX_ASKED:], ensure_ascii=False))
         tmp.replace(_asked_path())
-    if fid:
-        rebuild()
+    if fid and rebuild_now:                         # (a batch - the watch sends up to 200 - rebuilds once, at its end:
+        rebuild()                                   #  each one was a full rebuild, on the request)
     return fid
+
 
 
 def _asked_by_fact() -> dict[str, dict]:
@@ -764,7 +765,10 @@ def _sweep() -> None:
                     for x in sources.listing():      # a new source, or a web page due for its daily check
                         if sources.due(x):
                             log.info("learning facts from source %s", x["id"])
-                            sources.learn(x["id"])
+                            try:
+                                sources.learn(x["id"])
+                            except Exception as e:   # noqa: BLE001 - one broken source doesn't stop the rest
+                                log.warning("source %s: %s", x["id"], e)
                             busy = True
                             break
                 if not busy:

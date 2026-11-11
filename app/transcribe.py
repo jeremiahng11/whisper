@@ -568,11 +568,23 @@ diarize_error = ""                                       # why speaker separatio
 embed_error = ""                                         # why voice prints of clips aren't available (shown to you)
 
 
+_spk_lock = threading.RLock()                       # one load of the speaker models at a time: after they were let go,
+                                                    # a file, a live recording and a voice check each loaded their own
+                                                    # copy (~1 GB each) at once
+
+
 def _get_embedder():
     """The speaker-embedding model the diarizer uses (same "voice print" space as its speaker embeddings).
     pyannote 3.x pipelines carry it as ._embedding; otherwise load the model itself."""
-    global _embedder
     _touch()
+    if _embedder is not None:
+        return _embedder
+    with _spk_lock:
+        return _load_embedder()
+
+
+def _load_embedder():
+    global _embedder
     if _embedder is not None:
         return _embedder
     import torch
@@ -662,8 +674,15 @@ def lib_versions() -> str:
 
 
 def _get_diarizer():
-    global _diar
     _touch()
+    if _diar is not None:
+        return _diar
+    with _spk_lock:
+        return _load_diarizer()
+
+
+def _load_diarizer():
+    global _diar
     if _diar is None:
         if not settings.hf_token:
             raise RuntimeError("DIARIZE=1 needs HF_TOKEN (and accepting the pyannote model terms on huggingface.co)")

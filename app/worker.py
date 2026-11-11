@@ -148,19 +148,38 @@ def fix_terms(jid: str) -> int:
         return n
 
 
+_terms_again = threading.Event()
+_terms_thread: threading.Thread | None = None
+_terms_lock = threading.Lock()
+
+
 def refresh_terms_everywhere() -> int:
-    """Names & terms changed: fix the spelling in every finished meeting (transcripts and minutes)."""
-    jobs = db.list_jobs(100000, "done")
+    """Names & terms changed: fix the spelling in every finished meeting (transcripts and minutes). One pass at a time:
+    more changes while it runs make one more pass after it (each change used to start its own pass over every meeting
+    - several at once, all fighting for the CPU)."""
+    global _terms_thread
+    n = len(db.list_jobs(100000, "done"))
 
     def run():
-        for j in jobs:
-            try:
-                fix_terms(j["id"])
-                build_outputs(j["id"])
-            except Exception as e:                  # noqa: BLE001
-                log.warning("names & terms for %s: %s", j["id"], e)
-    threading.Thread(target=run, daemon=True).start()
-    return len(jobs)
+        global _terms_thread
+        while True:
+            with _terms_lock:
+                if not _terms_again.is_set():
+                    _terms_thread = None
+                    return
+                _terms_again.clear()
+            for j in db.list_jobs(100000, "done"):
+                try:
+                    fix_terms(j["id"])
+                    build_outputs(j["id"])
+                except Exception as e:              # noqa: BLE001
+                    log.warning("names & terms for %s: %s", j["id"], e)
+    with _terms_lock:
+        _terms_again.set()
+        if _terms_thread is None:
+            _terms_thread = threading.Thread(target=run, name="terms", daemon=True)
+            _terms_thread.start()
+    return n
 
 
 # ---------------------------------------------------------------- minutes follow your tags
@@ -413,11 +432,24 @@ def cleanup() -> None:
         for j in db.older_than(now - settings.keep_jobs_days * 86400):
             delete_job_files(j)
             db.delete(j["id"])
+            try:                                     # (its facts too - only a delete from the page dropped them)
+                from . import knowledge
+                knowledge.forget_meeting(j["id"])
+            except Exception as e:                   # noqa: BLE001
+                log.info("forgetting %s: %s", j["id"], e)
     # abandoned partial uploads (no activity for 7 days)
     for f in list(settings.upload_dir.glob("*.part")) + list(settings.upload_dir.glob("*.live.json")) + \
             list(settings.upload_dir.glob("*.beat")):
         if now - f.stat().st_mtime > 7 * 86400:
             f.unlink(missing_ok=True)
+    # spoken questions / uploads cut off part-way (their temp files): an hour is plenty
+    for pat in ("voice_*", "stt_*", "tmp_*"):
+        for f in settings.upload_dir.glob(pat):
+            try:
+                if now - f.stat().st_mtime > 3600:
+                    f.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def delete_job_files(job: dict) -> None:
@@ -457,10 +489,15 @@ def _loop() -> None:
                 cleanup()
             except Exception as e:
                 log.warning("cleanup failed: %s", e)
-        job = db.next_queued()
-        if not job:
-            if not settings.live_parallel and live_pass():
+        try:
+            job = db.next_queued()
+            if not job and not settings.live_parallel and live_pass():
                 continue
+        except Exception as e:                       # noqa: BLE001 - never let the worker thread die
+            log.warning("worker: %s", e)
+            _wake.wait(5)
+            continue
+        if not job:
             try:                                     # nothing to do for a while: the speech models out of RAM
                 transcribe.unload_idle(settings.whisper_unload_min)
             except Exception as e:                   # noqa: BLE001
