@@ -27,6 +27,34 @@ WORLD = re.compile(r"\b(news|latest|today|tonight|tomorrow|yesterday|this week|w
                    r"how tall|how old|born|died|when is|when was|where is|who won|who is the|what is the|define|"
                    r"meaning of|traffic|flight|open now|opening hours|holiday|public holiday|release|launch|election|"
                    r"recipe|calories|translate|time in|time is it in)\b", re.I)
+# "hot", "cold", "sunny", "windy", "degrees", "temperature" alone don't make a weather question: "how hot is the sun",
+# "how cold is space", "the temperature of boiling water", "is the coffee hot" were answered with Singapore's weather.
+# Those words count only about the air where you are: with "it" ("is it hot", "how cold is it"), a time (today, now,
+# tomorrow...), outside, or a place ("in Tokyo") - and never when they're about something else (the sun, a planet...).
+_WEATHER_SURE = re.compile(r"\b(weather|rain|raining|rainy|forecast|umbrella|storm|stormy|thunder|thunderstorm|humid|"
+                           r"humidity|drizzle|haze|hazy|psi)\b", re.I)
+_WEATHER_TIME = re.compile(r"\b(it|it's|its|today|tonight|tomorrow|tmr|tmrw|now|right now|outside|out there|later|"
+                           r"this (morning|afternoon|evening|week|weekend)|currently|at the moment)\b", re.I)
+_NOT_AIR = re.compile(r"\b(sun|sun's|moon|mars|venus|mercury|jupiter|saturn|uranus|neptune|pluto|planet|planets|star|"
+                      r"stars|space|universe|lava|magma|core|oven|stove|coffee|tea|water|boiling|boil|ice|fire|flame|"
+                      r"chili|chilli|pepper|food|soup|body|fever|human|blood|cpu|gpu|engine|battery|phone|laptop|"
+                      r"metal|iron|steel|desert|sahara|antarctica|everest|absolute zero|celsius to|fahrenheit to|"
+                      r"convert|kelvin)\b", re.I)
+
+
+def is_weather(q: str) -> bool:
+    """A question about the weather (where you are, or in a place you named) - not just any "how hot is..."."""
+    if not WEATHER.search(q or ""):
+        return False
+    if _NOT_AIR.search(q):
+        return bool(_WEATHER_SURE.search(q)) and not re.search(r"\b(space|mars|venus|jupiter|planet|sun)\b", q, re.I)
+    if _WEATHER_SURE.search(q):
+        return True
+    if re.search(r"\btemperature\b(?!\s+(of|for|to|in (celsius|fahrenheit|kelvin)))", q, re.I):
+        return True                                       # "what's the temperature" (but not "the temperature of...")
+    return bool(_WEATHER_TIME.search(q) or _city_in(q))
+
+
 OURS = re.compile(r"\b(we|our|us|my team|my company|the company|meeting|meetings|minutes|colleague)\b", re.I)
 
 _WMO = {0: "clear sky", 1: "mainly clear", 2: "partly cloudy", 3: "overcast", 45: "fog", 48: "fog", 51: "light drizzle",
@@ -54,7 +82,7 @@ def now_line(tz_min: int | None = None, city: str = "") -> str:
 
 def is_world(q: str) -> bool:
     """A question about the world rather than about the user's company / meetings."""
-    return bool(WEATHER.search(q) or WORLD.search(q)) and not OURS.search(q)
+    return bool(WEATHER.search(q) or WORLD.search(q)) and not OURS.search(q)   # (the sun's heat: the web, too)
 
 
 def _get_json(url: str, timeout: float = 6) -> dict:
@@ -110,7 +138,7 @@ _NOT_JUST_WEATHER = re.compile(r"\b(why|explain|compare|history|record|average|c
 def weather_answer(q: str, city: str = "") -> str:
     """A spoken answer for a plain weather question, straight from Open-Meteo - no AI, so it comes in about a second
     ("How's the weather?", "Will it rain tomorrow?", "What's the temperature in Tokyo?"). "" = let the AI answer."""
-    if not WEATHER.search(q) or OURS.search(q) or _NOT_JUST_WEATHER.search(q) or len(q.split()) > 14:
+    if not is_weather(q) or OURS.search(q) or _NOT_JUST_WEATHER.search(q) or len(q.split()) > 14:
         return ""
     place = _city_in(q) or city or home_city()
     try:
@@ -153,11 +181,12 @@ def context(q: str, tz_min: int | None = None, city: str = "", web=None) -> str:
     """What goes along with an everyday question (besides the date and time, which always does). web: a search for
     it that already started (a future) - used instead of searching again."""
     parts = []
-    if WEATHER.search(q):
+    weathery = is_weather(q)
+    if weathery:
         w = weather(q, city)
         if w:
             parts.append(w)
-    if is_world(q) and not (WEATHER.search(q) and parts):
+    if is_world(q) and not (weathery and parts):
         from . import research
         t0 = time.time()
         w = web.result() if web is not None else research.live_context(q, plain=True)

@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.45.0"
+VERSION = "1.45.1"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -2236,7 +2236,7 @@ async def voice_question(request: Request, language: Optional[str] = Query(None)
         msgs = [m for m in (ask.get("messages") or []) if isinstance(m, dict)][-12:]
         data = {"messages": msgs + [{"role": "user", "content": text}], "tz": tzm, "city": city or ask.get("city") or ""}
         from . import worldinfo as _wi
-        if research.needs_fresh(text) and not _wi.WEATHER.search(text) and settings.research_live and not scope:
+        if research.needs_fresh(text) and not _wi.is_weather(text) and settings.research_live and not scope:
             # clearly about now ("latest", "price", "who won"): the search starts at once, while the server is still
             # working out the rest (it used to start only after that: ~0.2-0.5 s)
             data["_prefetch"] = _late_pool().submit(research.live_context, text, 2500, True)

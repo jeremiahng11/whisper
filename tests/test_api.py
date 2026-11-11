@@ -3104,3 +3104,14 @@ def test_voice_typed_question(client, monkeypatch):
     assert lines[0].startswith("T ") and 'what is the plan' in lines[0].lower()
     assert any(l.startswith("A ") and "it is what is the plan" in l.lower() for l in lines) and lines[-1].startswith("E")
     assert client.post("/api/voice", headers={**H, "Content-Type": "application/json"}, json={}).status_code == 400
+
+
+def test_weather_only_about_the_weather():
+    from app.worldinfo import is_weather, weather_answer
+    for q in ("how hot is the sun", "how cold is space", "temperature of boiling water", "is the coffee hot",
+              "weather on mars", "how hot is the core of the earth"):
+        assert not is_weather(q), q
+        assert weather_answer(q) == "", q
+    for q in ("is it hot today", "how hot is it", "what's the weather", "will it rain tomorrow",
+              "what's the temperature in Tokyo", "what's the temperature", "how windy is it outside", "is it sunny"):
+        assert is_weather(q), q
