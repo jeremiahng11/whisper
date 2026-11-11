@@ -3092,3 +3092,15 @@ def test_rewrite_after_retag(monkeypatch):
     assert t and worker.rewrite_due("jobx")
     worker._rewrite_tick()                                      # (no such job: just dropped)
     assert not worker.rewrite_due("jobx")
+
+
+def test_voice_typed_question(client, monkeypatch):
+    from app import main
+    monkeypatch.setattr(main, "_ask_plan", lambda d: {"instant": "It is " + d["messages"][-1]["content"]})
+    r = client.post("/api/voice?speak=0", headers={**H, "Content-Type": "application/json"},
+                    json={"text": "what is the plan", "messages": [{"role": "system", "content": "be brief"}]})
+    assert r.status_code == 200
+    lines = r.text.splitlines()
+    assert lines[0].startswith("T ") and 'what is the plan' in lines[0].lower()
+    assert any(l.startswith("A ") and "it is what is the plan" in l.lower() for l in lines) and lines[-1].startswith("E")
+    assert client.post("/api/voice", headers={**H, "Content-Type": "application/json"}, json={}).status_code == 400

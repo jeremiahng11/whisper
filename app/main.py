@@ -20,7 +20,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.44.0"
+VERSION = "1.45.0"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -2148,23 +2148,39 @@ async def voice_question(request: Request, language: Optional[str] = Query(None)
       B <base64>               its voice: IMA ADPCM blocks (16 kHz, 256-byte blocks), playable as they come
       A {"answer"}             the whole answer
       E {} / E {"error"}       the end
-    The voice of the first sentence comes while the AI is still writing the rest."""
+    The voice of the first sentence comes while the AI is still writing the rest.
+
+    A typed question (no recording) gets the same fast stream: Content-Type application/json, body
+    {"text": "the question", "messages": [system + the conversation so far]} - then there's no T line's speech to
+    text, and the rest is as above (instead of /api/ask + /api/tts, which wait for the whole answer, then its whole
+    voice)."""
     tmp = settings.upload_dir / f"voice_{secrets.token_hex(6)}.wav"
     t_in = time.time()
     summarize.warm_cloud()                           # while you're still talking (the watch sends as you speak):
     speech.warm_voice()                              # the connections to Groq and ElevenLabs open now
-    n = await save_body(request, tmp)
+    typed = None
+    if (request.headers.get("content-type") or "").lower().startswith("application/json"):
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(400, "body must be JSON")
+        if not isinstance(body, dict) or not str(body.get("text") or "").strip():
+            raise HTTPException(400, 'send {"text": "your question"}')
+        typed = str(body["text"]).strip()[:2000]
+        n = 0
+    else:
+        n = await save_body(request, tmp)
     from . import timing as _timing
     t_upload = time.time() - t_in
     _timing.note("voice question in", t_upload, f"{n // 1024} KB, one trip")
-    if n < 100:
+    if typed is None and n < 100:
         tmp.unlink(missing_ok=True)
         raise HTTPException(400, "empty audio")
     if n > 8 * 1024 * 1024:
         tmp.unlink(missing_ok=True)
         raise HTTPException(413, "clip too long")
-    ask: dict = {}
-    if request.headers.get("x-ask"):
+    ask: dict = body if typed is not None else {}
+    if typed is None and request.headers.get("x-ask"):
         import base64 as _b64
         try:
             ask = json.loads(_b64.b64decode(request.headers["x-ask"]).decode("utf-8", "replace"))
@@ -2179,17 +2195,20 @@ async def voice_question(request: Request, language: Optional[str] = Query(None)
     def gen():
         from . import timing
         t0 = time.time()
-        try:
-            transcribe.fix_wav_header(str(tmp))
-            lang = language if language and language.lower() != "auto" else None
-            t_s = time.time()
-            r = speech.stt(str(tmp), lang, None)
-            t_stt = time.time() - t_s
-        except Exception as e:                       # noqa: BLE001
-            yield line("E", {"error": f"speech to text failed: {str(e)[:160]}"})
-            return
-        finally:
-            tmp.unlink(missing_ok=True)
+        if typed is not None:                        # a typed question: nothing to hear
+            r, t_stt = {"text": typed, "language": language or ""}, 0.0
+        else:
+            try:
+                transcribe.fix_wav_header(str(tmp))
+                lang = language if language and language.lower() != "auto" else None
+                t_s = time.time()
+                r = speech.stt(str(tmp), lang, None)
+                t_stt = time.time() - t_s
+            except Exception as e:                   # noqa: BLE001
+                yield line("E", {"error": f"speech to text failed: {str(e)[:160]}"})
+                return
+            finally:
+                tmp.unlink(missing_ok=True)
         text = speech.strip_wake((r.get("text") or "").strip())
         timing.note("heard", 0, text[:60])
         yield line("T", {"text": text, "language": r.get("language") or ""})

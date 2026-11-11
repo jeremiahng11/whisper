@@ -1,4 +1,4 @@
-# Oracle Minutes API (server 1.43.0)
+# Oracle Minutes API (server 1.45.0)
 
 Base URL: `https://whisper.jeremiah.sg`. Interactive version (try calls in the browser): `/docs`; raw schema: `/openapi.json`.
 
@@ -183,6 +183,11 @@ A spoken question in one trip (the watch): body = the recording (WAV); header X-
   A {"answer"}             the whole answer
   E {} / E {"error"}       the end
 The voice of the first sentence comes while the AI is still writing the rest.
+
+A typed question (no recording) gets the same fast stream: Content-Type application/json, body
+{"text": "the question", "messages": [system + the conversation so far]} - then there's no T line's speech to
+text, and the rest is as above (instead of /api/ask + /api/tts, which wait for the whole answer, then its whole
+voice).
 
 Query: `language` = None, `speak` = 1, `tz` = None, `city` = '', `scope` = '', `intents` = 1
 
