@@ -270,7 +270,7 @@ def test_priority_jumps_queue(client):
 
 def test_meeting_notes_feed_summary_and_minutes(client):
     rid = "dev1-2026-10-08_1535"
-    data = wav_bytes(6)
+    data = wav_bytes(12)
     client.put(f"/api/uploads/{rid}", content=data, headers={**H, "X-Offset": "0"})
     notes = "[0:02] Agreed to move go-live to Nov 3\n[0:13] San owns the rollback plan"
     r = client.post(f"/api/uploads/{rid}/complete?filename=2026-10-08_1535.wav", json={"notes": notes},
@@ -3158,3 +3158,32 @@ def test_failed_source_waits_before_retry():
     from app import sources
     assert not sources.due({"id": "x", "kind": "url", "state": "error", "failed_at": _t.time()})
     assert sources.due({"id": "x", "kind": "url", "state": "error", "failed_at": _t.time() - 7 * 3600})
+
+
+def _wav(seconds: float) -> bytes:
+    import struct
+    n = int(16000 * seconds) * 2
+    return (b"RIFF" + struct.pack("<I", 36 + n) + b"WAVEfmt " + struct.pack("<IHHIIHH", 16, 1, 1, 16000, 32000, 2, 16)
+            + b"data" + struct.pack("<I", n) + b"\0" * n)
+
+
+def test_accidental_short_meeting_not_kept(client):
+    rid = "w1b-short-1"
+    client.put(f"/api/uploads/{rid}", headers={**H, "X-Offset": "0"}, content=_wav(4))
+    r = client.post(f"/api/uploads/{rid}/complete?summarize=true", headers=H)
+    assert r.status_code == 200 and r.json()["dropped"]
+    g = client.get(f"/api/recordings/{rid}", headers=H)
+    assert g.status_code == 200 and g.json()["status"] == "error"          # the watch stops asking
+    # a short voice memo (no minutes) is kept
+    rid2 = "w1b-memo-1"
+    client.put(f"/api/uploads/{rid2}", headers={**H, "X-Offset": "0"}, content=_wav(4))
+    r = client.post(f"/api/uploads/{rid2}/complete?summarize=false", headers=H)
+    assert r.status_code in (200, 201) and r.json().get("id")
+
+
+def test_device_cancels_a_live_recording(client):
+    rid = "w1b-cancel-1"
+    client.put(f"/api/uploads/{rid}", headers={**H, "X-Offset": "0", "X-Live": "1"}, content=_wav(3))
+    r = client.delete(f"/api/uploads/{rid}", headers=H)
+    assert r.status_code == 200 and r.json()["dropped"]
+    assert client.get(f"/api/uploads/{rid}", headers=H).json()["received"] == 0

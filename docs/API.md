@@ -1,4 +1,4 @@
-# Oracle Minutes API (server 1.45.0)
+# Oracle Minutes API (server 1.47.0)
 
 Base URL: `https://whisper.jeremiah.sg`. Interactive version (try calls in the browser): `/docs`; raw schema: `/openapi.json`.
 
@@ -9,7 +9,7 @@ Bodies are JSON unless the endpoint takes an upload (multipart form or raw audio
 ## Contents
 
 - [Meetings (jobs)](#meetings-jobs) (19)
-- [Uploads](#uploads) (5)
+- [Uploads](#uploads) (6)
 - [Voice & questions](#voice--questions) (8)
 - [Watch AI knowledge](#watch-ai-knowledge) (12)
 - [Server](#server) (3)
@@ -134,6 +134,11 @@ Query: `language` = None
 ### `POST /api/uploads/{rid}/complete` 🔒
 
 Query: `language` = None, `summarize_` = True, `diarize` = None, `title` = None, `filename` = None, `priority` = '', `template` = None, `speakers` = None, `best` = None, `redact_` = None, `attendees` = None, `minutes_lang` = None
+
+### `DELETE /api/uploads/{rid}` 🔒
+
+The device threw a recording away (a meeting stopped within 10 s - an accidental start): what arrived of it,
+and its live transcript, go too. A recording that already became a meeting isn't touched.
 
 ### `GET /api/recordings/{rid}` 🔒
 
@@ -267,6 +272,9 @@ research, watch AI training, voices, profiles, search by meaning): always, only 
 Meetings you upload, the watch's questions and the buttons still work at once.
 
 ### `GET /api/health`
+
+Up or not (for Coolify / a monitor) - without the key or a sign-in only {ok, version, model_loaded}: the rest
+shows your recent questions, meeting titles and what is running (it was open to anyone).
 
 ## Research
 

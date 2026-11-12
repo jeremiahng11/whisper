@@ -21,7 +21,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.46.0"
+VERSION = "1.47.0"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -365,6 +365,8 @@ _upload_locks: dict = {}
 
 
 async def _upload_chunk(rid, request, x_offset, x_live, x_live_state, x_live_why, language):
+    if dropped_why(rid):                             # thrown away on purpose (a piece still on its way after the cancel
+        raise HTTPException(410, "this recording was cancelled")   # would start it again, as a live one nobody ends)
     p = part_path(rid)
     have = p.stat().st_size if p.exists() else 0
     # a client starting again from scratch (a whole file sent again) - but never a live recording, and never an empty
@@ -437,8 +439,63 @@ async def upload_complete(
         raise HTTPException(404, "nothing uploaded for this recording id")
     if x_total_size is not None and p.stat().st_size != x_total_size:
         return JSONResponse({"recording_id": rid, "received": p.stat().st_size, "error": "size mismatch"}, status_code=409)
+    if summarize_ and _too_short(p):                  # a meeting started by accident and stopped at once: not kept
+        drop_recording(rid, "shorter than %d s - an accidental start, not kept" % settings.min_meeting_s)
+        return JSONResponse({"recording_id": rid, "dropped": True, "status": "error",
+                             "error": "shorter than %d s - not kept" % settings.min_meeting_s}, status_code=200)
     opts = apply_extra(options(language, summarize_, diarize, title, template, speakers, best, redact_, attendees, minutes_lang), extra)
     return job_out(new_job(p, safe_name(filename or rid), opts, rid, priority))
+
+
+# ---------------------------------------------------------------- accidental starts (MIN_MEETING_S, 10 s)
+def _too_short(p: Path) -> bool:
+    if settings.min_meeting_s <= 0:
+        return False
+    try:
+        with open(p, "rb") as f:
+            if f.read(4) != b"RIFF":                  # (only the devices' WAVs: their length is known from the size)
+                return False
+    except OSError:
+        return False
+    return worker.wav_seconds(p) < settings.min_meeting_s
+
+
+def _dropped_path() -> Path:
+    return settings.data_dir / "dropped.json"
+
+
+def drop_recording(rid: str, why: str) -> None:
+    """Throw away what arrived of a recording (and its live transcript), and remember it was dropped on purpose:
+    a watch asking about it later is told so - not "lost", which made older watches send it again."""
+    for f in (part_path(rid), worker.live_state_path(rid), part_path(rid).with_suffix(".beat")):
+        f.unlink(missing_ok=True)
+    with worker.live_lock:
+        try:
+            d = json.loads(_dropped_path().read_text())
+        except (OSError, ValueError):
+            d = {}
+        d[rid] = {"at": time.time(), "why": why}
+        d = dict(sorted(d.items(), key=lambda kv: kv[1]["at"])[-500:])
+        _dropped_path().write_text(json.dumps(d))
+    log.info("recording %s dropped: %s", rid, why)
+
+
+def dropped_why(rid: str) -> str:
+    try:
+        return (json.loads(_dropped_path().read_text()).get(rid) or {}).get("why", "")
+    except (OSError, ValueError):
+        return ""
+
+
+@app.delete("/api/uploads/{rid}", dependencies=[Depends(auth)])
+def upload_cancel(rid: str):
+    """The device threw a recording away (a meeting stopped within 10 s - an accidental start): what arrived of it,
+    and its live transcript, go too. A recording that already became a meeting isn't touched."""
+    check_id(rid)
+    if db.get_by_recording(rid):
+        raise HTTPException(409, "already a meeting - delete it from the page")
+    drop_recording(rid, "cancelled on the device")
+    return {"recording_id": rid, "dropped": True}
 
 
 # ---------------------------------------------------------------- jobs
@@ -464,6 +521,8 @@ def get_by_recording(rid: str):
     """Look a job up by the device's own recording id."""
     j = db.get_by_recording(check_id(rid))
     if not j:
+        if (why := dropped_why(rid)):               # dropped on purpose: an "error", so the device stops asking
+            return {"recording_id": rid, "status": "error", "error": why, "dropped": True}
         raise HTTPException(404, "no job for this recording id")
     return job_out(j)
 

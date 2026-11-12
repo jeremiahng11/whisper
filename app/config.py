@@ -29,6 +29,7 @@ class Settings:
     transcriber: str = os.getenv("TRANSCRIBER", "faster-whisper")   # "fake" is only for tests
     whisper_model: str = os.getenv("WHISPER_MODEL", "large-v3-turbo")
     trust_cloudflare: bool = _bool("TRUST_CLOUDFLARE", True)   # CF-Connecting-IP = the real address (via a tunnel)
+    min_meeting_s: float = float(os.getenv("MIN_MEETING_S", "10"))   # meetings shorter: accidental starts, not kept
     auto_rewrite_minutes: bool = _bool("AUTO_REWRITE_MINUTES", True)   # minutes written again after you retag lines
     live_parallel: bool = _bool("LIVE_PARALLEL", True)     # live recordings transcribed while a file is processed
     whisper_workers: int = _int("WHISPER_WORKERS", 2)      # transcriptions the speech model runs at the same time
