@@ -615,7 +615,7 @@ function status(j) {
   if (j.status === "transcribing" || j.status === "summarizing")
     return `<span class="chip">${esc(j.stage || j.status)} ${Math.round(j.progress * 100)}%</span>`;
   if (j.status === "error") return `<span class="chip error" title="${esc(j.error)}">error</span>`;
-  return `<span class="chip done">done</span>${j.summary_error ? ' <span class="mute">no summary</span>' : ""}${voiceWork(j.voice_work)}`;
+  return `<span class="chip done">done</span>${(j.options || {}).audio_note ? ' <span class="mute">audio problem</span>' : j.summary_error ? ' <span class="mute">no summary</span>' : ""}${voiceWork(j.voice_work)}`;
 }
 
 // ---------------------------------------------------------------- layout: sections, tabs, meeting header

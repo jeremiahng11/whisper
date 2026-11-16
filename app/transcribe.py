@@ -6,6 +6,7 @@ does the rest.
 """
 import os
 import logging
+import re
 import struct
 import threading
 import time
@@ -361,6 +362,9 @@ def _run(audio: np.ndarray, offset: float, language: Optional[str], prompt: str,
     out = []
     for s in segs:                                   # generator: decoding happens while we iterate
         text = s.text.strip()
+        if text and made_up(text, prompt, getattr(s, "no_speech_prob", 0.0), getattr(s, "avg_logprob", 0.0)):
+            log.info("dropped a made-up line at %.0f s: %.80s", offset + float(s.start), text)
+            text = ""
         if text:
             words = [[round(offset + float(w.start), 2), round(offset + float(w.end), 2), w.word]
                      for w in (getattr(s, "words", None) or []) if (w.word or "").strip()]
@@ -370,6 +374,28 @@ def _run(audio: np.ndarray, offset: float, language: Optional[str], prompt: str,
         if total > 0:
             progress(min(1.0, (offset + s.end) / total), "transcribing")
     return out, info.language, float(info.language_probability or 0)
+
+
+def made_up(text: str, prompt: str = "", no_speech: float = 0.0, logprob: float = 0.0) -> bool:
+    """A line Whisper invented, not heard. On silence or noise it reads back its prompt (your names & terms list) as
+    "ALETA, LABONA, PRISCILLA, ..." or produces broken characters - which then became the meeting's transcript.
+    - broken characters (U+FFFD), or
+    - a long list of single words split by commas (people don't speak like that), most of them from the prompt or
+      in capitals, or
+    - Whisper itself thought there was no speech and wasn't sure of the words."""
+    if "\ufffd" in text:
+        return True
+    if no_speech > 0.6 and logprob < -1.0:
+        return True
+    parts = [p.strip() for p in re.split(r"[,、，]", text) if p.strip()]
+    if len(parts) >= 6 and sum(len(p.split()) for p in parts) / len(parts) <= 1.6:
+        known = {w.strip(" .,").lower() for w in re.split(r"[,\s]+", prompt or "") if len(w.strip(" .,")) > 2}
+        caps = sum(1 for p in parts if p.isupper())
+        from_prompt = sum(1 for p in parts if p.strip(" .").lower() in known)
+        repeats = len(parts) - len({p.lower() for p in parts})
+        if caps >= len(parts) * 0.5 or from_prompt >= len(parts) * 0.3 or repeats >= len(parts) * 0.3:
+            return True
+    return False
 
 
 def transcribe(path: str, language: Optional[str], progress: ProgressFn, diarize: bool = False,

@@ -251,6 +251,31 @@ def run_summary(jid: str) -> None:
         db.update(jid, summary_error=summarize.explain_llm_error(e)[:500])
 
 
+def audio_note(path: str, data: dict) -> str:
+    """Hardly any words in a long recording: say why, if the audio shows it - a silent or very quiet microphone is
+    the device's problem (and "no summary" alone didn't say so)."""
+    dur = float(data.get("duration") or 0) or wav_seconds(Path(path))
+    words = sum(len((s.get("text") or "").split()) for s in data.get("segments", []))
+    if dur < 120 or words / (dur / 60) >= 15:        # (a normal meeting: 100+ words a minute)
+        return ""
+    try:
+        import numpy as np
+        a = transcribe.load_audio(path)
+        hop = transcribe.SR * 2
+        rms = np.array([np.sqrt(np.mean(a[i:i + hop] ** 2)) for i in range(0, len(a) - hop, hop)]) if len(a) > hop else np.array([0.0])
+        db_ = float(20 * np.log10(np.percentile(rms, 90) + 1e-9))
+    except Exception:                                 # noqa: BLE001
+        return f"Almost no speech found in {int(dur // 60)} min of audio."
+    if db_ < -55:
+        return (f"The recording is almost silent ({db_:.0f} dB at its loudest stretches) - the device's microphone was "
+                "probably off, muted or not working. Nothing could be written down.")
+    if db_ < -42:
+        return (f"The recording is very quiet ({db_:.0f} dB; speech is usually -35 to -15 dB) - the device was too far "
+                "away or its mic gain too low, so little could be written down.")
+    return (f"Almost no speech found in {int(dur // 60)} min, though there is sound ({db_:.0f} dB) - it may be noise, "
+            "music, or a language other than the one set.")
+
+
 def process(job: dict) -> None:
     jid = job["id"]
     opts = job.get("options", {})
@@ -305,6 +330,10 @@ def process(job: dict) -> None:
         from . import livetag                       # no separation at the end: keep the voices found live
         spk = livetag.speakers(prior)
     terms.fix_transcript(data)                      # mis-heard names & terms get your spelling
+    note = audio_note(job["audio_path"], data)
+    if note:
+        o = db.get(jid).get("options", {})
+        db.update(jid, options={**o, "audio_note": note})
     _write(jid, "transcript.json", json.dumps(data, ensure_ascii=False, indent=1))
     (result_dir(jid) / "draft.json").unlink(missing_ok=True)
     _write(jid, "speakers.json", json.dumps(spk))

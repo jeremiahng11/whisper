@@ -3194,3 +3194,14 @@ def test_live_reports_audio_level(client):
     client.put(f"/api/uploads/{rid}", headers={**H, "X-Offset": "0", "X-Live": "1"}, content=wav_bytes(12))
     live = [x for x in client.get("/api/live", headers=H).json()["live"] if x["rid"] == rid]
     assert live and "level_db" in live[0]
+
+
+def test_made_up_lines_dropped():
+    from app.transcribe import made_up
+    prompt = "Aleta, Priscilla, Solo, Labona, Manco"
+    assert made_up("ZENUS, TECHI LIBAS, EDU, PRISCILLA, ALETA, OMVIRRAZ, ALETA, ALETA, expresiva, KGIB, SOLO", prompt)
+    assert made_up("CORRADHA, H��0|rical polygon", prompt)
+    assert made_up("ALETA, LABONA, ALETA, LABONA, LABONA, DEVOKU", prompt)
+    assert not made_up("We need apples, oranges, bananas, grapes, pears and milk from the store today", prompt)
+    assert not made_up("Priscilla, can you send the Aleta report to Solo by Friday?", prompt)
+    assert not made_up("Yes.", prompt, no_speech=0.2, logprob=-0.5)

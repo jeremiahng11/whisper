@@ -147,6 +147,8 @@ def markdown(job: dict, tr: dict, summary_md: Optional[str], title: str = "") ->
         meta.append(tr["language"])
     meta.append(f"Oracle Minutes {tr.get('model', '')}".strip())
     lines += ["*" + " · ".join(meta) + "*", ""]
+    if opts.get("audio_note"):                       # (a silent mic: said up front, not just "no summary")
+        lines += [f"> **Audio problem:** {opts['audio_note']}", ""]
     if summary_md:
         lines += [summary_md.strip(), ""]
     elif job.get("summary_error"):
