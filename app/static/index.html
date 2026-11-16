@@ -2017,7 +2017,15 @@ function renderLiveMain(l) {
   liveShown = segs.length; liveSpk = spkKey;
   const sp = (l.speakers || []).filter(v => v.seconds >= 2);
   $("#lvWho").innerHTML = sp.length ? "Talking so far: " + sp.map(v => spkChip(v.name || v.label) + `<span class="mute">${Math.round(v.seconds)} s</span>`).join(" ") : "";
-  if (!segs.length) box.insertAdjacentHTML("beforeend", `<p class="wait">Listening… the first words appear here about 30 s after the recording starts.</p>`);
+  if (!segs.length) {
+    // nothing heard after a while: say why if the audio shows it (a silent mic is a device problem, not this page)
+    const db = l.level_db, done = l.transcribed_s || 0;
+    let msg = "Listening… the first words appear here about 30 s after the recording starts.";
+    if (done >= 20 && db != null && db < -55) msg = `No speech yet in the first ${mmss(done)} - the audio arriving is almost silent (${db} dB). The device's microphone may be off, muted or too quiet.`;
+    else if (done >= 20 && db != null && db < -42) msg = `No words recognised in the first ${mmss(done)} - the audio is very quiet (${db} dB; speech is usually −35 to −15 dB). Move the device closer, or turn its mic gain up.`;
+    else if (done >= 20) msg = `No words recognised in the first ${mmss(done)}` + (db != null ? ` (audio level ${db} dB)` : "") + ". If people are talking, the language may be set wrong - it's " + (l.language || "auto") + ".";
+    box.insertAdjacentHTML("beforeend", `<p class="wait">${esc(msg)}</p>`);
+  }
   if ($("#lvFollow").checked) box.scrollTop = box.scrollHeight;
 }
 async function pollLive() {

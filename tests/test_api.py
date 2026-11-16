@@ -3187,3 +3187,10 @@ def test_device_cancels_a_live_recording(client):
     r = client.delete(f"/api/uploads/{rid}", headers=H)
     assert r.status_code == 200 and r.json()["dropped"]
     assert client.get(f"/api/uploads/{rid}", headers=H).json()["received"] == 0
+
+
+def test_live_reports_audio_level(client):
+    rid = "w1b-level-1"
+    client.put(f"/api/uploads/{rid}", headers={**H, "X-Offset": "0", "X-Live": "1"}, content=wav_bytes(12))
+    live = [x for x in client.get("/api/live", headers=H).json()["live"] if x["rid"] == rid]
+    assert live and "level_db" in live[0]

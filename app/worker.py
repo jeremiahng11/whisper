@@ -409,6 +409,7 @@ def live_now() -> list[dict]:
             "held_up": held, "held_reason": (beat.get("why") or "") if held else "",
             "watch_seen_s_ago": round(min(age, beat_age), 1),
             "transcribed_s": float(state.get("until", 0)), "language": state.get("language", ""),
+            "level_db": _level_db(rid, part, wav_seconds(part)),
             "transcribing": live_job == f"live:{rid}",
             "segments": [{"start": round(s.get("start", 0), 1), "text": (s.get("text") or "").strip(),
                           "speaker": names.get(s.get("speaker") or "", s.get("speaker") or "")} for s in segs[-300:]],
@@ -418,6 +419,27 @@ def live_now() -> list[dict]:
         })
     out.sort(key=lambda x: x["started"])
     return out
+
+
+_levels: dict = {}
+
+
+def _level_db(rid: str, part, received: float) -> float | None:
+    """How loud the last 10 s that arrived are (dBFS, speech is usually -35..-15): "nothing transcribed yet" with
+    -60 dB means the device's microphone sends (near) silence - a mic or gain problem, not the server."""
+    key = (rid, int(received))
+    if key in _levels:
+        return _levels[key]
+    try:
+        import numpy as np
+        a = transcribe.load_range(str(part), max(0.0, received - 10), received)
+        db_ = round(float(20 * np.log10(np.sqrt(np.mean(np.square(a))) + 1e-9)), 1) if len(a) else None
+    except Exception:                                # noqa: BLE001
+        db_ = None
+    if len(_levels) > 200:
+        _levels.clear()
+    _levels[key] = db_
+    return db_
 
 
 def cleanup() -> None:
