@@ -3205,3 +3205,40 @@ def test_made_up_lines_dropped():
     assert not made_up("We need apples, oranges, bananas, grapes, pears and milk from the store today", prompt)
     assert not made_up("Priscilla, can you send the Aleta report to Solo by Friday?", prompt)
     assert not made_up("Yes.", prompt, no_speech=0.2, logprob=-0.5)
+
+
+def test_english_not_mistaken_for_malay(monkeypatch):
+    from app import transcribe
+    from app.config import settings
+    monkeypatch.setattr(settings, "languages", "")
+    assert transcribe.pick_language([("ms", 0.62), ("en", 0.30), ("id", 0.05)]) == "en"
+    assert transcribe.pick_language([("ms", 0.95), ("en", 0.03)]) == "ms"           # really Malay
+    assert transcribe.pick_language([("zh", 0.7), ("en", 0.2)]) == "zh"
+    monkeypatch.setattr(settings, "languages", "en,zh")
+    assert transcribe.pick_language([("ms", 0.9), ("zh", 0.06), ("en", 0.04)]) == "zh"
+
+
+def test_live_language_needs_two_parts(monkeypatch, tmp_path):
+    from app import transcribe
+    calls = iter([("ms",), ("en",), ("en",)])
+
+    def fake_run(piece, until, lang, prompt, prog, total, **k):
+        code = next(calls)[0]
+        return [transcribe.Segment(until, until + 5, "hello there")], code, 0.6
+    monkeypatch.setattr(transcribe, "_run", fake_run)
+    monkeypatch.setattr(transcribe, "load_range", lambda p, a, b: __import__("numpy").zeros(int((b - a) * 16000), "float32"))
+    st = {}
+    for k in range(3):
+        transcribe.partial("x.wav", st, dur=float(st.get("until", 0)) + 120)
+        if k == 0:
+            assert not st.get("language")              # one Malay-sounding part doesn't fix the meeting to Malay
+    assert st["language"] == "en"
+
+
+def test_transcribe_again(client):
+    files = {"file": ("again.wav", wav_bytes(12), "audio/wav")}
+    j = wait(client, client.post("/api/jobs", headers=H, files=files).json()["id"])
+    r = client.post(f"/api/jobs/{j['id']}/retranscribe?language=en", headers=H)
+    assert r.status_code == 200 and r.json()["status"] == "queued"
+    j2 = wait(client, j["id"])
+    assert j2["status"] == "done" and j2.get("language") == "en"

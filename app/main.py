@@ -21,7 +21,7 @@ from .config import settings
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
-VERSION = "1.48.0"
+VERSION = "1.49.0"
 STATIC = Path(__file__).parent / "static"
 
 
@@ -129,6 +129,7 @@ def job_out(j: dict) -> dict:
         "queue_position": db.queue_position(j["id"]),
         "error": j["error"],
         "summary_error": j["summary_error"],
+        "audio_note": (j.get("options") or {}).get("audio_note", ""),
         "title": j["title"],
         "language": j["language"],
         "duration": j["duration"],
@@ -706,6 +707,30 @@ def retry(jid: str):
     if not j["audio_path"] or not os.path.exists(j["audio_path"]):
         raise HTTPException(410, "audio file is gone - upload it again")
     db.update(jid, status="queued", stage="retry", progress=0, error="")
+    worker.wake()
+    return job_out(db.get(jid))
+
+
+@app.post("/api/jobs/{jid}/retranscribe", dependencies=[Depends(auth)])
+def retranscribe(jid: str, language: Optional[str] = Query("en")):
+    """Write the whole meeting down again from its audio, in `language` (e.g. "en"; "auto" = detect) - for one that
+    came out in the wrong language (English heard as Malay) or wrong in other ways. The live transcript isn't reused;
+    speaker names are found again from the known voices; the minutes are written again."""
+    j = _job(jid)
+    if j["status"] not in ("done", "error"):
+        raise HTTPException(409, f"job is {j['status']}")
+    if not j["audio_path"] or not os.path.exists(j["audio_path"]):
+        raise HTTPException(410, "the audio isn't kept any more - it can't be transcribed again")
+    lv = worker.result_dir(jid) / "live.json"
+    if lv.exists():
+        lv.replace(lv.with_name("live.old.json"))
+    o = dict(j.get("options") or {})
+    lang = (language or "").strip().lower()
+    o["language"] = None if lang in ("", "auto") else lang
+    for k in ("speaker_names", "names_at_summary", "merged", "resummarize", "interrupted", "audio_note"):
+        o.pop(k, None)
+    o["summarize"] = o.get("summarize", True)
+    db.update(jid, status="queued", stage="transcribing again", progress=0, error="", options=o)
     worker.wake()
     return job_out(db.get(jid))
 

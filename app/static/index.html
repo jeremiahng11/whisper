@@ -348,6 +348,7 @@ ul.replies{margin:4px 0;padding-left:20px;font-size:13.5px}
             <select id="reLang" title="Language of the new minutes"><option value="">Same as speech</option><option value="en">English</option><option value="zh">中文 Chinese</option><option value="both">Bilingual (+ English)</option></select>
             <label class="mute" id="reBestLabel"><input type="checkbox" id="reBest"> Best</label>
             <button class="ghost" id="resum" title="Write the minutes again with the current names and meeting type">Redo minutes</button>
+            <button class="ghost" id="retrans" title="Write the whole meeting down again from its audio (e.g. it came out in the wrong language)">Transcribe again</button>
             <button class="danger" id="del">Delete</button>
           </div>
         </div>
@@ -615,7 +616,7 @@ function status(j) {
   if (j.status === "transcribing" || j.status === "summarizing")
     return `<span class="chip">${esc(j.stage || j.status)} ${Math.round(j.progress * 100)}%</span>`;
   if (j.status === "error") return `<span class="chip error" title="${esc(j.error)}">error</span>`;
-  return `<span class="chip done">done</span>${(j.options || {}).audio_note ? ' <span class="mute">audio problem</span>' : j.summary_error ? ' <span class="mute">no summary</span>' : ""}${voiceWork(j.voice_work)}`;
+  return `<span class="chip done">done</span>${j.audio_note ? ' <span class="mute">audio problem</span>' : j.summary_error ? ' <span class="mute">no summary</span>' : ""}${voiceWork(j.voice_work)}`;
 }
 
 // ---------------------------------------------------------------- layout: sections, tabs, meeting header
@@ -976,6 +977,7 @@ async function show(id) {
   $("#viewCard").classList.remove("hidden"); $("#noMeeting").classList.add("hidden");
   setMeta(j); tab("minutesTab"); $("#ribbon").classList.add("hidden"); $("#mTabs").classList.toggle("hidden", j.status !== "done");
   $("#resum").disabled = j.status !== "done";
+  $("#retrans").disabled = !["done", "error"].includes(j.status);
   if (j.status !== "done") {
     $("#dl").innerHTML = "";
     if (j.status === "error") {
@@ -1032,6 +1034,15 @@ $("#del").onclick = async () => {
   if (!current) return;
   try { await api(`/api/jobs/${current}`, { method: "DELETE" }); } catch (e) { $("#view").innerHTML = `<p>${esc(e.message)}</p>`; return; }
   $("#viewCard").classList.add("hidden"); $("#noMeeting").classList.remove("hidden"); current = null; load();
+};
+$("#retrans").onclick = async () => {
+  if (!current) return;
+  const lang = prompt("Transcribe the whole meeting again from its audio.\nLanguage spoken (en, zh, ms... or auto):", "en");
+  if (lang === null) return;
+  const id = current;
+  try { await api(`/api/jobs/${id}/retranscribe?language=${encodeURIComponent(lang.trim() || "en")}`, { method: "POST" }); }
+  catch (e) { alert("Couldn't start: " + e.message); }
+  load(); show(id);
 };
 $("#resum").onclick = async () => {
   if (!current) return;

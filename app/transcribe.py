@@ -358,6 +358,12 @@ def _run(audio: np.ndarray, offset: float, language: Optional[str], prompt: str,
         kwargs["initial_prompt"] = prompt
     if settings.normalize:
         audio = level_audio(audio)
+    if not kwargs["language"]:                      # pick the language ourselves (see pick_language)
+        try:
+            _, _, probs = model.detect_language(audio[:SR * 30])
+            kwargs["language"] = pick_language(probs)
+        except Exception as e:                       # noqa: BLE001 - older faster-whisper: let it detect
+            log.debug("language detection: %s", e)
     segs, info = model.transcribe(audio, **kwargs)
     out = []
     for s in segs:                                   # generator: decoding happens while we iterate
@@ -374,6 +380,32 @@ def _run(audio: np.ndarray, offset: float, language: Optional[str], prompt: str,
         if total > 0:
             progress(min(1.0, (offset + s.end) / total), "transcribing")
     return out, info.language, float(info.language_probability or 0)
+
+
+# Languages Whisper mistakes English for - Singapore / Malaysian English above all comes out as Malay, and then the
+# whole meeting is written in Malay (a translation of what was said in English).
+_LIKE_ENGLISH = {"ms", "id", "tl", "jw", "su", "nn", "cy", "la", "haw", "mi", "sn"}
+
+
+def pick_language(probs) -> str:
+    """The language to write in, from Whisper's guesses [(code, probability)...]:
+    - LANGUAGES set (e.g. "en,zh"): the likeliest of those only;
+    - otherwise its first guess - unless that is one it mistakes English for (Malay, Indonesian...) without being
+      sure (< 85 %) and English is a real possibility: then English."""
+    probs = sorted(((c, float(p)) for c, p in probs), key=lambda x: -x[1])
+    if not probs:
+        return ""
+    allowed = [c.strip() for c in (settings.languages or "").split(",") if c.strip()]
+    if allowed:
+        for c, _ in probs:
+            if c in allowed:
+                return c
+        return allowed[0]
+    best, p = probs[0]
+    en = dict(probs).get("en", 0.0)
+    if best in _LIKE_ENGLISH and p < 0.85 and en >= 0.05:
+        return "en"
+    return best
 
 
 def made_up(text: str, prompt: str = "", no_speech: float = 0.0, logprob: float = 0.0) -> bool:
@@ -409,7 +441,7 @@ def transcribe(path: str, language: Optional[str], progress: ProgressFn, diarize
     total = len(audio) / SR
     until = float(prior.get("until", 0)) if prior else 0.0
     segs = [Segment(**s) for s in prior.get("segments", [])] if prior else []
-    lang = language or (prior or {}).get("language") or None
+    lang = language or (prior or {}).get("language") or None   # (the live one: only once settled - see partial)
     if until > 0:
         progress(min(1.0, until / total) if total else 0, f"transcribing the last {int((total - until) / 60) + 1} min")
     else:
@@ -442,7 +474,7 @@ def partial(path: str, state: dict, prompt: str = "", max_part_s: int = 600, dur
     if cut - until < min(settings.live_min_new_s, max_part_s):
         return False
     piece = audio[int(until * SR):int(cut * SR)] if audio is not None else load_range(path, until, cut)
-    segs, lang, _ = _run(piece, until, state.get("language") or None, prompt, lambda p, s: None, 0)
+    segs, lang, prob = _run(piece, until, state.get("language") or None, prompt, lambda p, s: None, 0)
     keep = [s for s in segs if s.end <= cut - 3]
     if segs and not keep:                           # one very long segment that started well before the cut
         keep = [s for s in segs if s.start < cut - 30]
@@ -451,8 +483,14 @@ def partial(path: str, state: dict, prompt: str = "", max_part_s: int = 600, dur
     new_until = keep[-1].end if keep else cut - 3   # no speech at all: skip the silence
     state["segments"] = state.get("segments", []) + [s.__dict__ for s in keep]
     state["until"] = round(max(until, new_until), 2)
+    # the language is kept only once two parts agree (a first part with one Malay word, or Singapore English heard
+    # as Malay, used to fix the whole meeting - and its final transcript - to Malay)
     if lang and not state.get("language"):
-        state["language"] = lang
+        votes = (state.get("language_votes") or [])[-3:] + [lang]
+        state["language_votes"] = votes
+        state["language_guess"] = lang
+        if len(votes) >= 2 and votes[-1] == votes[-2]:
+            state["language"] = lang
     log.info("live part: %.0f-%.0f s, %d segments", until, state["until"], len(keep))
     return True
 

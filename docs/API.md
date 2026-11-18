@@ -1,4 +1,4 @@
-# Oracle Minutes API (server 1.47.0)
+# Oracle Minutes API (server 1.49.0)
 
 Base URL: `https://whisper.jeremiah.sg`. Interactive version (try calls in the browser): `/docs`; raw schema: `/openapi.json`.
 
@@ -8,7 +8,7 @@ Bodies are JSON unless the endpoint takes an upload (multipart form or raw audio
 
 ## Contents
 
-- [Meetings (jobs)](#meetings-jobs) (19)
+- [Meetings (jobs)](#meetings-jobs) (20)
 - [Uploads](#uploads) (6)
 - [Voice & questions](#voice--questions) (8)
 - [Watch AI knowledge](#watch-ai-knowledge) (12)
@@ -53,6 +53,14 @@ Rename the meeting: {"title": "CTRIP dashboard review"}. Kept when the minutes a
 title the minutes were written with.
 
 ### `POST /api/jobs/{jid}/retry` 🔒
+
+### `POST /api/jobs/{jid}/retranscribe` 🔒
+
+Write the whole meeting down again from its audio, in `language` (e.g. "en"; "auto" = detect) - for one that
+came out in the wrong language (English heard as Malay) or wrong in other ways. The live transcript isn't reused;
+speaker names are found again from the known voices; the minutes are written again.
+
+Query: `language` = 'en'
 
 ### `DELETE /api/jobs/{jid}` 🔒
 
